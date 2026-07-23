@@ -104,6 +104,86 @@ python -m src.safety_evaluation.construct_calibrated_bound \
     --seed-start 0 --seed-end 10
 ```
 
+**To Run the Cross-Setup LPB Experiment:**
+
+This experiment loads the survival-model checkpoint associated with `MODEL_DATASET_SETUP`, applies it to embeddings from `EVALUATION_DATASET_SETUP`, constructs all LPB methods, verifies completion manifests, and merges the results.
+
+```bash
+bash src/safety_evaluation/scripts/cross_setup_lpb.sh
+```
+
+The script defaults to the red-team Qwen-target model setup evaluated on the red-team Gemma-target setup. Override any setting with environment variables, for example:
+
+```bash
+SEED_END=10 BUDGET_PER_SAMPLE=20 DEVICE=cuda:0 \
+  bash src/safety_evaluation/scripts/cross_setup_lpb.sh
+```
+
+The source setup must already have a trained survival-model checkpoint, and both setups must have matching embedding feature dimensions and time horizons. Open `notebooks/visualize_cross_setup_lpb.ipynb` after the script completes.
+
+**To Run the AutoIF Cross-Class LPB Experiment:**
+
+This experiment calibrates exclusively on `Programming & Technology` AutoIF tasks and evaluates exclusively on `Marketing & Social Media` tasks:
+
+```bash
+bash src/safety_evaluation/scripts/autoif_cross_class_lpb.sh
+```
+
+The script first verifies a one-to-one correspondence between
+`src/multi_turn_data_generation/data/autoif_helper_dataset.csv` and
+`src/multi_turn_data_generation/data/classified_instructions.csv` by matching
+normalized target text. It then reproduces the dataset loader's split and shuffle
+permutations so each class remains attached to the correct survival tensor.
+
+The AutoIF generation results, embeddings, survival tensors, and trained checkpoint
+for the selected `DATASET_SETUP` must exist. Generate the missing helper CSV from
+the repository root with:
+
+```bash
+python -m src.multi_turn_data_generation.data.generate_autoif_dataset \
+  --num-samples 10000
+```
+
+This writes directly to the path expected by the experiment. Settings can be
+overridden with environment variables, for example:
+
+```bash
+CAL_SIZE=600 TEST_SIZE=0 SEED_END=10 \
+  bash src/safety_evaluation/scripts/autoif_cross_class_lpb.sh
+```
+
+`TEST_SIZE=0` evaluates on every eligible row of the requested test class.
+
+**To Evaluate DAPRO Projection Accuracy and Budget Control:**
+
+This experiment compares DAPRO's projected continuation probabilities with the
+oracle probabilities obtained by solving on the complete calibration sample. It
+measures per-step and cumulative-product error, induced inclusion-probability and
+IPCW error, expected-budget error, and the decomposition
+
+```text
+realized budget gap = projected expected budget gap + sampling gap.
+```
+
+Run the evaluator and strict merger with:
+
+```bash
+bash src/safety_evaluation/scripts/evaluate_dapro_projection.sh
+```
+
+The defaults evaluate Platt and beta projections with probability and quantile
+scores over 50 seeds. Override configurations through environment variables:
+
+```bash
+SEED_END=10 PROJECTIONS="platt beta" SCORES="prob" N1_VALUES="50 100 200" \
+  bash src/safety_evaluation/scripts/evaluate_dapro_projection.sh
+```
+
+Open `notebooks/visualize_dapro_projection_metrics.ipynb` after merging. The
+notebook visualizes projection errors, cumulative errors, expected versus
+realized budgets, their error decomposition, and the relationship between
+cumulative projection error and expected-budget control.
+
 ### Step 4: Merge Results
 After running your evaluations across multiple seeds, merge the results into a single dataset:
 ```bash

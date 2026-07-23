@@ -5,9 +5,7 @@ from typing import Union, List
 import numpy as np
 import json
 import torch
-from lifelines.utils import concordance_index
 from scipy.stats import kstest
-from lifelines.statistics import logrank_test  # New import
 from sksurv.metrics import integrated_brier_score
 from sklearn.metrics import (
     roc_auc_score,
@@ -26,6 +24,16 @@ from src.safety_evaluation.survival_utils.conditional_pmf_utils import get_condi
 from src.safety_evaluation.survival_utils.quantiles import compute_conditional_quantiles_single_step
 from src.train_model.models.transformer_survival_model import TransformerSurvivalModel, DiscreteSurvivalLoss
 from src.utils.utils import set_seeds
+
+
+def concordance_index(*args, **kwargs):
+    from lifelines.utils import concordance_index as _concordance_index
+    return _concordance_index(*args, **kwargs)
+
+
+def logrank_test(*args, **kwargs):
+    from lifelines.statistics import logrank_test as _logrank_test
+    return _logrank_test(*args, **kwargs)
 
 
 def get_model(model_save_path, model_figure_save_path, is_real, x_train, t_tilde_train, device, features_size: int,
@@ -52,7 +60,14 @@ def get_model(model_save_path, model_figure_save_path, is_real, x_train, t_tilde
     save_path_suffix = os.path.join('transformer', data_setup, learner.acquisition.name,
                                     f'seed_{n_seed}_budget_{initial_total_budget}', f"seed={0}")
     saved_models_dir = os.path.join('./saved_models/al', save_path_suffix)
-    loaded_model, last_round = learner.load_state(saved_models_dir, update_steps=False)
+    loaded_state = learner.load_state(saved_models_dir, update_steps=False)
+    if loaded_state is None:
+        checkpoint_path = os.path.join(saved_models_dir, "al_state_latest.pt")
+        raise FileNotFoundError(
+            f"No trained survival-model checkpoint was found at {os.path.abspath(checkpoint_path)}. "
+            f"Train the model for dataset={dataset_name}, setup={data_setup} before calibration."
+        )
+    loaded_model, last_round = loaded_state
     loaded_model.eval()
     loaded_model = loaded_model.to(device)
 
@@ -304,10 +319,9 @@ def estimate_t_alpha_per_sample(probability_est: torch.Tensor,
 #     print("cleared")
 
 
-from lifelines import KaplanMeierFitter
-
-
 def evaluate_model_alignment(p, x_test, t_test, delta_test, device='cuda', outdir=None):
+    from lifelines import KaplanMeierFitter
+
     """
     Comprehensive evaluation of Discrimination and Calibration.
     """

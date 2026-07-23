@@ -7,6 +7,7 @@ import argparse
 import numpy as np
 from concurrent.futures import as_completed, ThreadPoolExecutor
 
+from src.safety_evaluation.calibration.oracle_survival_calibration import OracleSurvivalCalibration
 from src.safety_evaluation.calibration.survival_calibration_with_known_weights import get_gamma, SurvivalCalibrationWithKnownWeights
 from src.safety_evaluation.utils.get_calibration_methods_utils import get_baseline_calibrations, get_new_allocation_algorithms
 from src.safety_evaluation.utils.utils import (
@@ -61,9 +62,14 @@ def get_calibration_methods(conditional_grid, budget_per_sample, taus_range, tau
     all_allocations = new_allocations
 
     if bound_type == 'lpb':
-        all_calibrations = baseline_calibrations + [
-            SurvivalCalibrationWithKnownWeights(allocation, taus_range, tau_prior) for
-            allocation in all_allocations]
+        all_calibrations = (
+            baseline_calibrations
+            + [OracleSurvivalCalibration(taus_range, tau_prior)]
+            + [
+                SurvivalCalibrationWithKnownWeights(allocation, taus_range, tau_prior)
+                for allocation in all_allocations
+            ]
+        )
     else:
         all_calibrations = baseline_calibrations + [
             SurvivalUPBCalibrationWithKnownWeights(allocation, taus_range, tau_prior) for

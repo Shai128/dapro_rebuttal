@@ -4,6 +4,11 @@ matplotlib
 seaborn
 psutil
 torch
+scipy
+scikit-learn
+scikit-survival
+lifelines
+tqdm
+datasets
 jupyter
 ipykernel
-

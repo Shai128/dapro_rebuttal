@@ -1,6 +1,9 @@
 import numpy as np
 
 from src.safety_evaluation.budget_allocators.budget_allocator import BudgetAllocator, BudgetAllocationResult
+from src.safety_evaluation.budget_allocators.dapro_projection_metrics import (
+    compute_dapro_projection_metrics,
+)
 from src.safety_evaluation.budget_allocators.optimization_solver_utils import solve_exact_fast
 from src.safety_evaluation.budget_allocators.projected_optimization_utils import adaptive_budget_allocation, \
     construct_final_result, split_to_two_sets, project_to_test_platt, project_to_test_ir, project_to_test_beta
@@ -14,7 +17,8 @@ from src.safety_evaluation.survival_utils.compute_mean_time_given_pmf import com
 class DAPRO(BudgetAllocator):
 
     def __init__(self, conditional_grid, budget_per_sample, taus_range, tau_prior, m_upper_bound, projection: str, score: str,
-                 reach_t_max_is_success:bool=False, n1: int = 100):
+                 reach_t_max_is_success:bool=False, n1: int = 100,
+                 evaluate_projection: bool = False):
         super().__init__(budget_per_sample, taus_range, tau_prior)
         self.conditional_grid = conditional_grid
         self.min_pi = 0.005
@@ -22,6 +26,7 @@ class DAPRO(BudgetAllocator):
         self.score = score
         self.n1 = n1
         self.reach_t_max_is_success = reach_t_max_is_success
+        self.evaluate_projection = evaluate_projection
         if projection not in ['ir', 'platt', 'beta']:
             raise Exception(f"unknown projection {projection}, must be ir or platt")
         if score not in ['prob', 'quantile']:
@@ -103,6 +108,79 @@ class DAPRO(BudgetAllocator):
             'valid_budget': valid_budget,
             'val_budget': val_budget,
         }
+        if self.evaluate_projection:
+            max_steps_all = torch.minimum(prior_q, t)
+            optimal_P_all = solve_exact_fast(
+                scores,
+                max_steps_all,
+                target_budget_avg,
+                verbose=False,
+            )
+            optimal_P_all[optimal_P_all == 0] = 1
+            oracle_p_test = torch.as_tensor(
+                optimal_P_all[test_idxs],
+                dtype=p_test.dtype,
+                device=device,
+            )
+            oracle_p_val = torch.as_tensor(
+                optimal_P_all[val_idxs],
+                dtype=p_test.dtype,
+                device=device,
+            )
+            learned_p_val = torch.as_tensor(
+                optimal_P,
+                dtype=p_test.dtype,
+                device=device,
+            )
+            val_time = torch.arange(T_max_curr, device=device).unsqueeze(0)
+            val_active_mask = val_time < val_max_steps.long().unsqueeze(1)
+            val_probability_error = learned_p_val - oracle_p_val
+            active_val_error = val_probability_error[val_active_mask]
+            val_mae_over_time = torch.where(
+                val_active_mask,
+                val_probability_error.abs(),
+                torch.zeros_like(val_probability_error),
+            ).sum(dim=0) / val_active_mask.sum(dim=0).clamp_min(1)
+            projection_metrics = compute_dapro_projection_metrics(
+                projected_probabilities=p_test,
+                oracle_probabilities=oracle_p_test,
+                prior_q=test_prior_q,
+                event_times=t_test,
+                val_budget_used=val_budget_used,
+                target_budget_avg=target_budget_avg,
+                realized_test_budget=test_total_used,
+                total_sample_count=N,
+                budget_per_sample=self.budget_per_sample,
+            )
+            projection_metrics.update(
+                {
+                    "projection_val_probability_mae": (
+                        active_val_error.abs().mean().item()
+                    ),
+                    "projection_val_probability_rmse": (
+                        active_val_error.square().mean().sqrt().item()
+                    ),
+                    "projection_val_probability_bias": (
+                        active_val_error.mean().item()
+                    ),
+                    "projection_val_mae_over_time_max": (
+                        val_mae_over_time.max().item()
+                    ),
+                    # Backward-compatible names from the original snippet.
+                    "epsilon_val_mae": active_val_error.abs().mean().item(),
+                    "epsilon_val_mae_max_time": (
+                        val_mae_over_time.max().item()
+                    ),
+                }
+            )
+            additional_metrics.update(
+                {
+                    "projection_evaluation_enabled": 1,
+                    "projection_validation_size": len(val_idxs),
+                    "projection_test_size": len(test_idxs),
+                    **projection_metrics,
+                }
+            )
         return BudgetAllocationResult(quantile_est, final_C, final_C_probs, total_budget_used, additional_metrics=additional_metrics)
 
 
@@ -164,4 +242,3 @@ def store(p_val, p_test, test_idxs, val_idxs, t, prior_q, final_C):
 
     # 4. Save to a file
     torch.save(data_to_save, 'projected_optimized_evaluation_plot_data.pt')
-

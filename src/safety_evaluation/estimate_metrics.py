@@ -18,12 +18,14 @@ from src.safety_evaluation.budget_allocators.naive_allocator import NaiveBudgetA
 from src.safety_evaluation.budget_allocators.optimized_allocators import OptimizedBudgetAllocator
 from src.safety_evaluation.budget_allocators.DAPRO import DAPRO
 from src.safety_evaluation.budget_allocators.uniform_allocator import UniformBudgetAllocator, UnweightedUniformBudgetAllocator
-from src.safety_evaluation.construct_calibrated_bound import is_budget_sufficient_for_split
+from src.safety_evaluation.utils.get_calibration_methods_utils import (
+    get_metric_allocators,
+    is_budget_sufficient_for_split,
+)
 
 from src.train_model.acquisition_strategies.dummy_acquisition import DummyAcquisition
 from src.train_model.active_learning import ActiveLearner
 from src.dataset_utils.data_utils import get_data
-from src.safety_evaluation.utils.get_calibration_methods_utils import get_metric_allocators
 from src.safety_evaluation.utils.utils import (
     compute_probabilities_and_quantiles,
     split_data, 

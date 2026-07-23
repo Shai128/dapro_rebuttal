@@ -1,10 +1,14 @@
 import numpy as np
 import pandas as pd
 import random
-from datasets import load_dataset
+import argparse
+from pathlib import Path
 from typing import List
 
 from src.utils.utils import set_seeds
+
+
+DEFAULT_OUTPUT_PATH = Path(__file__).resolve().parent / "autoif_helper_dataset.csv"
 
 
 class ConstraintInjector:
@@ -103,7 +107,9 @@ class ConstraintInjector:
         return augmented_task, new_code_checks
 
 
-def generate_autoif_helper_dataset(output_path="autoif_helper_dataset.csv", num_samples=10000):
+def generate_autoif_helper_dataset(output_path=DEFAULT_OUTPUT_PATH, num_samples=10000):
+    from datasets import load_dataset
+
     print("Loading AutoIF dataset from Hugging Face...")
     # Load the AutoIF dataset containing executable verification functions
     dataset = load_dataset("Post-training-Data-Flywheel/AutoIF-instruct-61k-with-funcs", split="train")
@@ -166,10 +172,25 @@ def generate_autoif_helper_dataset(output_path="autoif_helper_dataset.csv", num_
 
     # Save to CSV
     final_df = pd.DataFrame(processed_data)
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
     final_df.to_csv(output_path, index=False)
     print(f"Dataset successfully saved to {output_path}")
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Generate the AutoIF helper dataset.")
+    parser.add_argument(
+        "--output-path",
+        default=str(DEFAULT_OUTPUT_PATH),
+        help="Destination CSV path.",
+    )
+    parser.add_argument("--num-samples", type=int, default=10000)
+    args = parser.parse_args()
+    if args.num_samples <= 0:
+        raise ValueError("num-samples must be positive.")
     set_seeds(42)
-    generate_autoif_helper_dataset(num_samples=10000)
+    generate_autoif_helper_dataset(
+        output_path=args.output_path,
+        num_samples=args.num_samples,
+    )

@@ -11,6 +11,9 @@ This directory contains Jupyter Notebooks for executing DAPRO pipelines, estimat
 - **[summarize_results.ipynb](summarize_results.ipynb)**: Consolidates LPB and UPB (Upper Probability Bound) coverage results, generating combined boxplots across various settings like AutoIF, Toxicity, and Red-teaming.
 - **[visualize_coverage_bound_results.ipynb](visualize_coverage_bound_results.ipynb)**: Visualizes and compares the theoretically guaranteed lower coverage bounds of our proposed method versus bounds from previous literature.
 - **[visualize_lpb_upb_metrics.ipynb](visualize_lpb_upb_metrics.ipynb)**: Processes both LPB and UPB coverage results, mapping raw dataset runs to clear LLM display names, and creates detailed boxplots and bar charts.
+- **[visualize_dapro_lpb_budget.ipynb](visualize_dapro_lpb_budget.ipynb)**: Plots the distribution of DAPRO's total LPB calibration budget across seeds for one setup, with the 5%, 10%, 50%, 90%, and 95% quantiles marked explicitly.
+- **[visualize_dapro_projection_metrics.ipynb](visualize_dapro_projection_metrics.ipynb)**: Diagnoses DAPRO projection error against the full-data oracle policy and decomposes expected versus realized budget-control error.
+- **[visualize_cross_setup_lpb.ipynb](visualize_cross_setup_lpb.ipynb)**: Compares LPB coverage and bound size when a survival model trained on one setup is calibrated and tested on another setup from the same base dataset.
 
 ## Additional Helpers
 - **[common.py](common.py)** & **[visualize_ablation_results.py](visualize_ablation_results.py)**: Helper scripts and visualizers used by the notebooks for executing robust pipelines.

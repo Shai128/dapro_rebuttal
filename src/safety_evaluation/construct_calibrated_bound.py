@@ -20,6 +20,7 @@ from src.safety_evaluation.budget_allocators.trimmed_allocator import TrimmedBud
 # LPB Calibrations
 from src.safety_evaluation.calibration.abstract_calibration import SurvivalLPBCalibration
 from src.safety_evaluation.calibration.dummy_calibration import UncalibratedLPBSurvivalCalibration
+from src.safety_evaluation.calibration.oracle_survival_calibration import OracleSurvivalCalibration
 from src.safety_evaluation.calibration.survival_calibration_with_known_weights import get_gamma, SurvivalCalibrationWithKnownWeights
 
 # UPB Calibrations
@@ -30,7 +31,10 @@ from src.safety_evaluation.calibration.survival_upb_calibration_with_known_weigh
 from src.dataset_utils.data_utils import get_data
 from src.train_model.models.utils import SurvivalModelPrediction
 
-from src.safety_evaluation.utils.get_calibration_methods_utils import get_new_allocation_algorithms
+from src.safety_evaluation.utils.get_calibration_methods_utils import (
+    get_new_allocation_algorithms,
+    is_budget_sufficient_for_split,
+)
 from src.safety_evaluation.utils.utils import (
     compute_probabilities_and_quantiles,
     split_data,
@@ -96,7 +100,8 @@ def preprocess_df(df, target_taus_list, defaults=None):
 
 
 def run_one_experiment(experiments_name, seed, calibration, x_cal, t_tilde_cal, cal_model_prediction, x_test,
-                       t_tilde_test, test_model_prediction, target_taus_list, bound_type, skip_existing=True):
+                       t_tilde_test, test_model_prediction, target_taus_list, bound_type, skip_existing=True,
+                       experiment_metadata=None):
     try:
         if bound_type == 'lpb':
             dir_path = get_tmp_calibration_result_path(experiments_name, calibration.name)
@@ -128,6 +133,7 @@ def run_one_experiment(experiments_name, seed, calibration, x_cal, t_tilde_cal, 
         all_metrics = {
             'seed': seed,
             'calibration_name': calibration.name,
+            **(experiment_metadata or {}),
             **{f'coverage_{i}': coverage_rate[i].item() for i in range(len(coverage_rate))},
             **{f'size_{i}': length[i].item() for i in range(len(length))},
             **target_coverage,
@@ -145,7 +151,10 @@ def run_one_experiment(experiments_name, seed, calibration, x_cal, t_tilde_cal, 
         processed_df.to_csv(abs_path)
 
     except Exception as e:
-        raise Exception(traceback.print_exc())
+        traceback.print_exc()
+        raise RuntimeError(
+            f"Calibration {calibration.name} failed for seed {seed}."
+        ) from e
 
 
 def store(method_name, lengths):
@@ -208,20 +217,6 @@ def set_m_upper_bound(gamma: float, budget_per_sample: float):
     return m_upper_bound
 
 
-def is_budget_sufficient_for_split(N, n1, total_budget, censored_event_time, prior_q):
-    if n1 > N:
-        return False
-    perm = np.random.permutation(N)
-    val_idxs = perm[:n1]
-
-    t_val = censored_event_time[val_idxs]
-    val_prior_q = prior_q[val_idxs]
-    val_budget_used = torch.minimum(t_val + 1, val_prior_q + 1).sum().item()
-
-    if total_budget > val_budget_used:
-        return True
-
-
 def get_baseline_calibrations(conditional_grid, budget_per_sample, taus_range, tau_prior, m_upper_bound,
                               cal_model_prediction, t_tilde_cal, bound_type):
     naive_allocation = NaiveBudgetAllocator(budget_per_sample, taus_range, tau_prior)
@@ -257,7 +252,8 @@ def get_baseline_calibrations(conditional_grid, budget_per_sample, taus_range, t
 
     if bound_type == 'lpb':
         dummy_calibration = UncalibratedLPBSurvivalCalibration(taus_range)
-        all_calibrations: List[SurvivalLPBCalibration] = [dummy_calibration]
+        oracle_calibration = OracleSurvivalCalibration(taus_range, tau_prior)
+        all_calibrations: List[SurvivalLPBCalibration] = [dummy_calibration, oracle_calibration]
         all_calibrations.extend([SurvivalCalibrationWithKnownWeights(allocation, taus_range, tau_prior) for
                                  allocation in all_allocations])
     else:

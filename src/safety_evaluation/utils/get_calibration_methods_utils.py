@@ -1,4 +1,5 @@
 import numpy as np
+import torch
 
 from src.safety_evaluation.bandit_algorithms.discounted_ucb import DiscountedUCB
 from src.safety_evaluation.bandit_algorithms.new_bandits_algorithm import NewBanditsAlgorithm
@@ -20,9 +21,21 @@ from src.safety_evaluation.reward_functions.reward_by_probability import RewardB
 from src.safety_evaluation.reward_functions.reward_by_probability_diff import RewardByProbabilityDiff
 from src.safety_evaluation.utils.get_best_params_utils import get_best_rexp3_params, get_best_discounted_ucb_params, \
     new_alg_best_params
-from src.safety_evaluation.construct_calibrated_bound import is_budget_sufficient_for_split
 from src.safety_evaluation.budget_allocators.uniform_allocator import UniformBudgetAllocator, UnweightedUniformBudgetAllocator
 from typing import List
+
+
+def is_budget_sufficient_for_split(N, n1, total_budget, censored_event_time, prior_q):
+    if n1 > N:
+        return False
+    perm = np.random.permutation(N)
+    val_idxs = perm[:n1]
+
+    t_val = censored_event_time[val_idxs]
+    val_prior_q = prior_q[val_idxs]
+    val_budget_used = torch.minimum(t_val + 1, val_prior_q + 1).sum().item()
+
+    return total_budget > val_budget_used
 
 
 def get_baseline_calibrations(conditional_grid, budget_per_sample, taus_range, tau_prior, m_upper_bound):
@@ -148,9 +161,6 @@ def get_bandits_allocation_algorithms(budget_per_sample, taus_range, tau_prior, 
                     all_allocations.append(new_allocation)
 
     return all_allocations
-
-
-import torch
 
 def get_metric_allocators(conditional_grid, budget_per_sample, m_upper_bound, taus_range, tau_prior, device, t_tilde_cal=None, cal_model_prediction=None) -> List[BudgetAllocator]:
     """Factory method for allocators used in metric estimation."""
