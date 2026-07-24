@@ -1,5 +1,5 @@
 source ~/.bashrc
-cd ~/llm_attacks
+cd ~/dapro_rebuttal
 conda activate torchenv
 
 squeue -u $USER | awk '{print $1}' | tail -n+2 | xargs scancel
@@ -12,11 +12,12 @@ setups=(
  'attack_toxic_attack_qwen25_14b_instruct_lm_target_llama_31_8B_instruct_judge_detoxify'
  'attack_toxic_attack_qwen25_14b_instruct_lm_target_gemma3_4b_it_judge_detoxify'
  )
-seed_ranges=("0,50")
+#seed_ranges=("0,50")
 seed_ranges=("0,10" "10,20" "20,30" "30,40" "40,50")
 #budget_per_sample=(5 6 7 8 9 10 15 20 25 30 35 40 45 50 100 200)
 #budget_per_sample=(5 6 7 8 9 10 30 50 100 200)
 budget_per_sample=(10 20)
+budget_per_sample=(20)
 for setup in "${setups[@]}"; do
   for seed_range in "${seed_ranges[@]}"; do
     for budget in "${budget_per_sample[@]}"; do
