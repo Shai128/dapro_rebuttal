@@ -92,7 +92,7 @@ for ((job = 0; job < JOB_COUNT; job++)); do
   shard_dirs+=("${shard_dir}")
   log_paths+=("${log_path}")
 
-  "${PYTHON_BIN}" -m src.safety_evaluation.phase1_optimization_ablation \
+  ${PYTHON_BIN} -m src.safety_evaluation.phase1_optimization_ablation \
     "${COMMON_ARGS[@]}" \
     --seed-start "${shard_start}" \
     --seed-end "${shard_end}" \
@@ -116,7 +116,7 @@ if (( failed )); then
 fi
 
 echo "All workers completed; merging shards into ${OUTPUT_DIR}."
-"${PYTHON_BIN}" -m src.safety_evaluation.phase1_optimization_ablation \
+${PYTHON_BIN} -m src.safety_evaluation.phase1_optimization_ablation \
   "${COMMON_ARGS[@]}" \
   --seed-start "${SEED_START}" \
   --seed-end "${SEED_END}" \
