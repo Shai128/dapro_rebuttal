@@ -1,3 +1,9 @@
+source ~/.bashrc
+cd ~/llm_attacks
+conda activate torchenv
+
+squeue -u $USER | awk '{print $1}' | tail -n+2 | xargs scancel
+
 
 
 

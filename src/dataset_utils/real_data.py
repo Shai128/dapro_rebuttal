@@ -14,6 +14,8 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 def generate_real_data(dataset_name, dataset_setup, load_x=True):
     data_store_dir = os.path.join(BASE_DIR, 'datasets/real_data', dataset_name, dataset_setup)
+    if not os.path.exists(data_store_dir):
+        print(f"warning, data does not exist in: {os.path.abspath(data_store_dir)}")
     if os.path.exists(f"{data_store_dir}/n_samples_test.npy"):
         p_train = np.load(f"{data_store_dir}/p_train.npy", allow_pickle=True)
         p_cal = np.load(f"{data_store_dir}/p_cal.npy", allow_pickle=True)

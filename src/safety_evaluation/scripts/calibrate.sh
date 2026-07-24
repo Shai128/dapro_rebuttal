@@ -1,4 +1,8 @@
-#!/bin/bash
+source ~/.bashrc
+cd ~/llm_attacks
+conda activate torchenv
+
+squeue -u $USER | awk '{print $1}' | tail -n+2 | xargs scancel
 
 
 
@@ -17,8 +21,8 @@ for setup in "${setups[@]}"; do
   for seed_range in "${seed_ranges[@]}"; do
     for budget in "${budget_per_sample[@]}"; do
       IFS="," read -r s_start s_end <<< "$seed_range"
-        srun -p public,ash,nlp,dym,galileo,bml,tdk,espresso,euler,newton,ran -c4 --gres=gpu:0 --mem=20G \
-      --exclude="$exclude_list" -J plsNoKil  python -m alg_stuff.construct_calibrated_lpb --data-type real \
+        srun -p galileo -A galileo -c4 --gres=gpu:0 --mem=20G \
+      --exclude="$exclude_list" -J plsNoKil  python -m src.safety_evaluation.construct_calibrated_bound --data-type real \
       --allocations one --seed-start "$s_start" --seed-end "$s_end"  --dataset-name dataset_toxicity \
       --dataset-setup "$setup"  --data-type real  --budget-per-sample "$budget" --cal-size 3000 --tau-prior 0.56 --gamma 10 &
     done
