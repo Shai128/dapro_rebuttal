@@ -184,6 +184,27 @@ notebook visualizes projection errors, cumulative errors, expected versus
 realized budgets, their error decomposition, and the relationship between
 cumulative projection error and expected-budget control.
 
+**To Run the Phase-I Optimization-versus-Adaptivity Ablation:**
+
+This paired 50-split analysis compares the existing static optimized policy,
+generic random adaptive censoring, a score-percentile heuristic, and the
+existing DAPRO Phase-I optimizer. It also produces event-time and initial-score
+stratifications, tail-concentration tables, and publication figures. The runner
+requires cached trajectories and cached survival-model predictions and will
+refuse to regenerate either.
+
+```bash
+bash src/safety_evaluation/scripts/phase1_optimization_ablation.sh
+```
+
+For a one-split cached-data dry run, append `--dry-run` to the Python command in
+the script. When data caches are not present, the analysis code itself can be
+validated without any model or API calls using:
+
+```bash
+python -m src.safety_evaluation.phase1_optimization_ablation --dry-run-fixture
+```
+
 ### Step 4: Merge Results
 After running your evaluations across multiple seeds, merge the results into a single dataset:
 ```bash

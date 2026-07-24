@@ -156,3 +156,4 @@ plots
 *.tar.gz
 *cifar10
 *cifar10c
+results
