@@ -5,10 +5,15 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd -- "${SCRIPT_DIR}/../../.." && pwd)"
 cd "${REPO_ROOT}"
 
-PYTHON_BIN="${PYTHON_BIN:-python}"
-DATASET_NAME="${DATASET_NAME:-dataset_red_team}"
-MODEL_DATASET_SETUP="${MODEL_DATASET_SETUP:-attack_default_attack_qwen25_14b_instruct_lm_target_qwen25_14b_instruct_judge_llm-judge_qwen25_14b_instruct}"
-EVALUATION_DATASET_SETUP="${EVALUATION_DATASET_SETUP:-attack_default_attack_qwen25_14b_instruct_lm_target_gemma3_4b_it_judge_llm-judge_qwen25_14b_instruct}"
+PYTHON_BIN="${PYTHON_BIN:-srun -p galileo -A galileo -c4 --gres=gpu:0 python}"
+#DATASET_NAME="${DATASET_NAME:-dataset_red_team}"
+
+DATASET_NAME="dataset_toxicity"
+MODEL_DATASET_SETUP="attack_toxic_attack_qwen25_14b_instruct_lm_target_qwen25_14b_instruct_judge_detoxify"
+
+EVALUATION_DATASET_SETUP="attack_toxic_attack_qwen25_14b_instruct_lm_target_gemma3_4b_it_judge_detoxify"
+
+
 BUDGET_PER_SAMPLE="${BUDGET_PER_SAMPLE:-20}"
 CAL_SIZE="${CAL_SIZE:-3000}"
 TAU_PRIOR="${TAU_PRIOR:-0.56}"
@@ -33,11 +38,11 @@ COMMON_ARGS=(
   --seed-end "${SEED_END}"
 )
 
-"${PYTHON_BIN}" -m src.safety_evaluation.construct_cross_setup_calibrated_bound \
+${PYTHON_BIN} -m src.safety_evaluation.construct_cross_setup_calibrated_bound \
   "${COMMON_ARGS[@]}" \
   --allocations "${ALLOCATIONS}" \
   --device "${DEVICE}" \
   --max-workers "${MAX_WORKERS}"
 
-"${PYTHON_BIN}" -m src.safety_evaluation.merge_cross_setup_bounds_results \
+${PYTHON_BIN} -m src.safety_evaluation.merge_cross_setup_bounds_results \
   "${COMMON_ARGS[@]}"
