@@ -187,15 +187,30 @@ cumulative projection error and expected-budget control.
 **To Run the Phase-I Optimization-versus-Adaptivity Ablation:**
 
 This paired 50-split analysis compares the existing static optimized policy,
-generic random adaptive censoring, a score-percentile heuristic, and the
-existing DAPRO Phase-I optimizer. It also produces event-time and initial-score
-stratifications, tail-concentration tables, and publication figures. The runner
-requires cached trajectories and cached survival-model predictions and will
-refuse to regenerate either.
+generic random adaptive censoring, a score-percentile heuristic, the existing
+locally adaptive shadow-price allocator, and the existing DAPRO Phase-I
+optimizer. It also produces event-time and initial-score stratifications,
+tail-concentration tables, and publication figures. The runner requires cached
+trajectories and cached survival-model predictions and will refuse to regenerate
+either.
 
 ```bash
 bash src/safety_evaluation/scripts/phase1_optimization_ablation.sh
 ```
+
+The runner shards the requested seed range across four worker processes by
+default, gives every worker a private temporary output directory, and merges
+only after all workers finish. To use more CPU cores:
+
+```bash
+NUM_JOBS=12 DEVICE=cpu bash src/safety_evaluation/scripts/phase1_optimization_ablation.sh
+```
+
+Each worker loads the cached tensors independently, so increase `NUM_JOBS`
+gradually if memory is limited. The runner sets common numerical-library thread
+counts to one to avoid multiplying process-level parallelism by hidden BLAS
+thread pools. Multiple workers can share a CUDA device, but CPU workers are
+recommended for this mode unless GPU memory has been sized accordingly.
 
 For a one-split cached-data dry run, append `--dry-run` to the Python command in
 the script. When data caches are not present, the analysis code itself can be

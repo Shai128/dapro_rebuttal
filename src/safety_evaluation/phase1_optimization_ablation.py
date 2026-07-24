@@ -2,8 +2,9 @@
 
 This module is deliberately analysis-only.  It consumes cached trajectories and
 model outputs and never imports the conversation-generation stack.  The phase-I
-split, DAPRO score, DAPRO inverse-weight optimizer, projection maps, and LPB
-calibration rule are shared with the existing implementation.
+split, locally adaptive shadow-price rule, DAPRO score, DAPRO inverse-weight
+optimizer, projection maps, and LPB calibration rule follow the existing
+implementations.
 """
 
 from __future__ import annotations
@@ -44,10 +45,23 @@ from src.safety_evaluation.survival_utils.compute_mean_time_given_pmf import (
 from src.utils.utils import set_seeds
 
 
-METHODS = ("Static", "RandomAdaptive", "ScoreAdaptive-Heuristic", "DAPRO")
-STRATIFIED_METHODS = ("Static", "ScoreAdaptive-Heuristic", "DAPRO")
+METHODS = (
+    "Static",
+    "RandomAdaptive",
+    "ScoreAdaptive-Heuristic",
+    "LocallyAdaptive",
+    "DAPRO",
+)
+STRATIFIED_METHODS = (
+    "Static",
+    "ScoreAdaptive-Heuristic",
+    "LocallyAdaptive",
+    "DAPRO",
+)
 PAIRINGS = (
     ("DAPRO", "ScoreAdaptive-Heuristic"),
+    ("DAPRO", "LocallyAdaptive"),
+    ("LocallyAdaptive", "Static"),
     ("ScoreAdaptive-Heuristic", "RandomAdaptive"),
     ("RandomAdaptive", "Static"),
 )
@@ -309,6 +323,143 @@ def fit_static_policy(
     )
 
 
+def _locally_adaptive_probability_paths(
+    conditional_grid: np.ndarray,
+    event_times: np.ndarray,
+    q_prior: np.ndarray,
+    lam: float,
+) -> tuple[np.ndarray, float]:
+    """Evaluate the existing locally adaptive shadow-price policy.
+
+    This mirrors ``AdaptiveOptimizedBudgetAllocator`` without sampling so the
+    ablation can reuse paired common random numbers across all dynamic methods.
+    """
+
+    # Keep the cached grid's native precision; casting an N×T×T production
+    # tensor to float64 would unnecessarily double peak memory.
+    conditional_grid = np.asarray(conditional_grid)
+    event_times = np.asarray(event_times, dtype=np.int64)
+    q_prior = np.asarray(q_prior, dtype=np.int64)
+    n, width, _ = conditional_grid.shape
+    probabilities = np.ones((n, width), dtype=np.float64)
+    cumulative_probability = np.ones(n, dtype=np.float64)
+    active = np.ones(n, dtype=bool)
+    total_expected_cost = 0.0
+
+    for t_curr in range(width):
+        active &= event_times >= t_curr
+        active &= q_prior >= t_curr
+        if not np.any(active):
+            break
+
+        belief = conditional_grid[:, t_curr, t_curr:]
+        remaining_steps = np.clip(
+            q_prior - t_curr + 1, 0, belief.shape[1]
+        ).astype(np.float64)
+        future_steps = np.arange(belief.shape[1])
+        within_horizon = future_steps[None, :] <= remaining_steps[:, None]
+        expected_remaining = np.sum(
+            belief
+            * within_horizon
+            * np.arange(1, belief.shape[1] + 1, dtype=np.float64)[None, :],
+            axis=1,
+        )
+        expected_remaining += remaining_steps * np.sum(
+            belief * ~within_horizon, axis=1
+        )
+
+        target_terminal_probability = 1.0 / np.sqrt(
+            lam * expected_remaining + 1e-12
+        )
+        target_terminal_probability = np.minimum(target_terminal_probability, 1.0)
+        continuation = np.minimum(
+            target_terminal_probability
+            / np.maximum(cumulative_probability, 1e-9),
+            1.0,
+        )
+        probabilities[active, t_curr] = continuation[active]
+        total_expected_cost += float(
+            np.sum(cumulative_probability[active] * continuation[active])
+        )
+        cumulative_probability[active] *= continuation[active]
+
+    return probabilities, total_expected_cost / n
+
+
+def fit_locally_adaptive_policy(
+    phase1_grid: np.ndarray,
+    phase1_event_times: np.ndarray,
+    phase1_q: np.ndarray,
+    phase2_grid: np.ndarray,
+    phase2_event_times: np.ndarray,
+    phase2_q: np.ndarray,
+    target: float,
+    tolerance: float,
+) -> PolicyResult:
+    """Fit the existing locally adaptive method's scalar shadow price."""
+
+    def phase1_cost(lam: float) -> float:
+        _, cost = _locally_adaptive_probability_paths(
+            phase1_grid, phase1_event_times, phase1_q, lam
+        )
+        return cost
+
+    low, high = 0.0, 256.0
+    low_cost = phase1_cost(low)
+    high_cost = phase1_cost(high)
+    boundary = None
+    if low_cost <= target + tolerance:
+        lam = low
+        achieved = low_cost
+        boundary = "upper"
+    elif high_cost > target + tolerance:
+        lam = high
+        achieved = high_cost
+        boundary = "lower"
+        warnings.warn(
+            "Locally adaptive cost at lambda=256 exceeds the target; using 256.",
+            RuntimeWarning,
+        )
+    else:
+        # Match the existing allocator's fixed 25-step shadow-price search.
+        for _ in range(25):
+            mid = 0.5 * (low + high)
+            achieved = phase1_cost(mid)
+            if abs(achieved - target) < tolerance:
+                low = high = mid
+                break
+            if achieved > target:
+                low = mid
+            else:
+                high = mid
+        lam = 0.5 * (low + high)
+        phase1_probabilities, achieved = _locally_adaptive_probability_paths(
+            phase1_grid, phase1_event_times, phase1_q, lam
+        )
+
+    if boundary is not None:
+        phase1_probabilities, achieved = _locally_adaptive_probability_paths(
+            phase1_grid, phase1_event_times, phase1_q, lam
+        )
+    phase2_probabilities, _ = _locally_adaptive_probability_paths(
+        phase2_grid, phase2_event_times, phase2_q, lam
+    )
+    phase1_lengths = active_lengths(
+        phase1_event_times, phase1_q, phase1_probabilities.shape[1]
+    )
+    objective = float(
+        np.mean(1.0 / terminal_probabilities(phase1_probabilities, phase1_lengths))
+    )
+    return PolicyResult(
+        phase2_probabilities,
+        achieved,
+        objective,
+        lam,
+        boundary,
+        [],
+    )
+
+
 def fit_dapro_policy(
     phase1_scores: np.ndarray,
     phase1_event_times: np.ndarray,
@@ -391,6 +542,46 @@ def simulate_adaptive(
         "calibration_c": calibration_c,
         "realized_cost": reached.copy(),
         "terminal_probability": terminal_probability,
+    }
+
+
+def simulate_locally_adaptive(
+    probabilities: np.ndarray,
+    event_times: np.ndarray,
+    q_prior: np.ndarray,
+    uniforms: np.ndarray,
+    p_min: float,
+) -> dict[str, np.ndarray]:
+    """Mirror ``AdaptiveOptimizedBudgetAllocator`` with supplied uniforms."""
+
+    probabilities = np.asarray(probabilities, dtype=np.float64)
+    event_times = np.asarray(event_times, dtype=np.int64)
+    q_prior = np.asarray(q_prior, dtype=np.int64)
+    n, width = probabilities.shape
+    reached = np.zeros(n, dtype=np.int64)
+    active = np.ones(n, dtype=bool)
+    cumulative_probability = np.ones(n, dtype=np.float64)
+    for t_curr in range(width):
+        active &= event_times >= t_curr
+        active &= q_prior >= t_curr
+        if not np.any(active):
+            break
+        keep = (uniforms[:, t_curr] <= probabilities[:, t_curr]) & active
+        reached[keep] += 1
+        cumulative_probability[keep] *= probabilities[keep, t_curr]
+        active &= keep
+
+    succeeded = (reached > q_prior) | (reached > event_times)
+    calibration_c = np.where(succeeded, q_prior + 1, reached)
+    inclusion_probability = np.where(
+        succeeded, cumulative_probability, p_min
+    )
+    return {
+        "reached": reached,
+        "succeeded": succeeded.astype(np.int64),
+        "calibration_c": calibration_c,
+        "realized_cost": reached.copy(),
+        "terminal_probability": inclusion_probability,
     }
 
 
@@ -553,6 +744,8 @@ def run_split(
     q2 = _as_numpy(q_cal[phase2_local]).astype(int)
     score1 = _as_numpy(scores_cal[phase1_local])
     score2 = _as_numpy(scores_cal[phase2_local])
+    grid1 = _as_numpy(grid_cal[phase1_local])
+    grid2 = _as_numpy(grid_cal[phase2_local])
     width = score1.shape[1]
     lengths1 = active_lengths(event1, q1, width)
     phase1_cost = float(np.sum(lengths1))
@@ -579,6 +772,16 @@ def run_split(
         target,
         config.p_min,
         config.slope,
+        config.bisection_tolerance,
+    )
+    policies["LocallyAdaptive"] = fit_locally_adaptive_policy(
+        grid1,
+        event1,
+        q1,
+        grid2,
+        event2,
+        q2,
+        target,
         config.bisection_tolerance,
     )
     policies["DAPRO"] = fit_dapro_policy(
@@ -614,11 +817,14 @@ def run_split(
             raise AssertionError(f"{method} produced non-finite probabilities.")
         if not np.all((probabilities > 0) & (probabilities <= 1)):
             raise AssertionError(f"{method} probabilities are outside (0, 1].")
-        simulation = (
-            simulate_static(probabilities, event2, q2, static_u)
-            if method == "Static"
-            else simulate_adaptive(probabilities, event2, q2, common_u)
-        )
+        if method == "Static":
+            simulation = simulate_static(probabilities, event2, q2, static_u)
+        elif method == "LocallyAdaptive":
+            simulation = simulate_locally_adaptive(
+                probabilities, event2, q2, common_u, config.p_min
+            )
+        else:
+            simulation = simulate_adaptive(probabilities, event2, q2, common_u)
         terminal = simulation["terminal_probability"]
         latent_weight = 1.0 / terminal
         phase1_c = q1 + 1
@@ -728,9 +934,14 @@ def _validate_split(
             frame.loc[frame.method == method]
             .sort_values("sample_id")["common_uniform_path_hash"]
         )
-        for method in ("RandomAdaptive", "ScoreAdaptive-Heuristic", "DAPRO")
+        for method in (
+            "RandomAdaptive",
+            "ScoreAdaptive-Heuristic",
+            "LocallyAdaptive",
+            "DAPRO",
+        )
     ]
-    assert hashes[0] == hashes[1] == hashes[2]
+    assert all(current == hashes[0] for current in hashes[1:])
     for field in ("difficulty_stratum", "initial_score_quartile"):
         pivot = frame.pivot(index="sample_id", columns="method", values=field)
         assert pivot.nunique(axis=1, dropna=False).eq(1).all()
@@ -739,7 +950,11 @@ def _validate_split(
         config.slope * (random_r - 0.5)
     )
     assert np.all(np.diff(values) >= 0)
-    for method in ("RandomAdaptive", "ScoreAdaptive-Heuristic"):
+    for method in (
+        "RandomAdaptive",
+        "ScoreAdaptive-Heuristic",
+        "LocallyAdaptive",
+    ):
         result = policies[method]
         if result.feasible_boundary is None:
             assert result.phase1_expected_cost <= target + 5 * config.bisection_tolerance
@@ -943,6 +1158,7 @@ def _plot_ablation(split_df: pd.DataFrame, output_dir: Path, target_budget: floa
         "Static": "#4C78A8",
         "RandomAdaptive": "#F58518",
         "ScoreAdaptive-Heuristic": "#54A24B",
+        "LocallyAdaptive": "#E45756",
         "DAPRO": "#B279A2",
     }
     panels = (
@@ -951,14 +1167,15 @@ def _plot_ablation(split_df: pd.DataFrame, output_dir: Path, target_budget: floa
         ("selected_tau", "C. Selected calibration $\\tau$"),
         ("realized_budget_per_sample", "D. Realized budget per sample"),
     )
-    fig, axes = plt.subplots(1, 4, figsize=(14, 3.6), constrained_layout=True)
+    fig, axes = plt.subplots(1, 4, figsize=(15, 3.8), constrained_layout=True)
     rng = np.random.default_rng(7)
+    positions = np.arange(len(METHODS))
     for ax, (metric, title) in zip(axes, panels):
         values = [
             split_df.loc[split_df.method == method, metric].dropna().to_numpy()
             for method in METHODS
         ]
-        boxes = ax.boxplot(values, positions=np.arange(4), widths=0.55, patch_artist=True)
+        boxes = ax.boxplot(values, positions=positions, widths=0.55, patch_artist=True)
         for patch, method in zip(boxes["boxes"], METHODS):
             patch.set_facecolor(colors[method])
             patch.set_alpha(0.25)
@@ -968,9 +1185,9 @@ def _plot_ablation(split_df: pd.DataFrame, output_dir: Path, target_budget: floa
                 x + jitter, vals, s=13, alpha=0.7, color=colors[method], edgecolor="none"
             )
         ax.set_title(title, loc="left", fontsize=10)
-        ax.set_xticks(np.arange(4))
+        ax.set_xticks(positions)
         ax.set_xticklabels(
-            ("Static", "Random", "Heuristic", "DAPRO"), rotation=25
+            ("Static", "Random", "Heuristic", "Local", "DAPRO"), rotation=25
         )
         ax.grid(axis="y", alpha=0.2)
         if metric == "realized_budget_per_sample":
@@ -981,7 +1198,12 @@ def _plot_ablation(split_df: pd.DataFrame, output_dir: Path, target_budget: floa
 
 
 def _plot_stratified(summary: pd.DataFrame, output_dir: Path) -> None:
-    colors = {"Static": "#4C78A8", "ScoreAdaptive-Heuristic": "#54A24B", "DAPRO": "#B279A2"}
+    colors = {
+        "Static": "#4C78A8",
+        "ScoreAdaptive-Heuristic": "#54A24B",
+        "LocallyAdaptive": "#E45756",
+        "DAPRO": "#B279A2",
+    }
     panels = (
         ("event_time_difficulty", "average_realized_budget", "A. Realized budget"),
         ("event_time_difficulty", "resolution_rate", "B. Resolution rate"),
@@ -1067,6 +1289,18 @@ python -m src.safety_evaluation.phase1_optimization_ablation \\
   --projection {config.projection} --score {config.score}
 ```
 
+Parallel seed-sharded run (four workers by default):
+
+```bash
+NUM_JOBS=12 DEVICE=cpu \\
+  bash src/safety_evaluation/scripts/phase1_optimization_ablation.sh
+```
+
+Every worker writes raw outputs to a private temporary shard.  The parent waits
+for all workers and validates seed/method completeness before producing the
+merged tables and figures.  Each worker loads the cached tensors independently,
+so choose `NUM_JOBS` according to available memory as well as CPU count.
+
 The production command requires the repository's cached real-data tensors and
 `alg_playground_model/.../probability_est_cal_test.pt`.  Missing caches are a
 hard error; this analysis never generates conversations or calls an API.
@@ -1083,6 +1317,11 @@ hard error; this analysis never generates conversations or calls an API.
   bisection against the Phase-II per-sample budget.
 - **ScoreAdaptive-Heuristic** uses tie-safe Phase-I midrank percentiles and
   `p_min+(1-p_min)*sigmoid(5*(rank-.5)+lambda)`.  Only lambda is fit.
+- **LocallyAdaptive** mirrors the existing `AdaptiveOptimizedBudgetAllocator`:
+  it fits a scalar shadow price on Phase I, then recomputes continuation
+  probabilities from each trajectory's local conditional grid at every step.
+  The probabilities are dynamic but are not jointly optimized by DAPRO's
+  inverse-weight objective.
 - **DAPRO** directly calls the existing `solve_exact_fast` inverse-weight
   optimizer and existing `{config.projection}` projection code with the existing
   `{config.score}` score.  Those code paths are not modified.
@@ -1100,11 +1339,13 @@ candidate rule is used over the repository tau grid.  Bootstrap intervals use
 
 ## Interpretation
 
-`DAPRO - ScoreAdaptive-Heuristic` isolates Phase-I inverse-weight optimization;
-`ScoreAdaptive-Heuristic - RandomAdaptive` isolates score adaptivity; and
-`RandomAdaptive - Static` isolates generic dynamic censoring.  The stratified
-tables show whether changes concentrate in late/horizon-limited trajectories or
-specific initial-score quartiles.
+`DAPRO - LocallyAdaptive` directly contrasts globally optimized dynamic
+probabilities with the existing local shadow-price rule.
+`LocallyAdaptive - Static` isolates the gain from that local dynamic policy,
+while `DAPRO - ScoreAdaptive-Heuristic`, `ScoreAdaptive-Heuristic -
+RandomAdaptive`, and `RandomAdaptive - Static` retain the original decomposition.
+The stratified tables show whether changes concentrate in late/horizon-limited
+trajectories or specific initial-score quartiles.
 
 A 50-split CPU run is expected to take tens of minutes to several hours,
 depending mainly on calibration size and the selected DAPRO projection.
@@ -1209,9 +1450,8 @@ def _load_cached_repository_data(
     )
 
 
-def run(args: argparse.Namespace) -> Path:
-    device = args.device if torch.cuda.is_available() and "cuda" in args.device else "cpu"
-    config = Config(
+def _config_from_args(args: argparse.Namespace) -> Config:
+    return Config(
         seed_start=args.seed_start,
         seed_end=args.seed_end,
         budget_per_sample=args.budget_per_sample,
@@ -1226,26 +1466,37 @@ def run(args: argparse.Namespace) -> Path:
         score=args.score,
         max_horizon=args.max_horizon,
     )
-    data = _fixture_data(config, device) if args.dry_run_fixture else _load_cached_repository_data(args, config, device)
-    output_dir = Path(args.output_dir)
-    if args.dry_run_fixture:
-        output_dir /= "dry_run"
+
+
+def _write_raw_outputs(
+    split_df: pd.DataFrame,
+    sample_df: pd.DataFrame,
+    output_dir: Path,
+) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
-    split_rows, sample_rows = [], []
-    for seed in range(config.seed_start, config.seed_end):
-        current_split, current_samples = run_split(
-            data,
-            config,
-            seed,
-            device,
-            dry_limit=args.dry_limit if args.dry_run else None,
-        )
-        split_rows.extend(current_split)
-        sample_rows.extend(current_samples)
-    split_df = pd.DataFrame(split_rows)
-    sample_df = pd.DataFrame(sample_rows)
-    split_df.to_csv(output_dir / "split_level_results.csv", index=False)
-    sample_df.to_csv(output_dir / "sample_level_results.csv", index=False)
+    split_df.sort_values(["split_id", "method"]).to_csv(
+        output_dir / "split_level_results.csv", index=False
+    )
+    sample_df.sort_values(["split_id", "sample_id", "method"]).to_csv(
+        output_dir / "sample_level_results.csv", index=False
+    )
+
+
+def _finalize_outputs(
+    split_df: pd.DataFrame,
+    sample_df: pd.DataFrame,
+    output_dir: Path,
+    args: argparse.Namespace,
+    config: Config,
+    source_files: list[str],
+    devices: list[str],
+    parallel_workers: int,
+) -> None:
+    split_df = split_df.sort_values(["split_id", "method"]).reset_index(drop=True)
+    sample_df = sample_df.sort_values(
+        ["split_id", "sample_id", "method"]
+    ).reset_index(drop=True)
+    _write_raw_outputs(split_df, sample_df, output_dir)
     paired = paired_summary(split_df, config)
     paired.to_csv(output_dir / "paired_comparisons.csv", index=False)
     _write_latex(paired, output_dir / "paired_comparisons.tex")
@@ -1257,15 +1508,20 @@ def run(args: argparse.Namespace) -> Path:
     _plot_stratified(strat_summary, output_dir)
     metadata = {
         "config": asdict(config),
-        "device": device,
+        "device": devices[0] if len(devices) == 1 else devices,
         "dry_run": bool(args.dry_run or args.dry_run_fixture),
         "fixture": bool(args.dry_run_fixture),
-        "source_files": data.source_files,
+        "source_files": source_files,
         "methods": list(METHODS),
+        "parallel_workers": parallel_workers,
         "common_random_numbers": "sha256 keyed by split_id/sample_id, one path shared by adaptive methods",
         "clipping": {
             "heuristic": "none beyond the explicit p_min parameterization",
             "random": "bounded bisection domain [p_min,1]",
+            "locally_adaptive": (
+                "existing early-stop inclusion-probability floor p_min; "
+                "continuation probabilities otherwise follow the shadow-price rule"
+            ),
             "dapro": "unchanged projection-specific epsilon in repository utility",
         },
         "indexing_convention": (
@@ -1279,7 +1535,149 @@ def run(args: argparse.Namespace) -> Path:
     (output_dir / "run_metadata.json").write_text(
         json.dumps(metadata, indent=2), encoding="utf-8"
     )
-    _write_output_readme(output_dir, args, config, data.source_files)
+    _write_output_readme(output_dir, args, config, source_files)
+
+
+def run(args: argparse.Namespace) -> Path:
+    device = args.device if torch.cuda.is_available() and "cuda" in args.device else "cpu"
+    config = _config_from_args(args)
+    data = _fixture_data(config, device) if args.dry_run_fixture else _load_cached_repository_data(args, config, device)
+    output_dir = Path(args.output_dir)
+    if args.dry_run_fixture:
+        output_dir /= "dry_run"
+    split_rows, sample_rows = [], []
+    for seed in range(config.seed_start, config.seed_end):
+        current_split, current_samples = run_split(
+            data,
+            config,
+            seed,
+            device,
+            dry_limit=args.dry_limit if args.dry_run else None,
+        )
+        split_rows.extend(current_split)
+        sample_rows.extend(current_samples)
+    split_df = pd.DataFrame(split_rows)
+    sample_df = pd.DataFrame(sample_rows)
+    if args.raw_only:
+        _write_raw_outputs(split_df, sample_df, output_dir)
+        worker_metadata = {
+            "config": asdict(config),
+            "device": device,
+            "source_files": data.source_files,
+            "methods": list(METHODS),
+        }
+        (output_dir / "worker_metadata.json").write_text(
+            json.dumps(worker_metadata, indent=2), encoding="utf-8"
+        )
+    else:
+        _finalize_outputs(
+            split_df,
+            sample_df,
+            output_dir,
+            args,
+            config,
+            data.source_files,
+            [device],
+            parallel_workers=1,
+        )
+    return output_dir
+
+
+def merge_shards(args: argparse.Namespace) -> Path:
+    """Merge isolated seed shards and generate the final analysis outputs."""
+
+    config = _config_from_args(args)
+    shard_dirs = [Path(path) for path in args.merge_shards]
+    split_frames = []
+    sample_frames = []
+    worker_metadata = []
+    for shard_dir in shard_dirs:
+        split_path = shard_dir / "split_level_results.csv"
+        sample_path = shard_dir / "sample_level_results.csv"
+        metadata_path = shard_dir / "worker_metadata.json"
+        missing = [
+            str(path)
+            for path in (split_path, sample_path, metadata_path)
+            if not path.exists()
+        ]
+        if missing:
+            raise FileNotFoundError(
+                f"Shard {shard_dir} is incomplete; missing: {missing}"
+            )
+        split_frames.append(pd.read_csv(split_path))
+        sample_frames.append(pd.read_csv(sample_path))
+        worker_metadata.append(json.loads(metadata_path.read_text(encoding="utf-8")))
+
+    split_df = pd.concat(split_frames, ignore_index=True)
+    sample_df = pd.concat(sample_frames, ignore_index=True)
+    expected_seeds = set(range(config.seed_start, config.seed_end))
+    actual_seeds = set(split_df["split_id"].astype(int).unique())
+    if actual_seeds != expected_seeds:
+        missing = sorted(expected_seeds - actual_seeds)
+        extra = sorted(actual_seeds - expected_seeds)
+        raise ValueError(f"Shard seed mismatch; missing={missing}, extra={extra}")
+    split_counts = split_df.groupby("split_id")["method"].agg(["size", "nunique"])
+    if not (
+        split_counts["size"].eq(len(METHODS))
+        & split_counts["nunique"].eq(len(METHODS))
+    ).all():
+        raise ValueError("Each merged seed must contain every method exactly once.")
+    if split_df.duplicated(["split_id", "method"]).any():
+        raise ValueError("Duplicate split/method rows found across shards.")
+    if sample_df.duplicated(["split_id", "sample_id", "method"]).any():
+        raise ValueError("Duplicate split/sample/method rows found across shards.")
+    sample_counts = sample_df.groupby(["split_id", "sample_id"])["method"].agg(
+        ["size", "nunique"]
+    )
+    if not (
+        sample_counts["size"].eq(len(METHODS))
+        & sample_counts["nunique"].eq(len(METHODS))
+    ).all():
+        raise ValueError(
+            "Each merged split/sample pair must contain every method exactly once."
+        )
+
+    reference_config = {
+        key: value
+        for key, value in worker_metadata[0]["config"].items()
+        if key not in {"seed_start", "seed_end"}
+    }
+    requested_config = {
+        key: value
+        for key, value in asdict(config).items()
+        if key not in {"seed_start", "seed_end"}
+    }
+    if reference_config != requested_config:
+        raise ValueError("Merged command configuration does not match the shards.")
+    for metadata in worker_metadata:
+        current_config = {
+            key: value
+            for key, value in metadata["config"].items()
+            if key not in {"seed_start", "seed_end"}
+        }
+        if current_config != reference_config:
+            raise ValueError("Shard configurations do not match.")
+        if metadata["methods"] != list(METHODS):
+            raise ValueError("Shard method lists do not match the current analysis.")
+    source_files = worker_metadata[0]["source_files"]
+    if any(metadata["source_files"] != source_files for metadata in worker_metadata[1:]):
+        raise ValueError("Shard source-file manifests do not match.")
+    devices = sorted({metadata["device"] for metadata in worker_metadata})
+
+    output_dir = Path(args.output_dir)
+    if args.dry_run_fixture:
+        output_dir /= "dry_run"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    _finalize_outputs(
+        split_df,
+        sample_df,
+        output_dir,
+        args,
+        config,
+        source_files,
+        devices,
+        parallel_workers=len(shard_dirs),
+    )
     return output_dir
 
 
@@ -1304,6 +1702,17 @@ def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--max-horizon", type=int, default=200)
     parser.add_argument("--device", default="cuda:0")
     parser.add_argument("--output-dir", default="results/phase1_optimization_ablation")
+    parser.add_argument(
+        "--raw-only",
+        action="store_true",
+        help="Write only raw split/sample outputs for one parallel worker.",
+    )
+    parser.add_argument(
+        "--merge-shards",
+        nargs="+",
+        metavar="SHARD_DIR",
+        help="Merge raw worker directories and generate final tables and figures.",
+    )
     parser.add_argument("--dry-run", action="store_true", help="Run one split on cached-data subsets.")
     parser.add_argument("--dry-limit", type=int, default=200)
     parser.add_argument(
@@ -1313,9 +1722,12 @@ def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
     )
     args = parser.parse_args(argv)
     if args.dry_run or args.dry_run_fixture:
-        args.seed_end = args.seed_start + 1
         args.bootstrap_resamples = min(args.bootstrap_resamples, 500)
         args.n1 = min(args.n1, 16)
+    if (args.dry_run or args.dry_run_fixture) and not args.merge_shards:
+        args.seed_end = args.seed_start + 1
+    if args.raw_only and args.merge_shards:
+        parser.error("--raw-only and --merge-shards are mutually exclusive.")
     if not args.dry_run_fixture and (not args.dataset_name or not args.dataset_setup):
         parser.error("--dataset-name and --dataset-setup are required for cached-data runs.")
     if args.seed_end <= args.seed_start:
@@ -1329,7 +1741,7 @@ def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-    output = run(args)
+    output = merge_shards(args) if args.merge_shards else run(args)
     print(f"Wrote phase-I optimization ablation to {output.resolve()}")
 
 

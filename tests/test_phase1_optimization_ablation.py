@@ -8,9 +8,11 @@ from src.safety_evaluation.phase1_optimization_ablation import (
     MidrankCDF,
     active_lengths,
     expected_cost,
+    fit_locally_adaptive_policy,
     fit_random_policy,
     fit_score_heuristic,
     simulate_adaptive,
+    simulate_locally_adaptive,
 )
 
 
@@ -45,6 +47,37 @@ def test_heuristic_is_monotone_and_budgeted():
     assert expected_cost(
         result.probabilities, lengths
     ) <= 1.4 + 1e-5
+
+
+def test_locally_adaptive_policy_is_finite_and_budgeted():
+    grid = np.array(
+        [
+            [[0.2, 0.3, 0.5], [0.0, 0.4, 0.6], [0.0, 0.0, 1.0]],
+            [[0.6, 0.3, 0.1], [0.0, 0.7, 0.3], [0.0, 0.0, 1.0]],
+            [[0.1, 0.2, 0.7], [0.0, 0.2, 0.8], [0.0, 0.0, 1.0]],
+            [[0.4, 0.4, 0.2], [0.0, 0.5, 0.5], [0.0, 0.0, 1.0]],
+        ]
+    )
+    event = np.array([2, 2, 1, 2])
+    prior = np.array([2, 2, 2, 1])
+    result = fit_locally_adaptive_policy(
+        grid, event, prior, grid, event, prior, target=1.4, tolerance=1e-6
+    )
+    assert result.phase1_expected_cost <= 1.4 + 1e-5
+    assert np.all(np.isfinite(result.probabilities))
+    assert np.all((result.probabilities > 0) & (result.probabilities <= 1))
+
+
+def test_locally_adaptive_simulation_keeps_partial_censoring_and_floor():
+    probabilities = np.full((2, 3), 0.5)
+    event = np.array([3, 0])
+    prior = np.array([2, 2])
+    uniforms = np.array([[0.1, 0.9, 0.1], [0.1, 0.1, 0.1]])
+    result = simulate_locally_adaptive(
+        probabilities, event, prior, uniforms, p_min=0.005
+    )
+    np.testing.assert_array_equal(result["calibration_c"], [1, 3])
+    np.testing.assert_allclose(result["terminal_probability"], [0.005, 0.5])
 
 
 def test_common_uniforms_make_simulation_deterministic():

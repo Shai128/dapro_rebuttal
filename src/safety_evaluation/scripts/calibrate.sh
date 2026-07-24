@@ -35,11 +35,11 @@ setups=( 'attack_toxic_attack_qwen25_14b_instruct_lm_target_qwen25_14b_instruct_
  'attack_toxic_attack_qwen25_14b_instruct_lm_target_llama_31_8B_instruct_judge_detoxify'\
   'attack_toxic_attack_qwen25_14b_instruct_lm_target_gemma3_4b_it_judge_detoxify'
  )
-budget_per_sample=(5 6 7 8 9 10 15 20 25 30 35 40 45 50 100 200)
+budget_per_sample=(10 20)
 for setup in "${setups[@]}"; do
   for budget in "${budget_per_sample[@]}"; do
-      srun -p public,ash,nlp,dym,galileo,bml,tdk,espresso,euler,newton,ran -c4 --gres=gpu:0 --mem=20G \
-      --exclude="$exclude_list" -J plsNoKil  python -m alg_stuff.merge_lpb_results --data-type real \
+      srun -p galileo -A galileo -c4  -c4 --gres=gpu:0 --mem=20G \
+      --exclude="$exclude_list" -J plsNoKil  python -m src.safety_evaluation.merge_bounds_results --data-type real \
       --allocations one --seed-start 0 --seed-end 50  --dataset-name dataset_toxicity \
       --dataset-setup "$setup"  --data-type real  --budget-per-sample "$budget" --cal-size 3000 --tau-prior 0.56 --gamma 10 &
   done
