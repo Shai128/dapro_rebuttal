@@ -18,7 +18,7 @@ PROJECTION="${PROJECTION:-platt}"
 SCORE="${SCORE:-prob}"
 DEVICE="${DEVICE:-cuda:0}"
 OUTPUT_DIR="${OUTPUT_DIR:-results/phase1_optimization_ablation}"
-NUM_JOBS="50"
+NUM_JOBS="1"
 
 # Prevent each worker from creating its own large BLAS/OpenMP thread pool.
 export OMP_NUM_THREADS="${OMP_NUM_THREADS:-1}"
