@@ -244,7 +244,8 @@ def get_baseline_calibrations(conditional_grid, budget_per_sample, taus_range, t
 
     for projection in ['platt', 'beta']:
         for score in ['prob', 'quantile']:
-            for n1 in [25, 50, 75, 100, 150, 200, 250, 300, 400, 500, 750, 1000]:
+            # for n1 in [25, 50, 75, 100, 150, 200, 250, 300, 400, 500, 750, 1000]:
+            for n1 in [100]:
                 if is_budget_sufficient_for_split(N, n1, total_budget, censored_event_time, prior_q):
                     all_allocations.append(DAPRO(conditional_grid, budget_per_sample, taus_range,
                                                  tau_prior, m_upper_bound, projection=projection,

@@ -1,50 +1,5 @@
 #!/bin/bash
 
-budgets=(3 5 6 8 10 15 20 50 100)
-cals=(500 1000 2000 3000 4000)
-priors=(0.5 0.56 0.6 0.7 0.8 0.9 0.95)
-gammas=(1 2 5 10 15 20 25 50)
-
-#gammas=(5 10 15 20)
-setups=( 'attack_toxic_attack_qwen25_14b_instruct_lm_target_qwen25_14b_instruct_judge_detoxify'
- 'attack_toxic_attack_qwen25_14b_instruct_lm_target_mini_phi_4_instruct_judge_detoxify'\
- 'attack_toxic_attack_qwen25_14b_instruct_lm_target_llama-3.1-8B-instruct_instruct_judge_detoxify'
- )
-
-budgets=(20)
-cals=(3000 4000)
-priors=(0.56 0.7)
-gammas=(5 10)
-setups=( 'attack_toxic_attack_qwen25_14b_instruct_lm_target_qwen25_14b_instruct_judge_detoxify'\
- 'attack_toxic_attack_qwen25_14b_instruct_lm_target_mini_phi_4_instruct_judge_detoxify'\
- 'attack_toxic_attack_qwen25_14b_instruct_lm_target_llama_31_8B_instruct_judge_detoxify'
- )
-exclude_list=$(sinfo -N -h -o "%n %G" | awk '$2 !~ /A100|A40|A6000|6000ADA|L40|L4|A4000/ {print $1}' | paste -sd, -)
-
-for setup in "${setups[@]}"; do
-  for budget in "${budgets[@]}"; do
-    for cal in "${cals[@]}"; do
-      for prior in "${priors[@]}"; do
-        for gamma in "${gammas[@]}"; do
-          srun -p public,ash,nlp,dym,galileo,bml,tdk,espresso,euler,newton,ran -c4 --gres=gpu:0 --mem=20G \
-            --exclude="$exclude_list" -J plsNoKil \
-            python -m alg_stuff.construct_calibrated_lpb --data-type real \
-            --allocations one --seed-start 0 --seed-end 100 \
-            --dataset-name dataset_toxicity \
-            --dataset-setup "$setup" \
-            --data-type real \
-            --budget-per-sample "$budget" \
-            --cal-size "$cal" \
-            --tau-prior "$prior" \
-            --gamma "$gamma" \
-            --device 'cpu' &
-
-        done
-      done
-    done
-  done
-done
-
 
 
 setups=(
@@ -54,9 +9,10 @@ setups=(
  'attack_toxic_attack_qwen25_14b_instruct_lm_target_gemma3_4b_it_judge_detoxify'
  )
 seed_ranges=("0,50")
+seed_ranges=("0,10" "10,20" "20,30" "30,40" "40,50")
 #budget_per_sample=(5 6 7 8 9 10 15 20 25 30 35 40 45 50 100 200)
 #budget_per_sample=(5 6 7 8 9 10 30 50 100 200)
-budget_per_sample=(3 5 10 20)
+budget_per_sample=(10 20)
 for setup in "${setups[@]}"; do
   for seed_range in "${seed_ranges[@]}"; do
     for budget in "${budget_per_sample[@]}"; do
