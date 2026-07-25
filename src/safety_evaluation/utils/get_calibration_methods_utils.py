@@ -50,25 +50,30 @@ def get_baseline_calibrations(conditional_grid, budget_per_sample, taus_range, t
     all_allocations: List[BudgetAllocator] = [basic_allocation, trimmed_allocation, optimized_allocation, adaptive_allocation]
     all_allocations.append(
         RandomAdaptiveOptimizedBudgetAllocator(conditional_grid, budget_per_sample, taus_range, tau_prior, m_upper_bound))
-    for projection in ['ir', 'platt', 'beta']:
-        for score in ['prob', 'quantile']:
-            all_allocations.append(DAPRO(conditional_grid,
-                                         budget_per_sample, taus_range,
-                                         tau_prior, m_upper_bound,
-                                         projection=projection, score=score))
-            for n1 in [25, 50, 100, 150, 200, 250, 300, 400, 500, 750, 1000, 1250, 1500]:
-                all_allocations.append(DAPRO(conditional_grid,
-                                                       budget_per_sample, taus_range,
-                                                       tau_prior, m_upper_bound,
-                                                       projection=projection, score=score,
-                                                       n1=n1))
-            for score_error_lambda in list(np.arange(0, 1, 0.1)) + [0.95, 0.99]:
-                score_error_lambda = np.round(score_error_lambda, 2)
-                all_allocations.append(ProjectedOptimizationBudgetAllocatorScoreError(conditional_grid,
-                                                       budget_per_sample, taus_range,
-                                                       tau_prior, m_upper_bound,
-                                                       projection=projection, score=score,
-                                                       score_error_lambda=score_error_lambda))
+    all_allocations.append(
+        DAPRO(conditional_grid,
+             budget_per_sample, taus_range,
+             tau_prior, m_upper_bound,
+             projection='plat', score='prob'))
+    # for projection in ['platt', 'beta']:
+    #     for score in ['prob', 'quantile']:
+    #         all_allocations.append(DAPRO(conditional_grid,
+    #                                      budget_per_sample, taus_range,
+    #                                      tau_prior, m_upper_bound,
+    #                                      projection=projection, score=score))
+    #         for n1 in [25, 50, 100, 150, 200, 250, 300, 400, 500, 750, 1000, 1250, 1500]:
+    #             all_allocations.append(DAPRO(conditional_grid,
+    #                                                    budget_per_sample, taus_range,
+    #                                                    tau_prior, m_upper_bound,
+    #                                                    projection=projection, score=score,
+    #                                                    n1=n1))
+    #         for score_error_lambda in list(np.arange(0, 1, 0.1)) + [0.95, 0.99]:
+    #             score_error_lambda = np.round(score_error_lambda, 2)
+    #             all_allocations.append(ProjectedOptimizationBudgetAllocatorScoreError(conditional_grid,
+    #                                                    budget_per_sample, taus_range,
+    #                                                    tau_prior, m_upper_bound,
+    #                                                    projection=projection, score=score,
+    #                                                    score_error_lambda=score_error_lambda))
 
     dummy_calibration = UncalibratedLPBSurvivalCalibration(taus_range)
     all_calibrations: List[SurvivalLPBCalibration] = [dummy_calibration]

@@ -58,7 +58,7 @@ def get_calibration_methods(conditional_grid, budget_per_sample, taus_range, tau
     new_allocations = get_new_allocation_algorithms(conditional_grid, budget_per_sample, taus_range, tau_prior,
                                                     m_upper_bound,
                                                     allocations, device=device)
-
+    new_allocations = []
     all_allocations = new_allocations
 
     if bound_type == 'lpb':
