@@ -13,6 +13,8 @@ from src.safety_evaluation.budget_allocators.optimized_allocators import Optimiz
 from src.safety_evaluation.budget_allocators.DAPRO import DAPRO
 from src.safety_evaluation.budget_allocators.projected_optimization_allocator_score_error import \
     ProjectedOptimizationBudgetAllocatorScoreError
+from src.safety_evaluation.budget_allocators.random_adaptive_optimized_allocator import \
+    RandomAdaptiveOptimizedBudgetAllocator
 from src.safety_evaluation.budget_allocators.trimmed_allocator import TrimmedBudgetAllocator
 from src.safety_evaluation.calibration.abstract_calibration import SurvivalLPBCalibration
 from src.safety_evaluation.calibration.dummy_calibration import UncalibratedLPBSurvivalCalibration
@@ -46,7 +48,8 @@ def get_baseline_calibrations(conditional_grid, budget_per_sample, taus_range, t
     adaptive_allocation = AdaptiveOptimizedBudgetAllocator(conditional_grid, budget_per_sample, taus_range, tau_prior, m_upper_bound)
 
     all_allocations: List[BudgetAllocator] = [basic_allocation, trimmed_allocation, optimized_allocation, adaptive_allocation]
-
+    all_allocations.append(
+        RandomAdaptiveOptimizedBudgetAllocator(conditional_grid, budget_per_sample, taus_range, tau_prior, m_upper_bound))
     for projection in ['ir', 'platt', 'beta']:
         for score in ['prob', 'quantile']:
             all_allocations.append(DAPRO(conditional_grid,

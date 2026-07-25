@@ -1,5 +1,6 @@
 import gc
 import random
+from pathlib import Path
 from typing import Union, List
 
 import numpy as np
@@ -1499,6 +1500,9 @@ from src.dataset_utils.data_utils import get_data
 def setup_experiment_data(cal_size, is_real, device, dataset_name, data_setup, taus_range, m_upper_bound):
     model_preds_dir = f'alg_playground_model/is_real_{is_real}_dataset_{dataset_name}_dataset_{data_setup}'
     model_cal_test_preds_path = os.path.join(model_preds_dir, "probability_est_cal_test.pt")
+
+    model_cal_test_preds_path = Path(r"\\?\{}".format(Path(model_cal_test_preds_path).resolve()))
+
     load_x = not os.path.exists(model_cal_test_preds_path)
 
     p_train, p_cal, p_test, x_train, x_cal, x_test, y_train, y_cal, y_test, t_tilde_train, t_tilde_cal, t_tilde_test, \

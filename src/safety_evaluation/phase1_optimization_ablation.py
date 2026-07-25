@@ -4,7 +4,8 @@ This module is deliberately analysis-only.  It consumes cached trajectories and
 model outputs and never imports the conversation-generation stack.  The phase-I
 split, locally adaptive shadow-price rule, DAPRO score, DAPRO inverse-weight
 optimizer, projection maps, and LPB calibration rule follow the existing
-implementations.
+implementations, with explicit paper-indexing and projected-budget corrections
+documented in the output metadata.
 """
 
 from __future__ import annotations
@@ -15,7 +16,7 @@ import json
 import math
 import time
 import warnings
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Callable, Iterable
 
@@ -35,10 +36,7 @@ from src.safety_evaluation.budget_allocators.projected_optimization_utils import
     project_to_test_ir,
     project_to_test_platt,
 )
-from src.safety_evaluation.calibration.calibration_utils import (
-    get_prior,
-    solve_optimization,
-)
+from src.safety_evaluation.calibration.calibration_utils import get_prior
 from src.safety_evaluation.survival_utils.compute_mean_time_given_pmf import (
     compute_quantile_survival_time,
 )
@@ -54,6 +52,7 @@ METHODS = (
 )
 STRATIFIED_METHODS = (
     "Static",
+    "RandomAdaptive",
     "ScoreAdaptive-Heuristic",
     "LocallyAdaptive",
     "DAPRO",
@@ -114,6 +113,7 @@ class PolicyResult:
     tuning_value: float | None
     feasible_boundary: str | None
     fallbacks: list[dict]
+    diagnostics: dict[str, float] = field(default_factory=dict)
 
 
 def _as_numpy(value) -> np.ndarray:
@@ -132,16 +132,31 @@ def _sigmoid(x: np.ndarray | float) -> np.ndarray | float:
     return out.item() if out.ndim == 0 else out
 
 
-def active_lengths(event_times: np.ndarray, q_prior: np.ndarray, width: int) -> np.ndarray:
-    """Return existing DAPRO's number of continuation opportunities.
+def quantiles_to_interaction_counts(
+    quantiles: np.ndarray | torch.Tensor, width: int
+) -> np.ndarray | torch.Tensor:
+    """Put saved zero-based quantile-grid indices on the event-time scale.
 
-    Event times and prior horizons in the repository are turn indices.  Existing
-    DAPRO spends ``min(T + 1, q + 1)`` phase-I units, hence the +1 here.
+    Repository event times are one-based interaction counts, while
+    ``compute_quantile_survival_time`` returns zero-based grid indices.  The
+    maximum-horizon sentinel is already ``width`` and must not be incremented.
+    """
+
+    if torch.is_tensor(quantiles):
+        return torch.clamp(quantiles + 1, max=width)
+    return np.minimum(np.asarray(quantiles) + 1, width)
+
+
+def active_lengths(event_times: np.ndarray, q_prior: np.ndarray, width: int) -> np.ndarray:
+    """Return the paper's ``min(T_i, f_prior(X_i))`` acquisition length.
+
+    Both inputs must be one-based interaction counts.  A first-turn event
+    therefore requires one successful continuation, not two.
     """
 
     event_times = np.asarray(event_times, dtype=np.int64)
     q_prior = np.asarray(q_prior, dtype=np.int64)
-    return np.clip(np.minimum(event_times + 1, q_prior + 1), 0, width)
+    return np.clip(np.minimum(event_times, q_prior), 0, width)
 
 
 def expected_cost(probabilities: np.ndarray, lengths: np.ndarray) -> float:
@@ -174,16 +189,21 @@ def _bisect_largest_feasible(
     if high_cost <= target + tolerance:
         return high, high_cost, "upper"
     lo, hi = low, high
+    feasible_cost = low_cost
     for _ in range(iterations):
         mid = 0.5 * (lo + hi)
-        if cost_fn(mid) <= target:
+        mid_cost = cost_fn(mid)
+        if mid_cost <= target:
             lo = mid
+            feasible_cost = mid_cost
+            if target - mid_cost <= tolerance:
+                break
         else:
             hi = mid
-        if hi - lo <= tolerance:
+        if np.nextafter(lo, hi) >= hi:
             break
     value = lo
-    return value, cost_fn(value), None
+    return value, feasible_cost, None
 
 
 def fit_random_policy(
@@ -294,30 +314,48 @@ def fit_static_policy(
     width: int,
     target: float,
 ) -> PolicyResult:
-    """Apply the existing static optimized closed form, learned on phase I."""
+    """Fit the static all-or-nothing rule at the same Phase-I cost target."""
 
-    phase1_q = np.maximum(np.asarray(phase1_q, dtype=np.float64) + 1.0, 1.0)
-    phase2_q = np.maximum(np.asarray(phase2_q, dtype=np.float64) + 1.0, 1.0)
-    _, lam = solve_optimization(phase1_q, target * len(phase1_q), tol=1e-8)
-    if lam is None:
+    phase1_q = np.maximum(np.asarray(phase1_q, dtype=np.float64), 1.0)
+    phase2_q = np.maximum(np.asarray(phase2_q, dtype=np.float64), 1.0)
+    phase1_lengths = np.asarray(phase1_lengths, dtype=np.int64)
+
+    # Preserve the existing p_i proportional to q_i^{-1/2} rule, but fit its
+    # scalar multiplier against the cost actually used everywhere else in this
+    # ablation: min(T_i, q_i).  The previous q_i-only constraint systematically
+    # underspent whenever events occurred before the prior horizon.
+    def probabilities(q: np.ndarray, scale: float) -> np.ndarray:
+        return np.minimum(1.0, scale / np.sqrt(q))
+
+    def cost(scale: float) -> float:
+        return float(
+            np.mean(probabilities(phase1_q, scale) * phase1_lengths)
+        )
+
+    scale, achieved, boundary = _bisect_largest_feasible(
+        cost,
+        np.finfo(np.float64).eps,
+        float(np.sqrt(np.max(phase1_q))),
+        target,
+        tolerance=1e-8,
+    )
+    if boundary == "upper":
         p1 = np.ones_like(phase1_q)
         p2 = np.ones_like(phase2_q)
-        boundary = "upper"
+        lam = 0.0
     else:
-        p1 = np.minimum(1.0, 1.0 / np.sqrt(lam * phase1_q))
-        p2 = np.minimum(1.0, 1.0 / np.sqrt(lam * phase2_q))
-        boundary = None
+        p1 = probabilities(phase1_q, scale)
+        p2 = probabilities(phase2_q, scale)
+        lam = 1.0 / scale**2
     # Static optimized makes one all-or-nothing decision.
     probabilities = np.ones((len(phase2_q), width), dtype=np.float64)
     probabilities[:, 0] = p2
-    phase1_probabilities = np.ones((len(phase1_q), width), dtype=np.float64)
-    phase1_probabilities[:, 0] = p1
     objective = float(np.mean(1.0 / p1))
     return PolicyResult(
         probabilities,
-        expected_cost(phase1_probabilities, phase1_lengths),
+        achieved,
         objective,
-        float(lam) if lam is not None else None,
+        float(lam),
         boundary,
         [],
     )
@@ -347,21 +385,21 @@ def _locally_adaptive_probability_paths(
     total_expected_cost = 0.0
 
     for t_curr in range(width):
-        active &= event_times >= t_curr
-        active &= q_prior >= t_curr
+        active &= event_times > t_curr
+        active &= q_prior > t_curr
         if not np.any(active):
             break
 
         belief = conditional_grid[:, t_curr, t_curr:]
         remaining_steps = np.clip(
-            q_prior - t_curr + 1, 0, belief.shape[1]
+            q_prior - t_curr, 0, belief.shape[1]
         ).astype(np.float64)
-        future_steps = np.arange(belief.shape[1])
+        future_steps = np.arange(1, belief.shape[1] + 1, dtype=np.float64)
         within_horizon = future_steps[None, :] <= remaining_steps[:, None]
         expected_remaining = np.sum(
             belief
             * within_horizon
-            * np.arange(1, belief.shape[1] + 1, dtype=np.float64)[None, :],
+            * future_steps[None, :],
             axis=1,
         )
         expected_remaining += remaining_steps * np.sum(
@@ -468,8 +506,9 @@ def fit_dapro_policy(
     target: float,
     projection: str,
     device: str,
+    tolerance: float,
 ) -> PolicyResult:
-    """Call DAPRO's existing Phase-I solver and score projection unchanged."""
+    """Fit DAPRO using the paper's one-based acquisition-length convention."""
 
     score1 = torch.as_tensor(phase1_scores, dtype=torch.float32, device=device)
     score2 = torch.as_tensor(phase2_scores, dtype=torch.float32, device=device)
@@ -479,34 +518,107 @@ def fit_dapro_policy(
     optimal = solve_exact_fast(score1, max_steps, target, verbose=False)
     optimal[optimal == 0] = 1
     width = score1.shape[1]
+    # The repository projection helpers use an inclusive mask (t <= max).
+    # Passing the preceding zero-based endpoints makes their active columns
+    # exactly 0, ..., min(T, q)-1.
+    projection_q = q1 - 1
+    projection_event = event1 - 1
+    # Predict both Phase I and Phase II.  Phase-I predictions let us measure
+    # projection error and fit one monotonicity-preserving intercept correction
+    # so the deployed map obeys the same expected-budget target as the oracle.
+    projection_targets = torch.cat([score1, score2], dim=0)
     if projection == "ir":
-        p2 = project_to_test_ir(
-            optimal, score1, score2, q1, event1, width, torch.device(device)
+        projected = project_to_test_ir(
+            optimal,
+            score1,
+            projection_targets,
+            projection_q,
+            projection_event,
+            width,
+            torch.device(device),
         )
     elif projection == "platt":
-        p2 = project_to_test_platt(
-            optimal, score1, score2, q1, event1, width, torch.device(device)
+        projected = project_to_test_platt(
+            optimal,
+            score1,
+            projection_targets,
+            projection_q,
+            projection_event,
+            width,
+            torch.device(device),
         )
     elif projection == "beta":
-        p2 = project_to_test_beta(
-            optimal, score1, score2, q1, event1, width, torch.device(device)
+        projected = project_to_test_beta(
+            optimal,
+            score1,
+            projection_targets,
+            projection_q,
+            projection_event,
+            width,
+            torch.device(device),
         )
     else:
         raise ValueError(f"Unknown projection: {projection}")
+    projected = _as_numpy(projected)
+    projected1_raw = projected[: len(score1)]
+    projected2_raw = projected[len(score1) :]
+    lengths1 = active_lengths(phase1_event_times, phase1_q, width)
+    raw_projected_cost = expected_cost(projected1_raw, lengths1)
+
+    def shift_probabilities(
+        probabilities: np.ndarray, intercept: float
+    ) -> np.ndarray:
+        clipped = np.clip(
+            np.asarray(probabilities, dtype=np.float64),
+            1e-12,
+            1.0 - 1e-12,
+        )
+        logits = np.log(clipped) - np.log1p(-clipped)
+        return _sigmoid(logits + intercept)
+
+    def projected_cost(intercept: float) -> float:
+        return expected_cost(
+            shift_probabilities(projected1_raw, intercept),
+            lengths1,
+        )
+
+    intercept, achieved_cost, boundary = _bisect_largest_feasible(
+        projected_cost,
+        -30.0,
+        30.0,
+        target,
+        tolerance,
+    )
+    projected1 = shift_probabilities(projected1_raw, intercept)
+    p2 = shift_probabilities(projected2_raw, intercept)
     mask = np.arange(width)[None, :] < active_lengths(
         phase1_event_times, phase1_q, width
     )[:, None]
     p1_for_cost = np.where(mask, optimal, 1.0)
-    objective = float(
+    oracle_objective = float(
         np.mean(1.0 / np.prod(np.where(mask, optimal, 1.0), axis=1))
+    )
+    projected_objective = float(
+        np.mean(
+            1.0
+            / terminal_probabilities(
+                projected1,
+                lengths1,
+            )
+        )
     )
     return PolicyResult(
         _as_numpy(p2),
-        expected_cost(p1_for_cost, active_lengths(phase1_event_times, phase1_q, width)),
-        objective,
-        None,
-        None,
+        achieved_cost,
+        projected_objective,
+        intercept,
+        boundary,
         [],
+        {
+            "phase1_oracle_objective_value": oracle_objective,
+            "projection_raw_phase1_expected_cost": raw_projected_cost,
+            "projection_budget_logit_shift": intercept,
+        },
     )
 
 
@@ -516,7 +628,7 @@ def simulate_adaptive(
     q_prior: np.ndarray,
     uniforms: np.ndarray,
 ) -> dict[str, np.ndarray]:
-    """Existing DAPRO early-event convention with supplied common uniforms."""
+    """Simulate paper-indexed adaptive acquisition with common uniforms."""
 
     probabilities = np.asarray(probabilities, dtype=np.float64)
     event_times = np.asarray(event_times, dtype=np.int64)
@@ -525,15 +637,15 @@ def simulate_adaptive(
     reached = np.zeros(n, dtype=np.int64)
     active = np.ones(n, dtype=bool)
     for t in range(width):
-        active &= event_times >= t
-        active &= q_prior >= t
+        active &= event_times > t
+        active &= q_prior > t
         if not np.any(active):
             break
         keep = (uniforms[:, t] <= probabilities[:, t]) & active
         reached[keep] += 1
         active &= keep
-    succeeded = (reached > q_prior) | (reached > event_times)
-    calibration_c = np.where(succeeded, q_prior + 1, 0)
+    succeeded = (reached >= q_prior) | (reached >= event_times)
+    calibration_c = np.where(succeeded, q_prior, reached)
     lengths = active_lengths(event_times, q_prior, width)
     terminal_probability = terminal_probabilities(probabilities, lengths)
     return {
@@ -560,28 +672,32 @@ def simulate_locally_adaptive(
     n, width = probabilities.shape
     reached = np.zeros(n, dtype=np.int64)
     active = np.ones(n, dtype=bool)
-    cumulative_probability = np.ones(n, dtype=np.float64)
     for t_curr in range(width):
-        active &= event_times >= t_curr
-        active &= q_prior >= t_curr
+        active &= event_times > t_curr
+        active &= q_prior > t_curr
         if not np.any(active):
             break
         keep = (uniforms[:, t_curr] <= probabilities[:, t_curr]) & active
         reached[keep] += 1
-        cumulative_probability[keep] *= probabilities[keep, t_curr]
         active &= keep
 
-    succeeded = (reached > q_prior) | (reached > event_times)
-    calibration_c = np.where(succeeded, q_prior + 1, reached)
-    inclusion_probability = np.where(
-        succeeded, cumulative_probability, p_min
+    succeeded = (reached >= q_prior) | (reached >= event_times)
+    calibration_c = np.where(succeeded, q_prior, reached)
+    lengths = active_lengths(event_times, q_prior, width)
+    latent_terminal_probability = terminal_probabilities(
+        probabilities, lengths
     )
     return {
         "reached": reached,
         "succeeded": succeeded.astype(np.int64),
         "calibration_c": calibration_c,
         "realized_cost": reached.copy(),
-        "terminal_probability": inclusion_probability,
+        # Use the latent probability of resolving the trajectory for every
+        # sample.  The previous p_min-on-failure substitution was an allocator
+        # implementation detail and made this diagnostic incomparable with the
+        # other methods.  Failed samples never contribute a nonzero selected
+        # miscoverage term, so this change does not alter the IPW estimator.
+        "terminal_probability": latent_terminal_probability,
     }
 
 
@@ -598,7 +714,7 @@ def simulate_static(
     return {
         "reached": reached,
         "succeeded": succeeded.astype(np.int64),
-        "calibration_c": np.where(include, q_prior + 1, 0),
+        "calibration_c": np.where(include, q_prior, 0),
         "realized_cost": reached.copy(),
         "terminal_probability": probabilities[:, 0].copy(),
     }
@@ -719,6 +835,13 @@ def run_split(
     ) = _split_cached_data(seed, data)
     grid_cal = data.conditional_grid[cal_idx]
     scores_cal = _dapro_scores(grid_cal, config.score)
+    trajectory_width = scores_cal.shape[1]
+    quantile_cal = quantiles_to_interaction_counts(
+        quantile_cal, trajectory_width
+    )
+    quantile_test = quantiles_to_interaction_counts(
+        quantile_test, trajectory_width
+    )
     q_cal = get_prior(quantile_cal, data.taus_range, config.tau_prior).long()
     if dry_limit is not None:
         keep_cal = min(dry_limit, len(event_cal))
@@ -792,6 +915,7 @@ def run_split(
         target,
         config.projection,
         device,
+        config.bisection_tolerance,
     )
 
     split_rows: list[dict] = []
@@ -802,6 +926,15 @@ def run_split(
     full_quantile = np.concatenate([phase1_quantile, phase2_quantile], axis=0)
     test_event_np = _as_numpy(event_test)
     test_quantile_np = _as_numpy(quantile_test)
+    test_q = _as_numpy(
+        get_prior(quantile_test, data.taus_range, config.tau_prior)
+    ).astype(int)
+    test_difficulty_valid = test_q > 0
+    test_difficulty = np.full(len(test_q), None, dtype=object)
+    test_difficulty[test_difficulty_valid] = _difficulty_strata(
+        test_event_np[test_difficulty_valid],
+        test_q[test_difficulty_valid],
+    )
     score_strata = _score_quartiles(score2[:, 0])
     difficulty_valid = q2 > 0
     difficulty = np.full(len(q2), None, dtype=object)
@@ -827,7 +960,7 @@ def run_split(
             simulation = simulate_adaptive(probabilities, event2, q2, common_u)
         terminal = simulation["terminal_probability"]
         latent_weight = 1.0 / terminal
-        phase1_c = q1 + 1
+        phase1_c = q1
         phase1_inclusion = np.ones(len(q1), dtype=np.float64)
         full_c = np.concatenate([phase1_c, simulation["calibration_c"]])
         full_inclusion = np.concatenate([phase1_inclusion, terminal])
@@ -843,10 +976,19 @@ def run_split(
         selected_idx = lpb["selected_tau_index"]
         selected_tau = float(data.taus_range[selected_idx].item())
         lpb["selected_tau"] = selected_tau
+        selected_phase2_bound = phase2_quantile[:, selected_idx]
+        selected_phase2_value = latent_weight.copy()
+        selected_phase2_value[event2 >= selected_phase2_bound] = 0.0
+        selected_phase2_value[
+            selected_phase2_bound > simulation["calibration_c"]
+        ] = 0.0
+        latent_miscoverage = (event2 < selected_phase2_bound).astype(float)
+        estimable_latent_miscoverage = latent_miscoverage * (
+            selected_phase2_bound <= q2
+        )
         realized = float(np.mean(simulation["realized_cost"]))
         target_coverage = 1.0 - config.target_miscoverage
-        split_rows.append(
-            {
+        split_row = {
                 "split_id": seed,
                 "method": method,
                 "target_budget_per_sample": target,
@@ -862,6 +1004,15 @@ def run_split(
                 "selected_tau": selected_tau,
                 "phase1_expected_cost": policy.phase1_expected_cost,
                 "phase1_objective_value": policy.phase1_objective_value,
+                "phase1_oracle_objective_value": policy.diagnostics.get(
+                    "phase1_oracle_objective_value", math.nan
+                ),
+                "projection_raw_phase1_expected_cost": policy.diagnostics.get(
+                    "projection_raw_phase1_expected_cost", math.nan
+                ),
+                "projection_budget_logit_shift": policy.diagnostics.get(
+                    "projection_budget_logit_shift", math.nan
+                ),
                 "phase2_mean_latent_terminal_weight": float(np.mean(latent_weight)),
                 "phase2_median_latent_terminal_weight": float(np.median(latent_weight)),
                 "phase2_p90_latent_terminal_weight": float(
@@ -878,7 +1029,72 @@ def run_split(
                 "fallback_count": len(policy.fallbacks),
                 "fallbacks": json.dumps(policy.fallbacks, separators=(",", ":")),
             }
-        )
+        test_bound = test_quantile_np[:, selected_idx]
+        for stratum in DIFFICULTY_LABELS:
+            test_mask = test_difficulty == stratum
+            phase2_mask = difficulty == stratum
+            if np.any(test_mask):
+                stratum_coverage = float(
+                    np.mean(test_event_np[test_mask] >= test_bound[test_mask])
+                )
+                split_row[
+                    f"difficulty_{stratum}_test_coverage"
+                ] = stratum_coverage
+                split_row[
+                    f"difficulty_{stratum}_absolute_coverage_deviation"
+                ] = abs(stratum_coverage - target_coverage)
+                split_row[
+                    f"difficulty_{stratum}_test_lpb_variance"
+                ] = (
+                    float(np.var(test_bound[test_mask], ddof=1))
+                    if np.sum(test_mask) > 1
+                    else 0.0
+                )
+                split_row[f"difficulty_{stratum}_test_count"] = int(
+                    np.sum(test_mask)
+                )
+            if np.any(phase2_mask):
+                stratum_weights = latent_weight[phase2_mask]
+                stratum_values = selected_phase2_value[phase2_mask]
+                stratum_estimable_miscoverage = estimable_latent_miscoverage[
+                    phase2_mask
+                ]
+                stratum_count = int(np.sum(phase2_mask))
+                trim_threshold = np.quantile(stratum_weights, 0.99)
+                split_row[
+                    f"difficulty_{stratum}_mean_terminal_weight"
+                ] = float(np.mean(stratum_weights))
+                split_row[
+                    f"difficulty_{stratum}_p99_trimmed_mean_terminal_weight"
+                ] = float(np.mean(stratum_weights[stratum_weights <= trim_threshold]))
+                split_row[
+                    f"difficulty_{stratum}_event_resolution_rate"
+                ] = float(
+                    np.mean(
+                        simulation["reached"][phase2_mask]
+                        >= event2[phase2_mask]
+                    )
+                )
+                split_row[
+                    f"difficulty_{stratum}_weighted_miscoverage_variance"
+                ] = (
+                    float(np.var(stratum_values, ddof=1) / stratum_count)
+                    if stratum_count > 1
+                    else 0.0
+                )
+                split_row[
+                    f"difficulty_{stratum}_conditional_acquisition_variance"
+                ] = float(
+                    np.sum(
+                        stratum_estimable_miscoverage
+                        * (stratum_weights - 1.0)
+                    )
+                    / stratum_count**2
+                )
+                split_row[
+                    f"difficulty_{stratum}_phase2_count"
+                ] = stratum_count
+        split_rows.append(split_row)
         for row, sample_id in enumerate(sample_ids):
             probability_path = probabilities[row, : active_lengths(
                 event2[row : row + 1], q2[row : row + 1], width
@@ -894,11 +1110,9 @@ def run_split(
                     "initial_score": float(score2[row, 0]),
                     "realized_cost": int(simulation["realized_cost"][row]),
                     "censoring_time": int(simulation["reached"][row]),
-                    "resolved_indicator": int(
-                        simulation["reached"][row] >= q2[row]
-                    ),
+                    "resolved_indicator": int(simulation["succeeded"][row]),
                     "event_observed_indicator": int(
-                        simulation["reached"][row] > event2[row]
+                        simulation["reached"][row] >= event2[row]
                     ),
                     "latent_terminal_weight": float(latent_weight[row]),
                     "log_latent_terminal_weight": float(np.log(latent_weight[row])),
@@ -907,6 +1121,20 @@ def run_split(
                     ),
                     "difficulty_stratum": difficulty[row],
                     "initial_score_quartile": score_strata[row],
+                    "selected_lpb": float(selected_phase2_bound[row]),
+                    "selected_latent_miscoverage_indicator": int(
+                        latent_miscoverage[row]
+                    ),
+                    "selected_estimable_miscoverage_indicator": int(
+                        estimable_latent_miscoverage[row]
+                    ),
+                    "selected_weighted_miscoverage_contribution": float(
+                        selected_phase2_value[row]
+                    ),
+                    "conditional_acquisition_variance_term": float(
+                        estimable_latent_miscoverage[row]
+                        * (latent_weight[row] - 1.0)
+                    ),
                     "common_uniform_path_hash": hashlib.sha256(
                         common_u[row].tobytes()
                     ).hexdigest(),
@@ -951,14 +1179,20 @@ def _validate_split(
     )
     assert np.all(np.diff(values) >= 0)
     for method in (
+        "Static",
         "RandomAdaptive",
         "ScoreAdaptive-Heuristic",
         "LocallyAdaptive",
+        "DAPRO",
     ):
         result = policies[method]
-        # if result.feasible_boundary is None:
-            # assert result.phase1_expected_cost <= target + 5 * config.bisection_tolerance
-            # assert target - result.phase1_expected_cost <= 10 * config.bisection_tolerance
+        if result.feasible_boundary is None:
+            budget_tolerance = max(1e-3, 20 * config.bisection_tolerance)
+            assert abs(result.phase1_expected_cost - target) <= budget_tolerance, (
+                method,
+                result.phase1_expected_cost,
+                target,
+            )
 
 
 def _bootstrap_interval(
@@ -1049,6 +1283,13 @@ def stratified_outputs(
         ):
             if stratum not in labels:
                 continue
+            trimmed = group.latent_terminal_weight[
+                group.latent_terminal_weight
+                <= group.latent_terminal_weight.quantile(0.99)
+            ]
+            selected_values = group[
+                "selected_weighted_miscoverage_contribution"
+            ]
             raw_rows.append(
                 {
                     "split_id": split_id,
@@ -1062,8 +1303,25 @@ def stratified_outputs(
                     "mean_latent_terminal_weight": group.latent_terminal_weight.mean(),
                     "median_latent_terminal_weight": group.latent_terminal_weight.median(),
                     "p90_latent_terminal_weight": group.latent_terminal_weight.quantile(0.90),
+                    "p99_trimmed_mean_latent_terminal_weight": trimmed.mean(),
                     "mean_log_latent_terminal_weight": group.log_latent_terminal_weight.mean(),
+                    "variance_log_latent_terminal_weight": (
+                        group.log_latent_terminal_weight.var()
+                    ),
                     "weight_mass_share": group.weight_mass_share_row.sum(),
+                    "selected_weighted_miscoverage_mean": selected_values.mean(),
+                    "selected_weighted_miscoverage_variance": (
+                        selected_values.var() / len(group)
+                        if len(group) > 1
+                        else 0.0
+                    ),
+                    "absolute_selected_miscoverage_deviation": abs(
+                        selected_values.mean() - config.target_miscoverage
+                    ),
+                    "conditional_acquisition_variance": (
+                        group.conditional_acquisition_variance_term.sum()
+                        / len(group) ** 2
+                    ),
                     "mean_reduction_vs_static": group.reduction_vs_static.mean(),
                     "mean_reduction_vs_heuristic": group.reduction_vs_heuristic.mean(),
                 }
@@ -1163,7 +1421,10 @@ def _plot_ablation(split_df: pd.DataFrame, output_dir: Path, target_budget: floa
     }
     panels = (
         ("absolute_coverage_deviation", "A. Absolute coverage deviation"),
-        ("phase2_mean_latent_terminal_weight", "B. Mean terminal inverse weight"),
+        (
+            "phase2_median_latent_terminal_weight",
+            "B. Median terminal inverse weight (outlier-robust)",
+        ),
         ("selected_tau", "C. Selected calibration $\\tau$"),
         ("realized_budget_per_sample", "D. Realized budget per sample"),
     )
@@ -1200,6 +1461,7 @@ def _plot_ablation(split_df: pd.DataFrame, output_dir: Path, target_budget: floa
 def _plot_stratified(summary: pd.DataFrame, output_dir: Path) -> None:
     colors = {
         "Static": "#4C78A8",
+        "RandomAdaptive": "#F58518",
         "ScoreAdaptive-Heuristic": "#54A24B",
         "LocallyAdaptive": "#E45756",
         "DAPRO": "#B279A2",
@@ -1312,7 +1574,8 @@ hard error; this analysis never generates conversations or calls an API.
 ## Methods and conventions
 
 - **Static** uses the existing optimized all-or-nothing inclusion formula
-  `p_i=min(1,1/sqrt(lambda*q_i))`, with lambda fit on Phase I.
+  `p_i=min(1,1/sqrt(lambda*q_i))`, with lambda fit on Phase I against the
+  same realized `min(T_i,q_i)` cost convention as the adaptive methods.
 - **RandomAdaptive** uses constant per-step continuation `p`, selected by
   bisection against the Phase-II per-sample budget.
 - **ScoreAdaptive-Heuristic** uses tie-safe Phase-I midrank percentiles and
@@ -1322,9 +1585,14 @@ hard error; this analysis never generates conversations or calls an API.
   probabilities from each trajectory's local conditional grid at every step.
   The probabilities are dynamic but are not jointly optimized by DAPRO's
   inverse-weight objective.
-- **DAPRO** directly calls the existing `solve_exact_fast` inverse-weight
-  optimizer and existing `{config.projection}` projection code with the existing
-  `{config.score}` score.  Those code paths are not modified.
+- **DAPRO** calls `solve_exact_fast` and the existing `{config.projection}`
+  projection with the `{config.score}` score.  The projection's inclusive
+  training mask is supplied zero-based endpoints so that it covers exactly the
+  paper-defined `min(T_i,f_prior(X_i))` interactions.  A single shared logit
+  intercept is then fit on Phase I to restore the expected budget after
+  projection without changing the projected score ordering.  The output records
+  the oracle objective, raw projected cost, intercept, and final projected
+  objective so projection error is explicit.
 
 The nominal DAPRO positivity floor is `p_min={config.p_min}`.  Existing DAPRO
 projection functions retain their own unchanged numerical epsilon.  Bisection
@@ -1332,6 +1600,11 @@ tolerance is `{config.bisection_tolerance}`; heuristic lambda bounds are
 `[-30,30]`.  Missing Phase-I score times fall back to the nearest earlier
 observed time and are counted in split metadata.  All adaptive methods use
 uniforms deterministically keyed by `(split_id, sample_id, time)`.
+
+Saved model quantiles are zero-based grid indices, whereas event times are
+one-based interaction counts.  This analysis converts every quantile via
+`min(q_grid+1,max_horizon)` before allocation, calibration, coverage evaluation,
+and difficulty stratification.  Event observation is `reached >= T_i`.
 
 Target coverage is `{1-config.target_miscoverage}` and the existing safe LPB
 candidate rule is used over the repository tau grid.  Bootstrap intervals use
@@ -1346,6 +1619,10 @@ while `DAPRO - ScoreAdaptive-Heuristic`, `ScoreAdaptive-Heuristic -
 RandomAdaptive`, and `RandomAdaptive - Static` retain the original decomposition.
 The stratified tables show whether changes concentrate in late/horizon-limited
 trajectories or specific initial-score quartiles.
+
+Mean latent terminal weight is retained as the theorem-aligned diagnostic.
+Figures use median or explicitly 99%-trimmed weight summaries so a few extreme
+weights do not make the remaining methods visually indistinguishable.
 
 A 50-split CPU run is expected to take tens of minutes to several hours,
 depending mainly on calibration size and the selected DAPRO projection.
@@ -1365,13 +1642,14 @@ def _fixture_data(config: Config, device: str) -> CachedData:
     event = rng.integers(1, width + 1, size=n)
     tau_grid = np.logspace(-3, -0.01, tau_count)
     quantile = np.maximum(
-        1,
+        0,
         np.minimum(
-            width,
+            width - 1,
             np.ceil(
                 rng.uniform(1, width, size=(n, 1))
                 * np.linspace(0.25, 1.0, tau_count)[None, :]
-            ),
+            )
+            - 1,
         ),
     )
     tensor_grid = torch.tensor(grid, device=device)
@@ -1395,7 +1673,7 @@ def _load_cached_repository_data(
     from src.safety_evaluation.utils.utils import setup_experiment_data
 
     prediction_path = (
-        Path("alg_playground_model")
+        Path(r"\\?\{}".format(Path("alg_playground_model").resolve()))
         / f"is_real_{args.data_type == 'real'}_dataset_{args.dataset_name}_dataset_{args.dataset_setup}"
         / "probability_est_cal_test.pt"
     )
@@ -1511,10 +1789,15 @@ def _finalize_outputs(
         "device": devices[0] if len(devices) == 1 else devices,
         "dry_run": bool(args.dry_run or args.dry_run_fixture),
         "fixture": bool(args.dry_run_fixture),
+        "cal_size": int(args.cal_size),
         "source_files": source_files,
         "methods": list(METHODS),
         "parallel_workers": parallel_workers,
         "common_random_numbers": "sha256 keyed by split_id/sample_id, one path shared by adaptive methods",
+        "dapro_projection_budget_correction": (
+            "one shared Phase-I-fitted logit intercept, applied to Phase I and "
+            "Phase II projected probabilities"
+        ),
         "clipping": {
             "heuristic": "none beyond the explicit p_min parameterization",
             "random": "bounded bisection domain [p_min,1]",
@@ -1525,10 +1808,11 @@ def _finalize_outputs(
             "dapro": "unchanged projection-specific epsilon in repository utility",
         },
         "indexing_convention": (
-            "Repository event times are stored as 1-based stopping times while "
-            "predicted prior horizons are grid indices. Acquisition follows existing "
-            "DAPRO exactly: active opportunities are min(T+1,q_prior+1), capped by "
-            "the saved trajectory width; b_i preserves the requested raw min(T,q_prior)."
+            "Repository event times are one-based interaction counts, while saved "
+            "quantiles are zero-based grid indices. Quantiles are converted with "
+            "min(q_grid+1, max_horizon), and acquisition uses the paper's "
+            "min(T, f_prior) opportunities. Event observation and prior resolution "
+            "use reached>=T and reached>=f_prior, respectively."
         ),
         "new_llm_or_api_calls": False,
     }
@@ -1719,6 +2003,7 @@ def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
         "--dry-run-fixture",
         action="store_true",
         help="Run one split on deterministic numeric trajectories when repository caches are unavailable.",
+        default=False,
     )
     args = parser.parse_args(argv)
     if args.dry_run or args.dry_run_fixture:

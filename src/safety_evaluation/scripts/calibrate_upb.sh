@@ -78,4 +78,7 @@ done
 
 tar -czf merged_upb_calibration_results.tar.gz results/merged_upb_calibration_dfs/
 
+tar -czf alg_playground_model.tar.gz /home/shai.feldman/dapro_rebuttal/alg_playground_model/
+
+
 

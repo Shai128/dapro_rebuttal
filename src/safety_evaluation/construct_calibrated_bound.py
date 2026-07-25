@@ -15,18 +15,22 @@ from src.safety_evaluation.budget_allocators.budget_allocator import BudgetAlloc
 from src.safety_evaluation.budget_allocators.naive_allocator import NaiveBudgetAllocator
 from src.safety_evaluation.budget_allocators.optimized_allocators import OptimizedBudgetAllocator
 from src.safety_evaluation.budget_allocators.DAPRO import DAPRO
+from src.safety_evaluation.budget_allocators.random_adaptive_optimized_allocator import \
+    RandomAdaptiveOptimizedBudgetAllocator
 from src.safety_evaluation.budget_allocators.trimmed_allocator import TrimmedBudgetAllocator
 
 # LPB Calibrations
 from src.safety_evaluation.calibration.abstract_calibration import SurvivalLPBCalibration
 from src.safety_evaluation.calibration.dummy_calibration import UncalibratedLPBSurvivalCalibration
 from src.safety_evaluation.calibration.oracle_survival_calibration import OracleSurvivalCalibration
-from src.safety_evaluation.calibration.survival_calibration_with_known_weights import get_gamma, SurvivalCalibrationWithKnownWeights
+from src.safety_evaluation.calibration.survival_calibration_with_known_weights import get_gamma, \
+    SurvivalCalibrationWithKnownWeights
 
 # UPB Calibrations
 from src.safety_evaluation.calibration.abstract_calibration import SurvivalUPBCalibration
 from src.safety_evaluation.calibration.dummy_calibration import UncalibratedUPBSurvivalCalibration
-from src.safety_evaluation.calibration.survival_upb_calibration_with_known_weights import SurvivalUPBCalibrationWithKnownWeights
+from src.safety_evaluation.calibration.survival_upb_calibration_with_known_weights import \
+    SurvivalUPBCalibrationWithKnownWeights
 
 from src.dataset_utils.data_utils import get_data
 from src.train_model.models.utils import SurvivalModelPrediction
@@ -244,14 +248,17 @@ def get_baseline_calibrations(conditional_grid, budget_per_sample, taus_range, t
 
     # for projection in ['platt', 'beta']:
     #     for score in ['prob', 'quantile']:
-    for projection in ['platt',]:
-        for score in ['prob',]:
+    for projection in ['platt', ]:
+        for score in ['prob', ]:
             # for n1 in [25, 50, 75, 100, 150, 200, 250, 300, 400, 500, 750, 1000]:
             for n1 in [100]:
                 if is_budget_sufficient_for_split(N, n1, total_budget, censored_event_time, prior_q):
                     all_allocations.append(DAPRO(conditional_grid, budget_per_sample, taus_range,
                                                  tau_prior, m_upper_bound, projection=projection,
                                                  score=score, n1=n1, **alloc_kwargs))
+    all_allocations.append(
+        RandomAdaptiveOptimizedBudgetAllocator(conditional_grid, budget_per_sample, taus_range, tau_prior,
+                                               m_upper_bound, **alloc_kwargs))
 
     if bound_type == 'lpb':
         dummy_calibration = UncalibratedLPBSurvivalCalibration(taus_range)
