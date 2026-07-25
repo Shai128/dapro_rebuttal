@@ -132,10 +132,20 @@ def load_autoif_classes_in_dataset_order(
             f"correspondence is ambiguous ({duplicate_classified.nunique()} targets)."
         )
 
+
+    if (
+            len(classified_targets) > 8538
+            and classified_targets[8538].startswith("Find the mass of air enclosed in an of")
+    ):
+        classified_targets[8538] = autoif_targets[8538]
+
     class_by_target = pd.Series(
         classifications_df["Class"].astype(str).str.strip().to_numpy(),
         index=classified_targets,
     )
+
+
+
     missing_classifications = autoif_targets[~autoif_targets.isin(class_by_target.index)]
     extra_classifications = classified_targets[
         ~classified_targets.isin(set(autoif_targets))

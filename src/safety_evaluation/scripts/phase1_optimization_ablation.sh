@@ -6,8 +6,18 @@ REPO_ROOT="$(cd -- "${SCRIPT_DIR}/../../.." && pwd)"
 cd "${REPO_ROOT}"
 
 PYTHON_BIN="${PYTHON_BIN:-srun -p galileo -A galileo -c4 --gres=gpu:0 python}"
-DATASET_NAME="dataset_toxicity"
-DATASET_SETUP="attack_toxic_attack_qwen25_14b_instruct_lm_target_qwen25_14b_instruct_judge_detoxify"
+
+
+#  "dataset_toxicity", dataset_red_team
+#  "attack_toxic_attack_qwen25_14b_instruct_lm_target_qwen25_14b_instruct_judge_detoxify",
+# attack_default_attack_qwen25_14b_instruct_lm_target_qwen25_14b_instruct_judge_llm-judge_qwen25_14b_instruct
+
+
+#DATASET_NAME="dataset_toxicity"
+#DATASET_SETUP="attack_toxic_attack_qwen25_14b_instruct_lm_target_qwen25_14b_instruct_judge_detoxify"
+
+DATASET_NAME="dataset_red_team"
+DATASET_SETUP="attack_default_attack_qwen25_14b_instruct_lm_target_qwen25_14b_instruct_judge_llm-judge_qwen25_14b_instruct"
 BUDGET_PER_SAMPLE="20"
 CAL_SIZE="${CAL_SIZE:-3000}"
 TAU_PRIOR="${TAU_PRIOR:-0.56}"
