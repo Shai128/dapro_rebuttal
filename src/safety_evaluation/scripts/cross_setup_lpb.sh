@@ -38,11 +38,11 @@ COMMON_ARGS=(
   --seed-end "${SEED_END}"
 )
 
-${PYTHON_BIN} -m src.safety_evaluation.construct_cross_setup_calibrated_bound \
-  "${COMMON_ARGS[@]}" \
-  --allocations "${ALLOCATIONS}" \
-  --device "${DEVICE}" \
-  --max-workers "${MAX_WORKERS}"
+#${PYTHON_BIN} -m src.safety_evaluation.construct_cross_setup_calibrated_bound \
+#  "${COMMON_ARGS[@]}" \
+#  --allocations "${ALLOCATIONS}" \
+#  --device "${DEVICE}" \
+#  --max-workers "${MAX_WORKERS}"
 
 ${PYTHON_BIN} -m src.safety_evaluation.merge_cross_setup_bounds_results \
   "${COMMON_ARGS[@]}"

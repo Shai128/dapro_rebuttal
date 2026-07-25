@@ -6,15 +6,15 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
 cd "${REPO_ROOT}"
 
 PYTHON_BIN="${PYTHON_BIN:-srun -p galileo -A galileo -c4 --gres=gpu:0 python}"
-DATASET_NAME="${DATASET_NAME:-dataset_autoif}"
-DATASET_SETUP="${DATASET_SETUP:-attack_autoif_helper_qwen25_14b_instruct_lm_target_qwen25_14b_instruct_judge_autoif}"
+DATASET_NAME="dataset_autoif"
+DATASET_SETUP="attack_autoif_helper_qwen25_14b_instruct_lm_target_qwen25_14b_instruct_judge_autoif"
 AUTOIF_DATA_PATH="${AUTOIF_DATA_PATH:-src/multi_turn_data_generation/data/autoif_helper_dataset.csv}"
 CLASSIFICATIONS_PATH="${CLASSIFICATIONS_PATH:-src/multi_turn_data_generation/data/classified_instructions.csv}"
 CALIBRATION_CLASS="${CALIBRATION_CLASS:-Programming & Technology}"
 TEST_CLASS="${TEST_CLASS:-Marketing & Social Media}"
 BUDGET_PER_SAMPLE="${BUDGET_PER_SAMPLE:-20}"
-CAL_SIZE="${CAL_SIZE:-800}"
-TEST_SIZE="${TEST_SIZE:-100}"
+CAL_SIZE="800"
+TEST_SIZE="100"
 TAU_PRIOR="${TAU_PRIOR:-0.56}"
 GAMMA="${GAMMA:-10}"
 SEED_START="${SEED_START:-0}"
@@ -38,13 +38,16 @@ COMMON_ARGS=(
   --gamma "${GAMMA}"
 )
 
-${PYTHON_BIN} -m src.safety_evaluation.construct_autoif_cross_class_calibrated_bound \
-  "${COMMON_ARGS[@]}" \
-  --autoif-data-path "${AUTOIF_DATA_PATH}" \
-  --classifications-path "${CLASSIFICATIONS_PATH}" \
-  --allocations "${ALLOCATIONS}" \
-  --device "${DEVICE}" \
-  --max-workers "${MAX_WORKERS}"
+#${PYTHON_BIN} -m src.safety_evaluation.construct_autoif_cross_class_calibrated_bound \
+#  "${COMMON_ARGS[@]}" \
+#  --autoif-data-path "${AUTOIF_DATA_PATH}" \
+#  --classifications-path "${CLASSIFICATIONS_PATH}" \
+#  --allocations "${ALLOCATIONS}" \
+#  --device "${DEVICE}" \
+#  --max-workers "${MAX_WORKERS}"
 
 ${PYTHON_BIN} -m src.safety_evaluation.merge_autoif_cross_class_bounds_results \
   "${COMMON_ARGS[@]}"
+
+
+/home/shai.feldman/dapro_rebuttal/results/tmp_calibration_results/autoif_cross_class_setup-e5f9d85cff_calclass-7e65f8dbce_testclass-c23ba4d784_budget-20_cal-3000_test-100_tau-0.56_gamma-10

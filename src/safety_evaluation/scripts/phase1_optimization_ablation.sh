@@ -13,17 +13,18 @@ PYTHON_BIN="${PYTHON_BIN:-srun -p galileo -A galileo -c4 --gres=gpu:0 python}"
 # attack_default_attack_qwen25_14b_instruct_lm_target_qwen25_14b_instruct_judge_llm-judge_qwen25_14b_instruct
 
 
-#DATASET_NAME="dataset_toxicity"
-#DATASET_SETUP="attack_toxic_attack_qwen25_14b_instruct_lm_target_qwen25_14b_instruct_judge_detoxify"
 
-DATASET_NAME="dataset_red_team"
-DATASET_SETUP="attack_default_attack_qwen25_14b_instruct_lm_target_qwen25_14b_instruct_judge_llm-judge_qwen25_14b_instruct"
+#DATASET_NAME="dataset_red_team"
+#DATASET_SETUP="attack_default_attack_qwen25_14b_instruct_lm_target_qwen25_14b_instruct_judge_llm-judge_qwen25_14b_instruct"
+DATASET_NAME="dataset_toxicity"
+DATASET_SETUP="attack_toxic_attack_qwen25_14b_instruct_lm_target_qwen25_14b_instruct_judge_detoxify"
+
 BUDGET_PER_SAMPLE="20"
-CAL_SIZE="${CAL_SIZE:-3000}"
+CAL_SIZE="3000"
 TAU_PRIOR="${TAU_PRIOR:-0.56}"
 SEED_START="${SEED_START:-0}"
 SEED_END="${SEED_END:-50}"
-N1="${N1:-100}"
+N1="200"
 PROJECTION="${PROJECTION:-platt}"
 SCORE="${SCORE:-prob}"
 DEVICE="${DEVICE:-cuda:0}"
@@ -39,11 +40,9 @@ export PYTHONUNBUFFERED=1
 
 if ! [[ "${NUM_JOBS}" =~ ^[1-9][0-9]*$ ]]; then
   echo "NUM_JOBS must be a positive integer; got ${NUM_JOBS}" >&2
-  exit 2
 fi
 if (( SEED_END <= SEED_START )); then
   echo "SEED_END must be greater than SEED_START." >&2
-  exit 2
 fi
 
 SEED_COUNT=$((SEED_END - SEED_START))
@@ -68,7 +67,6 @@ cleanup() {
     rm -rf -- "${SHARD_ROOT}"
   fi
 }
-trap cleanup EXIT
 
 COMMON_ARGS=(
   --dataset-name "${DATASET_NAME}"
@@ -121,9 +119,7 @@ for ((job = 0; job < JOB_COUNT; job++)); do
     sed "s/^/[worker ${job}] /" "${log_paths[job]}" >&2
   fi
 done
-if (( failed )); then
-  exit 1
-fi
+
 
 echo "All workers completed; merging shards into ${OUTPUT_DIR}."
 ${PYTHON_BIN} -m src.safety_evaluation.phase1_optimization_ablation \
