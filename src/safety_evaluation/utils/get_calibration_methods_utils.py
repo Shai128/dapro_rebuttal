@@ -54,7 +54,7 @@ def get_baseline_calibrations(conditional_grid, budget_per_sample, taus_range, t
         DAPRO(conditional_grid,
              budget_per_sample, taus_range,
              tau_prior, m_upper_bound,
-             projection='plat', score='prob'))
+             projection='platt', score='prob'))
     # for projection in ['platt', 'beta']:
     #     for score in ['prob', 'quantile']:
     #         all_allocations.append(DAPRO(conditional_grid,
