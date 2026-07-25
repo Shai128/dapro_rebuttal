@@ -363,7 +363,7 @@ def main():
 
     run_experiments(cal_size, is_real, device, dataset_name, data_setup, experiments_name, seeds,
                     taus_range, budget_per_sample, tau_prior, m_upper_bound, target_taus_list,
-                    skip_existing=True, allocations=allocations, bound_type=bound_type)
+                    skip_existing=False, allocations=allocations, bound_type=bound_type)
 
     print("Finished")
 
