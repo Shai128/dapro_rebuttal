@@ -233,14 +233,12 @@ class RandomAdaptiveOptimizedBudgetAllocator(BudgetAllocator):
             if abs(avg_cost - target_budget_avg) < 1e-10:  # Tolerance
                 break
 
-            if avg_cost > target_budget_avg:
+            if avg_cost < target_budget_avg:
                 lam_low = mid  # Need to be more expensive (higher lambda)
             else:
                 lam_high = mid
 
         best_lambda = (lam_low + lam_high) / 2
-        mean_val_weight = (1/C_probs).mean().item()
-        max_val_weight = (1/C_probs).max().item()
 
         best_alpha = None
         test_C, test_C_probs, test_total_used = simulate_process(
@@ -268,6 +266,8 @@ class RandomAdaptiveOptimizedBudgetAllocator(BudgetAllocator):
         final_C_probs = torch.empty(N, device=device, dtype=test_C_probs.dtype)
         final_C_probs[val_idxs] = val_C_probs.to(final_C_probs.dtype)
         final_C_probs[test_idxs] = test_C_probs.to(final_C_probs.dtype)
+        mean_val_weight = (1/final_C_probs).mean().item()
+        max_val_weight = (1/final_C_probs).max().item()
 
         # Enforce the user's explicit safety clamp for early stopping
         # This ensures P(V <= C) is floored at 0.01 even if dropped early.
