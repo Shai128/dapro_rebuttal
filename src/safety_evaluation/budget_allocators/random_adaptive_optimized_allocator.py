@@ -110,7 +110,7 @@ class RandomAdaptiveOptimizedBudgetAllocator(BudgetAllocator):
             # pi* = 1 / sqrt(lambda * Total_Cost)
             target_pi_total = lam * torch.ones_like(total_est_cost)
             target_pi_total = torch.clamp(target_pi_total, max=1.0, min=0.)
-
+            return target_pi_total
             # 4. Sequential Steering
             # We need: accum_prev * rho = target_pi
             # safe_accum = torch.clamp(current_cum_prob, min=1e-9)
@@ -119,7 +119,7 @@ class RandomAdaptiveOptimizedBudgetAllocator(BudgetAllocator):
             # rho_floor = self.min_pi / safe_accum
             # rho = torch.maximum(rho, rho_floor)
             # rho = torch.clamp(rho, max=1.0)
-            return target_pi_total
+            # return rho
 
             # horizons = horizons.clip(min=0)
             # reward = belief_matrix.cpu()[list(range(len(horizons))), horizons.long().cpu()]
@@ -155,6 +155,7 @@ class RandomAdaptiveOptimizedBudgetAllocator(BudgetAllocator):
             sim_active = torch.ones(sim_N, dtype=torch.bool, device=device)
             sim_active_and_alive = torch.ones(sim_N, dtype=torch.bool, device=device)
             sim_cum_prob = torch.ones(sim_N, dtype=torch.float32, device=device)
+            sim_cum_prob_all = torch.ones(sim_N, dtype=torch.float32, device=device)
 
             # Track probability of reaching prior_q (or stopping early)
 
@@ -163,6 +164,7 @@ class RandomAdaptiveOptimizedBudgetAllocator(BudgetAllocator):
             for t_curr in range(T_max_curr):
                 # Update active mask based on events observed up to previous step
                 event_seen_prev = true_t < t_curr
+                is_alive= (~event_seen_prev) & (t_curr <= prior_q)
                 sim_active = sim_active & (~event_seen_prev) & (t_curr <= prior_q)
 
                 if not sim_active.any():
@@ -183,7 +185,7 @@ class RandomAdaptiveOptimizedBudgetAllocator(BudgetAllocator):
                     alpha,
                     sim_cum_prob
                 )
-
+                sim_cum_prob_all = sim_cum_prob_all * torch.where(is_alive, pi, torch.ones_like(pi))
                 if stochastic:
                     # Random sampling for Test
                     rand = torch.rand(sim_N, device=device)
@@ -212,7 +214,7 @@ class RandomAdaptiveOptimizedBudgetAllocator(BudgetAllocator):
                 sim_reach_prior_prob = torch.where(
                     succeeded,
                     sim_cum_prob,  # Keep accumulated probability
-                    torch.ones_like(sim_cum_prob) * self.min_pi  # Floor for failures
+                    sim_cum_prob_all
                 )
                 sim_C = torch.where(succeeded, prior_q+1, sim_C)
             else:
@@ -223,7 +225,7 @@ class RandomAdaptiveOptimizedBudgetAllocator(BudgetAllocator):
 
         # Grid of Alpha values to test.
         # 0.5 is theoretical optimum. We search around it.
-        lam_low, lam_high = 0, 1
+        lam_low, lam_high = 0, 1.0
         for _ in range(25):
             mid = (lam_low + lam_high) / 2
             _, C_probs, val_expected_cost = simulate_process(val_grid, val_prior_q, t_val, mid, None, stochastic=False)
@@ -233,7 +235,7 @@ class RandomAdaptiveOptimizedBudgetAllocator(BudgetAllocator):
             if abs(avg_cost - target_budget_avg) < 1e-10:  # Tolerance
                 break
 
-            if avg_cost < target_budget_avg:
+            if avg_cost > target_budget_avg:
                 lam_low = mid  # Need to be more expensive (higher lambda)
             else:
                 lam_high = mid
