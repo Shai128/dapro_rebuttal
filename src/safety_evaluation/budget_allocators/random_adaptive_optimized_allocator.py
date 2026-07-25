@@ -108,7 +108,7 @@ class RandomAdaptiveOptimizedBudgetAllocator(BudgetAllocator):
 
             # 3. KKT Condition Target
             # pi* = 1 / sqrt(lambda * Total_Cost)
-            target_pi_total = lam  # TODO: should add * len(total_est_cost) to lambda
+            target_pi_total = lam * torch.ones_like(total_est_cost)
             target_pi_total = torch.clamp(target_pi_total, max=1.0)
 
             # 4. Sequential Steering
