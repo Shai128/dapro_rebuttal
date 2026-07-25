@@ -1501,7 +1501,13 @@ def setup_experiment_data(cal_size, is_real, device, dataset_name, data_setup, t
     model_preds_dir = f'alg_playground_model/is_real_{is_real}_dataset_{dataset_name}_dataset_{data_setup}'
     model_cal_test_preds_path = os.path.join(model_preds_dir, "probability_est_cal_test.pt")
 
-    model_cal_test_preds_path = Path(r"\\?\{}".format(Path(model_cal_test_preds_path).resolve()))
+    import sys
+    from pathlib import Path
+
+    model_cal_test_preds_path = Path(model_cal_test_preds_path).resolve()
+
+    if sys.platform == "win32":
+        model_cal_test_preds_path = Path(rf"\\?\{model_cal_test_preds_path}")
 
     load_x = not os.path.exists(model_cal_test_preds_path)
 
