@@ -109,17 +109,17 @@ class RandomAdaptiveOptimizedBudgetAllocator(BudgetAllocator):
             # 3. KKT Condition Target
             # pi* = 1 / sqrt(lambda * Total_Cost)
             target_pi_total = lam * torch.ones_like(total_est_cost)
-            target_pi_total = torch.clamp(target_pi_total, max=1.0)
+            target_pi_total = torch.clamp(target_pi_total, max=1.0, min=0.)
 
             # 4. Sequential Steering
             # We need: accum_prev * rho = target_pi
-            safe_accum = torch.clamp(current_cum_prob, min=1e-9)
-            rho = target_pi_total / safe_accum
+            # safe_accum = torch.clamp(current_cum_prob, min=1e-9)
+            # rho = target_pi_total / safe_accum
 
             # rho_floor = self.min_pi / safe_accum
             # rho = torch.maximum(rho, rho_floor)
-            rho = torch.clamp(rho, max=1.0)
-            return rho
+            # rho = torch.clamp(rho, max=1.0)
+            return target_pi_total
 
             # horizons = horizons.clip(min=0)
             # reward = belief_matrix.cpu()[list(range(len(horizons))), horizons.long().cpu()]
