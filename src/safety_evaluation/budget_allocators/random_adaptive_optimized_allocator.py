@@ -114,7 +114,7 @@ class RandomAdaptiveOptimizedBudgetAllocator(BudgetAllocator):
         # Concatenate
         final_C = torch.empty(N, device=device)
         final_C[val_idxs] = val_C
-        final_C[test_idxs] = test_C.to(final_C.device)
+        final_C[test_idxs] = test_C.to(final_C.dtype)
 
         # final_C[final_C > t] = torch.max(prior_q[final_C > t], final_C[final_C > t])
         final_C_probs = torch.empty(N, device=device, dtype=test_C_probs.dtype)
