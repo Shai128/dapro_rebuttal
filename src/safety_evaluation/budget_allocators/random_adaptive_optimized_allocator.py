@@ -82,7 +82,7 @@ class RandomAdaptiveOptimizedBudgetAllocator(BudgetAllocator):
             if abs(avg_cost - target_budget_avg) < 1e-10:
                 break
 
-            if avg_cost > target_budget_avg:
+            if avg_cost < target_budget_avg:
                 lam_low = mid
             else:
                 lam_high = mid

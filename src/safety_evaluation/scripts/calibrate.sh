@@ -61,7 +61,7 @@ setups=(
   )
 seed_ranges=("0,10" "10,20" "20,30" "30,40" "40,50")
 #seed_ranges=("0,10")
-budget_per_sample=(10 20)
+budget_per_sample=(5 10 20)
 for budget in "${budget_per_sample[@]}"; do
   for setup in "${setups[@]}"; do
     for seed_range in "${seed_ranges[@]}"; do
