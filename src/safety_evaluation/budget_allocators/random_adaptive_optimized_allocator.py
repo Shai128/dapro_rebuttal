@@ -63,7 +63,8 @@ class RandomAdaptiveOptimizedBudgetAllocator(BudgetAllocator):
         test_expected_remaining = torch.ones_like(test_grid[..., 0], device=device)
 
         lam_low, lam_high = 0.0, 1.0
-
+        val_p_func = lambda x: (x * val_expected_remaining).clamp(max=1.0)
+        test_p_func = lambda x: (x * test_expected_remaining).clamp(max=1.0)
         for _ in range(25):
             mid = (lam_low + lam_high) / 2
 
@@ -74,6 +75,7 @@ class RandomAdaptiveOptimizedBudgetAllocator(BudgetAllocator):
                 mid,
                 stochastic=False,
                 reach_t_max_is_success=self.reach_t_max_is_success,
+                pi_func=val_p_func
             )
 
             assert val_expected_cost <= val_budget_used + 1e-6
@@ -96,6 +98,7 @@ class RandomAdaptiveOptimizedBudgetAllocator(BudgetAllocator):
             best_lambda,
             stochastic=True,
             reach_t_max_is_success=self.reach_t_max_is_success,
+            pi_func=test_p_func
         )
 
         test_avg_cost = test_total_used / len(test_C)

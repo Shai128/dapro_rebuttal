@@ -107,6 +107,7 @@ def simulate_process_vectorized(
     stochastic: bool = False,
     reach_t_max_is_success: bool = False,
     uniforms: torch.Tensor | None = None,
+    pi_func=None,
 ) -> tuple[torch.Tensor, torch.Tensor, float]:
     """
     Fully vectorized replacement for the old `for t_curr in range(T_max_curr)`.
@@ -153,8 +154,10 @@ def simulate_process_vectorized(
     lam_tensor = torch.as_tensor(lam, dtype=dtype, device=device)
     if torch.any(lam_tensor < 0):
         raise ValueError("`lam` must be nonnegative.")
-
-    pi = torch.rsqrt(lam_tensor * expected_remaining + 1e-12).clamp(max=1.0)
+    if pi_func is None:
+        pi = torch.rsqrt(lam_tensor * expected_remaining + 1e-12).clamp(max=1.0)
+    else:
+        pi = pi_func(lam_tensor)
 
     time = torch.arange(t_max, device=device, dtype=torch.long).view(1, t_max)
 
