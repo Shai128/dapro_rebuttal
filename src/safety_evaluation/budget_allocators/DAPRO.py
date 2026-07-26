@@ -182,7 +182,7 @@ class DAPRO(BudgetAllocator):
                 }
             )
         print(f"DAPRO weights {(1/final_C_probs).mean()} | total_budget_used {total_budget_used} "
-              f"| total_budget {len(x) * self.budget_per_sample} | # observed: {(final_C > t).float().sum().item()}"
+              f"| total_budget {len(t) * self.budget_per_sample} | # observed: {(final_C > t).float().sum().item()}"
               f"| achieved prior: {(final_C.squeeze() >= prior_q).float().sum().item()}")
         return BudgetAllocationResult(quantile_est, final_C, final_C_probs, total_budget_used, additional_metrics=additional_metrics)
 
