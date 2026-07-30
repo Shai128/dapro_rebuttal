@@ -1,16 +1,16 @@
 from src.multi_turn_data_generation.llm_wrappers.HFModel import HFLLM
 from src.multi_turn_data_generation.llm_wrappers.HFModelProcess import HFLLMProcess
-
+import traceback
 try:
     import vllm
 
     print(f"vLLM version {vllm.__version__} is installed.")
     vllm_available = True
-    from llm_models.VLLMModel import VLLMModel
-
-    from llm_models.VLLMModelProcess import VLLMModelProcess
+    from llm_wrappers.VLLMModel import VLLMModel
+    from llm_wrappers.VLLMModelProcess import VLLMModelProcess
 except ImportError as e:
     print(f"vLLM is not installed in this environment, error: {e}.")
+    print(traceback.print_exc())
     vllm_available = False
 
 
