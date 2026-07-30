@@ -5,7 +5,11 @@ import torch
 
 from src.safety_evaluation.budget_allocators.budget_allocator import BudgetAllocator, BudgetAllocationResult
 from src.safety_evaluation.calibration.abstract_calibration import SurvivalLPBCalibration
-from src.safety_evaluation.calibration.calibration_utils import get_prior
+from src.safety_evaluation.calibration.calibration_utils import (
+    get_prior,
+    indexed_tensor_metrics,
+    select_calibration_positions,
+)
 from src.train_model.models.utils import ModelPrediction, SurvivalModelPrediction
 
 
@@ -41,10 +45,16 @@ class SurvivalCalibrationWithKnownWeights(SurvivalLPBCalibration):
 
         # quantile_est = model_prediction_cal.quantile_est
 
-        weights = (1 / C_probs.reshape(-1, 1)).repeat(1, f.shape[1])
-        weights[t_cal.reshape(-1, 1) >= f] = 0
-        weights[f > C.reshape(-1, 1)] = 0
-        self.miscoverage = weights.mean(dim=0)
+        estimable_miscoverage = (
+            (t_cal.reshape(-1, 1) < f)
+            & (f <= C.reshape(-1, 1))
+        )
+        # Broadcasting avoids materializing a repeated N-by-n_taus copy of
+        # the inverse-probability vector before applying the same mask.
+        self.miscoverage = (
+            estimable_miscoverage
+            * (1 / C_probs.reshape(-1, 1))
+        ).mean(dim=0)
         # from safety_evaluation.calibration.calibration_utils import get_prior
         # prior_quantile_est = get_prior(f, self.taus_range, self.budget_allocator.tau_prior)
         # (prior_quantile_est <= C).float().mean()
@@ -55,8 +65,10 @@ class SurvivalCalibrationWithKnownWeights(SurvivalLPBCalibration):
         miscoverage = self.miscoverage
         quantile_est = model_prediction.quantile_est
         target_taus = target_taus.to(quantile_est.device)
-        tau_diff = target_taus - miscoverage[:, np.newaxis]
-        smallest_pos = torch.where(tau_diff > 0, 1, -1.0 * np.inf).cumsum(dim=0).argmax(dim=0)
+        smallest_pos = select_calibration_positions(
+            miscoverage,
+            target_taus,
+        )
         calibrated_test_quantile_est = quantile_est[:, smallest_pos].squeeze()
         if hasattr(self.budget_allocator, 'max_estimator'):
             max_estimator = self.budget_allocator.max_estimator
@@ -75,35 +87,109 @@ class SurvivalCalibrationWithKnownWeights(SurvivalLPBCalibration):
         C_probs = self.allocation_result.C_probs
         mean_weight = self.allocation_result.mean_weight
         max_weight = self.allocation_result.max_weight
+        inverse_probability = 1 / C_probs.reshape(-1).to(torch.float64)
+        inverse_probability_minus_one = inverse_probability - 1
+        variance_weight = inverse_probability.var(unbiased=False).item()
+        weight_quantiles = torch.quantile(
+            inverse_probability,
+            torch.tensor(
+                [0.50, 0.90, 0.99],
+                dtype=torch.float64,
+                device=inverse_probability.device,
+            ),
+        )
+        weight_square_sum = inverse_probability.square().sum()
+        effective_sample_size_weight = (
+            inverse_probability.sum().square()
+            / weight_square_sum.clamp_min(torch.finfo(torch.float64).tiny)
+        ).item()
+        top_count = max(1, int(np.ceil(0.01 * len(inverse_probability))))
+        top_weight_share = (
+            torch.topk(inverse_probability, top_count).values.sum()
+            / inverse_probability.sum().clamp_min(
+                torch.finfo(torch.float64).tiny
+            )
+        ).item()
         if mean_weight is None:
-            mean_weight = (1 / C_probs).mean().item()
+            mean_weight = inverse_probability.mean().item()
         if max_weight is None:
-            max_weight = (1 / C_probs).max().item()
+            max_weight = inverse_probability.max().item()
         budget_used = self.allocation_result.total_budget_used
         if budget_used is None:
             budget_used = C.sum().item()
         f_prior = get_prior(f, self.taus_range, self.tau_prior)
-        prior_observed_jailbreaks = (t.squeeze() <= f_prior.squeeze()).float().sum().item()
+        prior_observed_jailbreaks = (t.squeeze() < f_prior.squeeze()).float().sum().item()
         prior_observed_f_lower_c = (f_prior.squeeze() <= C.squeeze()).float().sum().item()
         prior_observed_both = (
-                (f_prior.squeeze() <= C.squeeze()) & (t.squeeze() <= f_prior.squeeze())).float().sum().item()
-        n_observed_events = (C.squeeze() > t).float().sum().item()
+                (f_prior.squeeze() <= C.squeeze()) & (t.squeeze() < f_prior.squeeze())).float().sum().item()
+        n_observed_events = (C.squeeze() >= t.squeeze()).float().sum().item()
         n_achieved_q_prior1 = (C.squeeze() >= f_prior).float().sum().item()
         n_achieved_q_prior2 = (C.squeeze() > f_prior).float().sum().item()
 
         miscoverage = self.miscoverage
         quantile_est = model_prediction.quantile_est
         target_taus = target_taus.to(quantile_est.device)
-        tau_diff = target_taus - miscoverage[:, np.newaxis]
-        smallest_pos = torch.where(tau_diff > 0, 1, -1.0 * np.inf).cumsum(dim=0).argmax(dim=0)
-        calibrated_test_quantile_est = f[:, smallest_pos].squeeze()
+        smallest_pos = select_calibration_positions(
+            miscoverage,
+            target_taus,
+        )
+        calibrated_test_quantile_est = f[:, smallest_pos]
         alpha_hat_per_tau = miscoverage[smallest_pos]
 
-        all_observed_jailbreaks = (t.squeeze().unsqueeze(-1) <= calibrated_test_quantile_est.squeeze()).float().sum(
-            dim=0)
-        all_f_lower_c = (calibrated_test_quantile_est.squeeze() <= C.squeeze().unsqueeze(-1)).float().sum(dim=0)
-        all_observed_both = ((calibrated_test_quantile_est.squeeze() <= C.squeeze().unsqueeze(-1)) & (
-                t.squeeze().unsqueeze(-1) <= calibrated_test_quantile_est.squeeze())).float().sum(dim=0)
+        latent_a = (
+                t.reshape(-1, 1)
+                < calibrated_test_quantile_est
+        )
+        a_variance_proxy = (
+                latent_a.to(torch.float64)
+                * inverse_probability_minus_one.reshape(-1, 1)
+        )
+        a_inverse_probability = (
+                latent_a.to(torch.float64)
+                * inverse_probability.reshape(-1, 1)
+        )
+        mean_a_variance_proxy = a_variance_proxy.mean(dim=0)
+        mean_a_inverse_probability = a_inverse_probability.mean(dim=0)
+        variance_a_inverse_probability = a_inverse_probability.var(
+            dim=0,
+            unbiased=False,
+        )
+        a_inverse_probability_sum = a_inverse_probability.sum(dim=0)
+        a_effective_sample_size = (
+            a_inverse_probability_sum.square()
+            / a_inverse_probability.square().sum(dim=0).clamp_min(
+                torch.finfo(torch.float64).tiny
+            )
+        )
+        prior_estimable = (
+                calibrated_test_quantile_est
+                <= f_prior.reshape(-1, 1)
+        )
+        estimable_a_variance_proxy = (
+                (latent_a & prior_estimable).to(torch.float64)
+                * inverse_probability_minus_one.reshape(-1, 1)
+        )
+        mean_estimable_a_variance_proxy = (
+                estimable_a_variance_proxy.mean(dim=0)
+        )
+        prior_a = (t.reshape(-1) < f_prior.reshape(-1)).to(torch.float64)
+        mean_prior_a_variance_proxy = (
+                prior_a * inverse_probability_minus_one
+        ).mean().item()
+        prior_a_inverse_probability = prior_a * inverse_probability
+        mean_prior_a_inverse_probability = (
+            prior_a_inverse_probability.mean().item()
+        )
+
+        selected_f_observed = (
+            calibrated_test_quantile_est
+            <= C.reshape(-1, 1)
+        )
+        all_observed_jailbreaks = latent_a.float().sum(dim=0)
+        all_f_lower_c = selected_f_observed.float().sum(dim=0)
+        all_observed_both = (
+            selected_f_observed & latent_a
+        ).float().sum(dim=0)
         if hasattr(self.budget_allocator, "cal_size") and hasattr(self.budget_allocator, "max_estimator"):
             cal_size = self.budget_allocator.cal_size
             max_estimator = self.budget_allocator.max_estimator
@@ -115,6 +201,24 @@ class SurvivalCalibrationWithKnownWeights(SurvivalLPBCalibration):
         additional_metrics = self.allocation_result.additional_metrics # if self.allocation_result.additional_metrics else {}
         if additional_metrics is None:
             additional_metrics = {}
+        indexed_metrics = indexed_tensor_metrics({
+            "mean_a_weighted_inverse_probability_minus_one":
+                mean_a_variance_proxy,
+            "mean_a_weighted_inverse_probability":
+                mean_a_inverse_probability,
+            "variance_a_weighted_inverse_probability":
+                variance_a_inverse_probability,
+            "conditional_variance_of_ht_mean":
+                mean_a_variance_proxy / len(inverse_probability),
+            "a_weighted_effective_sample_size":
+                a_effective_sample_size,
+            "mean_estimable_a_weighted_inverse_probability_minus_one":
+                mean_estimable_a_variance_proxy,
+            "all_observed_jailbreaks": all_observed_jailbreaks,
+            "all_f_lower_c": all_f_lower_c,
+            "all_observed_both": all_observed_both,
+            "alpha_hat_per_tau": alpha_hat_per_tau,
+        })
         metrics = {
             'coverage_deviation': coverage_deviation,
             'prior_observed_jailbreaks': prior_observed_jailbreaks,
@@ -126,11 +230,21 @@ class SurvivalCalibrationWithKnownWeights(SurvivalLPBCalibration):
             'budget_used': budget_used,
             'mean_weight': mean_weight,
             'max_weight': max_weight,
-            **{f'all_observed_jailbreaks_{i}': all_observed_jailbreaks[i].item() for i in
-               range(len(all_observed_jailbreaks))},
-            **{f'all_f_lower_c_{i}': all_f_lower_c[i].item() for i in range(len(all_f_lower_c))},
-            **{f'all_observed_both_{i}': all_observed_both[i].item() for i in range(len(all_observed_both))},
-            **{f'alpha_hat_per_tau_{i}': alpha_hat_per_tau[i].item() for i in range(len(alpha_hat_per_tau))},
+            'variance_weight': variance_weight,
+            'median_weight': weight_quantiles[0].item(),
+            'p90_weight': weight_quantiles[1].item(),
+            'p99_weight': weight_quantiles[2].item(),
+            'effective_sample_size_weight': effective_sample_size_weight,
+            'top_1pct_weight_share': top_weight_share,
+            'mean_inverse_probability_minus_one': inverse_probability_minus_one.mean().item(),
+            'mean_prior_a_weighted_inverse_probability_minus_one': mean_prior_a_variance_proxy,
+            'mean_prior_a_weighted_inverse_probability': (
+                mean_prior_a_inverse_probability
+            ),
+            'variance_prior_a_weighted_inverse_probability': (
+                prior_a_inverse_probability.var(unbiased=False).item()
+            ),
+            **indexed_metrics,
             **additional_metrics
         }
         return metrics

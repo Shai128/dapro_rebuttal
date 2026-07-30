@@ -5,7 +5,10 @@ import torch
 
 from src.safety_evaluation.budget_allocators.budget_allocator import BudgetAllocator, BudgetAllocationResult
 from src.safety_evaluation.calibration.abstract_calibration import  SurvivalUPBCalibration
-from src.safety_evaluation.calibration.calibration_utils import get_prior
+from src.safety_evaluation.calibration.calibration_utils import (
+    get_prior,
+    indexed_tensor_metrics,
+)
 from src.train_model.models.utils import ModelPrediction, SurvivalModelPrediction
 
 
@@ -43,11 +46,17 @@ class SurvivalUPBCalibrationWithKnownWeights(SurvivalUPBCalibration):
         # est_coverage_rate = ((1.0 / C_probs)*( ((f[:, tau_idx] <= C)) & ((t_cal <= f[:, tau_idx]) | (f[:, tau_idx] == 200))).float()).mean()
         # print(f"tau: {self.taus_range[tau_idx]}, gt_coverage_rate: {gt_coverage_rate}, est_coverage_rate: {est_coverage_rate}")
 
-        weights = (1.0 / C_probs.reshape(-1, 1)).repeat(1, f.shape[1])  # [N, n_taus]
-        weights[t_cal.reshape(-1, 1) <= f] = 0  # keeps T_i > f̂_τ only
-        weights[f > C.reshape(-1, 1)] = 0
-        weights[f == 200] = 0
-        self.miscoverage = weights.mean(dim=0)  # shape: [n_taus], decreasing in τ
+        estimable_miscoverage = (
+            (t_cal.reshape(-1, 1) > f)
+            & (f <= C.reshape(-1, 1))
+            & (f != 200)
+        )
+        # Broadcasting avoids materializing a repeated N-by-n_taus copy of
+        # the inverse-probability vector before applying the same mask.
+        self.miscoverage = (
+            estimable_miscoverage
+            * (1.0 / C_probs.reshape(-1, 1))
+        ).mean(dim=0)
 
 
     def get_calibrated_upb(self, target_taus: torch.Tensor, x: torch.Tensor, model_prediction: ModelPrediction):
@@ -125,6 +134,12 @@ class SurvivalUPBCalibrationWithKnownWeights(SurvivalUPBCalibration):
         additional_metrics = self.allocation_result.additional_metrics # if self.allocation_result.additional_metrics else {}
         if additional_metrics is None:
             additional_metrics = {}
+        indexed_metrics = indexed_tensor_metrics({
+            "all_observed_jailbreaks": all_observed_jailbreaks,
+            "all_f_lower_c": all_f_lower_c,
+            "all_observed_both": all_observed_both,
+            "alpha_hat_per_tau": alpha_hat_per_tau,
+        })
         metrics = {
             'coverage_deviation': coverage_deviation,
             'prior_observed_jailbreaks': prior_observed_jailbreaks,
@@ -136,11 +151,7 @@ class SurvivalUPBCalibrationWithKnownWeights(SurvivalUPBCalibration):
             'budget_used': budget_used,
             'mean_weight': mean_weight,
             'max_weight': max_weight,
-            **{f'all_observed_jailbreaks_{i}': all_observed_jailbreaks[i].item() for i in
-               range(len(all_observed_jailbreaks))},
-            **{f'all_f_lower_c_{i}': all_f_lower_c[i].item() for i in range(len(all_f_lower_c))},
-            **{f'all_observed_both_{i}': all_observed_both[i].item() for i in range(len(all_observed_both))},
-            **{f'alpha_hat_per_tau_{i}': alpha_hat_per_tau[i].item() for i in range(len(alpha_hat_per_tau))},
+            **indexed_metrics,
             **additional_metrics
         }
         return metrics

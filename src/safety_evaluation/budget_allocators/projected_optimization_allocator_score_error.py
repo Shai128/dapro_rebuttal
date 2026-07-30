@@ -1,9 +1,14 @@
 import numpy as np
 
-from src.safety_evaluation.budget_allocators.budget_allocator import BudgetAllocator, BudgetAllocationResult
+from src.safety_evaluation.budget_allocators.budget_allocator import (
+    BudgetAllocationResult,
+    BudgetAllocator,
+    summarize_expected_budget,
+)
 from src.safety_evaluation.budget_allocators.optimization_solver_utils import solve_exact_fast
 from src.safety_evaluation.budget_allocators.projected_optimization_utils import adaptive_budget_allocation, \
-    construct_final_result, split_to_two_sets, project_to_test_platt, project_to_test_ir, project_to_test_beta
+    construct_final_result, split_to_two_sets, project_to_test_platt, project_to_test_ir, project_to_test_beta, \
+    expected_acquisition_cost
 from src.safety_evaluation.calibration.calibration_utils import get_prior
 
 import torch
@@ -76,7 +81,7 @@ class ProjectedOptimizationBudgetAllocatorScoreError(BudgetAllocator):
         t_range = np.arange(optimal_P.shape[1])
 
         mask = (t_range[None, :] < val_max_steps.cpu().detach().numpy()[:, None]).astype(np.float64)
-        mask2 = (t_range[None, :] <= val_max_steps.cpu().detach().numpy()[:, None]).astype(np.float64)
+        mask2 = (t_range[None, :] < val_max_steps.cpu().detach().numpy()[:, None]).astype(np.float64)
         Y_best = np.log(optimal_P)
         val_obj = float(np.mean(np.exp(-np.sum(np.where(mask > 0, Y_best, 0.0), axis=1))))
         val_obj2 = float(np.mean(np.exp(-np.sum(np.where(mask2 > 0, Y_best, 0.0), axis=1))))
@@ -89,6 +94,21 @@ class ProjectedOptimizationBudgetAllocatorScoreError(BudgetAllocator):
         masked_p_test = p_test.clone()
         masked_p_test[~mask] = 1
         C_probs = masked_p_test.prod(dim=-1)  # should be equal to sim_cum_prob for samples with C > min(q,t)
+        phase2_expected_cost_per_sample = expected_acquisition_cost(
+            p_test,
+            torch.minimum(test_prior_q, t_test),
+        )
+        phase2_expected_cost_total = (
+            phase2_expected_cost_per_sample * len(test_idxs)
+        )
+        expected_budget_metrics = summarize_expected_budget(
+            float(val_budget_used) + phase2_expected_cost_total,
+            N,
+            self.budget_per_sample,
+            cost_semantics=(
+                "phase1_fully_observed_plus_phase2_expected_interactions"
+            ),
+        )
 
         additional_metrics = {
             'val_obj': val_obj,
@@ -99,6 +119,35 @@ class ProjectedOptimizationBudgetAllocatorScoreError(BudgetAllocator):
             'all_icw': (1/final_C_probs).mean().item(),
             'valid_budget': valid_budget,
             'val_budget': val_budget,
+            'phase1_expected_cost_total': float(val_budget_used),
+            'phase1_expected_cost_per_sample': (
+                float(val_budget_used) / len(val_idxs)
+            ),
+            'phase1_realized_cost_total': float(val_budget_used),
+            'phase1_realized_cost_per_sample': (
+                float(val_budget_used) / len(val_idxs)
+            ),
+            'phase2_sample_count': len(test_idxs),
+            'phase2_target_budget_per_sample': target_budget_avg,
+            'phase2_expected_cost_total': phase2_expected_cost_total,
+            'phase2_expected_cost_per_sample': (
+                phase2_expected_cost_per_sample
+            ),
+            'phase2_expected_budget_gap_total': (
+                (
+                    phase2_expected_cost_per_sample
+                    - target_budget_avg
+                )
+                * len(test_idxs)
+            ),
+            'phase2_expected_budget_gap_per_sample': (
+                phase2_expected_cost_per_sample - target_budget_avg
+            ),
+            'phase2_expected_budget_valid': int(
+                phase2_expected_cost_per_sample
+                <= target_budget_avg + 1e-7
+            ),
+            **expected_budget_metrics,
         }
         return BudgetAllocationResult(quantile_est, final_C, final_C_probs, total_budget_used, additional_metrics=additional_metrics)
 
@@ -153,4 +202,3 @@ def store(p_val, p_test, test_idxs, val_idxs, t, prior_q, final_C):
 
     # 4. Save to a file
     torch.save(data_to_save, 'projected_optimized_evaluation_plot_data.pt')
-

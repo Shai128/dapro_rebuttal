@@ -36,7 +36,10 @@ from src.safety_evaluation.budget_allocators.projected_optimization_utils import
     project_to_test_ir,
     project_to_test_platt,
 )
-from src.safety_evaluation.calibration.calibration_utils import get_prior
+from src.safety_evaluation.calibration.calibration_utils import (
+    get_prior,
+    quantiles_to_interaction_counts,
+)
 from src.safety_evaluation.survival_utils.compute_mean_time_given_pmf import (
     compute_quantile_survival_time,
 )
@@ -130,21 +133,6 @@ def _sigmoid(x: np.ndarray | float) -> np.ndarray | float:
     neg_exp = np.exp(x[~pos])
     out[~pos] = neg_exp / (1.0 + neg_exp)
     return out.item() if out.ndim == 0 else out
-
-
-def quantiles_to_interaction_counts(
-    quantiles: np.ndarray | torch.Tensor, width: int
-) -> np.ndarray | torch.Tensor:
-    """Put saved zero-based quantile-grid indices on the event-time scale.
-
-    Repository event times are one-based interaction counts, while
-    ``compute_quantile_survival_time`` returns zero-based grid indices.  The
-    maximum-horizon sentinel is already ``width`` and must not be incremented.
-    """
-
-    if torch.is_tensor(quantiles):
-        return torch.clamp(quantiles + 1, max=width)
-    return np.minimum(np.asarray(quantiles) + 1, width)
 
 
 def active_lengths(event_times: np.ndarray, q_prior: np.ndarray, width: int) -> np.ndarray:
@@ -835,13 +823,6 @@ def run_split(
     ) = _split_cached_data(seed, data)
     grid_cal = data.conditional_grid[cal_idx]
     scores_cal = _dapro_scores(grid_cal, config.score)
-    trajectory_width = scores_cal.shape[1]
-    quantile_cal = quantiles_to_interaction_counts(
-        quantile_cal, trajectory_width
-    )
-    quantile_test = quantiles_to_interaction_counts(
-        quantile_test, trajectory_width
-    )
     q_cal = get_prior(quantile_cal, data.taus_range, config.tau_prior).long()
     if dry_limit is not None:
         keep_cal = min(dry_limit, len(event_cal))

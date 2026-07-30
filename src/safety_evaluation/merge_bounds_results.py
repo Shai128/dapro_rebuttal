@@ -1,5 +1,4 @@
 import os
-import traceback
 import pandas as pd
 import torch
 import tqdm
@@ -14,7 +13,9 @@ from src.safety_evaluation.utils.utils import (
     get_tmp_calibration_result_path,
     get_merged_calibration_result_path,
     get_tmp_upb_calibration_result_path,
-    get_merged_upb_calibration_result_path
+    get_merged_upb_calibration_result_path,
+    get_calibration_experiment_name,
+    resolve_m_upper_bound,
 )
 from src.utils.utils import set_seeds
 
@@ -26,6 +27,14 @@ except ImportError:
     SurvivalUPBCalibrationWithKnownWeights = SurvivalCalibrationWithKnownWeights
 
 
+def absolute_io_path(path):
+    """Return an absolute path that supports long Windows experiment names."""
+    abs_path = os.path.abspath(path)
+    if os.name == 'nt' and not abs_path.startswith('\\\\?\\'):
+        return f"\\\\?\\{abs_path}"
+    return abs_path
+
+
 def process_calibration(calibration, seed, experiments_name, bound_type):
     """Process a single calibration and return all computed rows."""
     try:
@@ -35,11 +44,7 @@ def process_calibration(calibration, seed, experiments_name, bound_type):
             dir_path = get_tmp_upb_calibration_result_path(experiments_name, calibration.name)
 
         csv_path = f"{dir_path}/seed={seed}.csv"
-        abs_path = os.path.abspath(csv_path)
-
-        # If on Windows, prepend the "Long Path" magic string
-        if os.name == 'nt' and not abs_path.startswith('\\\\?\\'):
-            abs_path = f"\\\\?\\{abs_path}"
+        abs_path = absolute_io_path(csv_path)
         if not os.path.exists(abs_path):
             raise Exception(f"Warning, method does not exist: {calibration.name} at {abs_path}")
 
@@ -47,14 +52,23 @@ def process_calibration(calibration, seed, experiments_name, bound_type):
         if "Unnamed: 0" in df.columns:
             df.drop("Unnamed: 0", axis=1, inplace=True)
         return df
-    except Exception as e:
-        raise Exception(f"Loading calibration {calibration.name} failed with error: {traceback.print_exc()}")
+    except Exception as error:
+        raise RuntimeError(
+            f"Loading calibration {calibration.name} for seed {seed} failed."
+        ) from error
 
 
 def get_calibration_methods(conditional_grid, budget_per_sample, taus_range, tau_prior, m_upper_bound, allocations: str,
-                            device, bound_type):
-    baseline_calibrations = get_baseline_calibrations(conditional_grid, budget_per_sample, taus_range, tau_prior,
-                                                      m_upper_bound)
+                            device, bound_type, dapro_n1_values=(100,)):
+    baseline_calibrations = get_baseline_calibrations(
+        conditional_grid,
+        budget_per_sample,
+        taus_range,
+        tau_prior,
+        m_upper_bound,
+        include_a_weighted=(bound_type == 'lpb'),
+        dapro_n1_values=dapro_n1_values,
+    )
     new_allocations = get_new_allocation_algorithms(conditional_grid, budget_per_sample, taus_range, tau_prior,
                                                     m_upper_bound,
                                                     allocations, device=device)
@@ -79,12 +93,29 @@ def get_calibration_methods(conditional_grid, budget_per_sample, taus_range, tau
 
 
 def merge_results(experiments_name, seeds, budget_per_sample, taus_range, tau_prior, m_upper_bound, target_taus_list,
-                  allocations, device, bound_type):
+                  allocations, device, bound_type, calibration_names=None,
+                  dapro_n1_values=(100,)):
     all_dfs = []
+    errors = []
     for seed in tqdm.tqdm(range(seeds[0], seeds[1]), desc="merging csvs"):
 
         all_calibrations = get_calibration_methods(None, budget_per_sample, taus_range, tau_prior, m_upper_bound,
-                                                   allocations, device=device, bound_type=bound_type)
+                                                   allocations, device=device, bound_type=bound_type,
+                                                   dapro_n1_values=dapro_n1_values)
+        if calibration_names:
+            available = {calibration.name for calibration in all_calibrations}
+            missing = sorted(set(calibration_names) - available)
+            if missing:
+                raise ValueError(
+                    "Unknown calibration names: "
+                    f"{missing}. Available names: {sorted(available)}"
+                )
+            selected_names = set(calibration_names)
+            all_calibrations = [
+                calibration
+                for calibration in all_calibrations
+                if calibration.name in selected_names
+            ]
 
         num_cpus = os.cpu_count()
 
@@ -96,8 +127,15 @@ def merge_results(experiments_name, seeds, budget_per_sample, taus_range, tau_pr
                 try:
                     result_df = future.result()
                     all_dfs.append(result_df)
-                except Exception as e:
-                    print(f"Error processing calibration: {e}")
+                except Exception as error:
+                    errors.append(error)
+
+    if errors:
+        details = "\n".join(f"- {error}" for error in errors)
+        raise RuntimeError(
+            "Refusing to write a partial merged result because expected "
+            f"method/seed files are missing or invalid:\n{details}"
+        )
 
     if len(all_dfs) == 0:
         raise Exception("No calibrations found")
@@ -109,10 +147,12 @@ def merge_results(experiments_name, seeds, budget_per_sample, taus_range, tau_pr
     else:
         results_dir = get_merged_upb_calibration_result_path(experiments_name)
 
-    os.makedirs(results_dir, exist_ok=True)
-    results_path = os.path.join(results_dir, "all_df.csv")
+    results_dir_io = absolute_io_path(results_dir)
+    os.makedirs(results_dir_io, exist_ok=True)
+    results_path = os.path.join(results_dir_io, "all_df.csv")
     all_df.to_csv(results_path, index=False)
-    print(f"stored successfully at {os.path.abspath(results_path)}")
+    display_path = os.path.abspath(os.path.join(results_dir, "all_df.csv"))
+    print(f"stored successfully at {display_path}")
 
 
 def main():
@@ -128,8 +168,44 @@ def main():
     parser.add_argument('--budget-per-sample', type=float, default=1)
     parser.add_argument('--cal-size', type=int, default=4000)
     parser.add_argument('--tau-prior', type=float, default=None, help="Prior for tau (defaults depend on bound-type)")
-    parser.add_argument('--gamma', type=float, default=10)
+    parser.add_argument(
+        '--gamma',
+        type=float,
+        default=None,
+        help="Optional ratio m_upper_bound / budget_per_sample.",
+    )
+    parser.add_argument(
+        '--m-upper-bound',
+        type=float,
+        default=None,
+        help="Optional explicit interaction horizon.",
+    )
     parser.add_argument('--device', type=str, default='cuda:0')
+    parser.add_argument(
+        '--experiment-suffix',
+        type=str,
+        default='',
+        help="Optional suffix used to isolate this run from existing results.",
+    )
+    parser.add_argument(
+        '--calibration-names',
+        type=str,
+        default='',
+        help=(
+            "Optional comma-separated exact calibration names. When supplied, "
+            "only those method/seed files are required and merged."
+        ),
+    )
+    parser.add_argument(
+        '--dapro-n1-values',
+        type=int,
+        nargs='+',
+        default=[100],
+        help=(
+            "Phase-I sample sizes used to reconstruct DAPRO-family method "
+            "names. Must match the corresponding construction command."
+        ),
+    )
 
     args = parser.parse_args()
     args.is_real = True if args.data_type.lower() == 'real' else False
@@ -141,8 +217,23 @@ def main():
     data_setup = args.dataset_setup
     is_real = args.is_real
     cal_size = args.cal_size
+    if (
+        len(set(args.dapro_n1_values)) != len(args.dapro_n1_values)
+        or any(
+            n1 <= 0 or n1 >= cal_size
+            for n1 in args.dapro_n1_values
+        )
+    ):
+        parser.error(
+            "--dapro-n1-values must contain distinct integers between 1 "
+            "and cal-size - 1."
+        )
 
-    device = 'cuda:0' if torch.cuda.is_available() and 'cuda' in args.device else 'cpu'
+    device = (
+        args.device
+        if torch.cuda.is_available() and 'cuda' in args.device
+        else 'cpu'
+    )
     set_seeds(0)
 
     seeds = (seed_start, seed_end)
@@ -163,13 +254,23 @@ def main():
 
     budget_per_sample = args.budget_per_sample
 
-    if not is_real:
-        m_upper_bound = 20
-    else:
-        m_upper_bound = 200
+    try:
+        m_upper_bound = resolve_m_upper_bound(
+            is_real,
+            budget_per_sample,
+            gamma=args.gamma,
+            m_upper_bound=args.m_upper_bound,
+        )
+    except ValueError as error:
+        parser.error(str(error))
 
     gamma = get_gamma(m_upper_bound, budget_per_sample)
     allocations = args.allocations
+    calibration_names = [
+        name.strip()
+        for name in args.calibration_names.split(',')
+        if name.strip()
+    ]
 
     global global_calibration_set_size
     global global_budget_per_sample
@@ -179,11 +280,23 @@ def main():
     print(f"Executing for Bound Type: {bound_type.upper()}")
     print(f"budget_per_sample: {budget_per_sample}, gamma: {gamma}, m_upper_bound: {m_upper_bound}")
 
-    # File naming adjustments distinct between modes
-    experiments_name = f"{dataset_name}_{data_setup}_{budget_per_sample}_{cal_size}_{tau_prior}_{np.round(gamma, 3)}"
+    try:
+        experiments_name = get_calibration_experiment_name(
+            dataset_name,
+            data_setup,
+            budget_per_sample,
+            cal_size,
+            tau_prior,
+            gamma,
+            args.experiment_suffix,
+        )
+    except ValueError as error:
+        parser.error(str(error))
 
     merge_results(experiments_name, seeds, budget_per_sample, taus_range, tau_prior, m_upper_bound,
-                  target_taus_list, allocations=allocations, device=device, bound_type=bound_type)
+                  target_taus_list, allocations=allocations, device=device, bound_type=bound_type,
+                  calibration_names=calibration_names,
+                  dapro_n1_values=tuple(args.dapro_n1_values))
 
     print("Finished")
 

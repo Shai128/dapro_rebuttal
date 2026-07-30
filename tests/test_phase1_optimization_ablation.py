@@ -131,3 +131,7 @@ def test_saved_quantile_grid_indices_are_converted_to_event_time_units():
         quantiles_to_interaction_counts(raw, width=200),
         [1, 2, 200, 200],
     )
+    np.testing.assert_array_equal(
+        quantiles_to_interaction_counts(raw, width=200, upper_bound=20),
+        [1, 2, 20, 20],
+    )

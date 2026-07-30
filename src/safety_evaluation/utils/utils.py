@@ -1,5 +1,6 @@
 import gc
 import random
+import re
 from pathlib import Path
 from typing import Union, List
 
@@ -19,10 +20,14 @@ from tqdm import tqdm
 from src.train_model.acquisition_strategies.dummy_acquisition import DummyAcquisition
 from src.train_model.active_learning import ActiveLearner
 from src.dataset_utils.datasets import PartialSequenceDataset
-from src.safety_evaluation.survival_utils.compute_mean_time_given_pmf import compute_mean_survival_time, \
-    compute_quantile_survival_time
+from src.safety_evaluation.survival_utils.compute_mean_time_given_pmf import (
+    compute_mean_survival_time,
+    compute_quantile_survival_time,
+    compute_quantiles_survival_time,
+)
 from src.safety_evaluation.survival_utils.conditional_pmf_utils import get_conditional_pmf
 from src.safety_evaluation.survival_utils.quantiles import compute_conditional_quantiles_single_step
+from src.safety_evaluation.calibration.calibration_utils import quantiles_to_interaction_counts
 from src.train_model.models.transformer_survival_model import TransformerSurvivalModel, DiscreteSurvivalLoss
 from src.utils.utils import set_seeds
 
@@ -89,7 +94,6 @@ def compute_probabilities_and_quantiles(x_cal, x_train, x_test, model_cal_test_p
         for i, tau in tqdm(enumerate(taus_range), desc="computing quantiles for all taus"):
             quantile_est_cal_test[:, i] = compute_conditional_quantiles_single_step(conditional_grid[:, current_time],
                                                                                     tau.item())
-        quantile_est_cal_test = quantile_est_cal_test.clip(max=max_time)
     else:
         if os.path.exists(model_cal_test_preds_path):
             probability_est = torch.load(model_cal_test_preds_path).to(device)
@@ -135,13 +139,21 @@ def compute_probabilities_and_quantiles(x_cal, x_train, x_test, model_cal_test_p
             torch.save(probability_est.cpu(), model_cal_test_preds_path)
 
         conditional_grid = probability_est
-        quantile_est_cal_test = torch.zeros(conditional_grid.shape[0], len(taus_range), device=device)
-        for i, tau in tqdm(enumerate(taus_range), desc="computing quantiles for all taus"):
-            quantile_est_cal_test[:, i] = compute_quantile_survival_time(conditional_grid[:, current_time].unsqueeze(1),
-                                                                         quantile=tau.item(),
-                                                                         tail_distribution='geometric').squeeze()
+        quantile_est_cal_test = compute_quantiles_survival_time(
+            conditional_grid[:, current_time].unsqueeze(1),
+            taus_range,
+            tail_distribution='geometric',
+        ).squeeze(1)
 
-        quantile_est_cal_test = quantile_est_cal_test.clamp(max=m_upper_bound)
+    # Quantile routines return zero-based grid indices, while all event times,
+    # censoring horizons, and costs are one-based interaction counts. Convert
+    # at this common producer boundary so direct callers cannot accidentally
+    # bypass the convention. Apply the horizon cap after incrementing.
+    quantile_est_cal_test = quantiles_to_interaction_counts(
+        quantile_est_cal_test,
+        width=int(conditional_grid.shape[1]),
+        upper_bound=min(max_time, m_upper_bound),
+    )
     return quantile_est_cal_test, probability_est, conditional_grid
 
 
@@ -1477,6 +1489,58 @@ def hazard_probabilities_compute_and_save_metrics(p, x_test, t_test, delta_test,
 
 def get_tmp_calibration_result_path(experiments_name, calibration_name):
     return os.path.join("results", "tmp_calibration_results", experiments_name, calibration_name)
+
+
+def get_calibration_experiment_name(
+        dataset_name,
+        data_setup,
+        budget_per_sample,
+        cal_size,
+        tau_prior,
+        gamma,
+        suffix="",
+):
+    """Build the shared construct/merge name, optionally version-isolated."""
+    base = (
+        f"{dataset_name}_{data_setup}_{budget_per_sample}_{cal_size}_"
+        f"{tau_prior}_{np.round(gamma, 3)}"
+    )
+    if not suffix:
+        return base
+    if (
+            not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}", suffix)
+            or ".." in suffix
+    ):
+        raise ValueError(
+            "Experiment suffix must be a 1-64 character filename token "
+            "(letters, numbers, underscore, dot, or hyphen; no '..')."
+        )
+    return f"{base}__{suffix}"
+
+
+def resolve_m_upper_bound(
+        is_real: bool,
+        budget_per_sample: float,
+        gamma: float | None = None,
+        m_upper_bound: float | None = None,
+) -> float:
+    """Resolve the horizon without silently ignoring a CLI parameter."""
+    if budget_per_sample <= 0:
+        raise ValueError("`budget_per_sample` must be positive.")
+    if gamma is not None and m_upper_bound is not None:
+        raise ValueError(
+            "Specify at most one of `gamma` and `m_upper_bound`."
+        )
+    if m_upper_bound is not None:
+        resolved = float(m_upper_bound)
+    elif gamma is not None:
+        resolved = float(gamma) * float(budget_per_sample)
+    else:
+        resolved = 200.0 if is_real else 20.0
+    if not np.isfinite(resolved) or resolved <= 0:
+        raise ValueError("The resolved upper bound must be finite and positive.")
+    return resolved
+
 
 def get_tmp_upb_calibration_result_path(experiments_name, calibration_name):
     return os.path.join("results", "tmp_upb_calibration_results", experiments_name, calibration_name)

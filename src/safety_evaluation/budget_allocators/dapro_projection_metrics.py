@@ -77,7 +77,7 @@ def compute_dapro_projection_metrics(
     time = torch.arange(horizon, device=projected.device).unsqueeze(0)
     max_steps = torch.minimum(prior_q, event_times).long().clamp(0, horizon)
     solver_mask = time < max_steps.unsqueeze(1)
-    runtime_mask = time <= max_steps.unsqueeze(1)
+    runtime_mask = time < max_steps.unsqueeze(1)
 
     probability_error = projected - oracle
     probability_abs_error = probability_error.abs()

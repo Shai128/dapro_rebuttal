@@ -2,9 +2,65 @@ import numpy as np
 import torch
 
 from src.safety_evaluation.budget_allocators.budget_allocator import BudgetAllocator, BudgetAllocationResult
-from src.safety_evaluation.budget_allocators.vectorized_adaptive_allocator_patch import precompute_expected_remaining, \
-    simulate_process_vectorized
+from src.safety_evaluation.budget_allocators.vectorized_adaptive_allocator_patch import (
+    expected_acquisition_cost,
+    precompute_expected_remaining,
+    simulate_process_vectorized,
+)
 from src.safety_evaluation.calibration.calibration_utils import get_prior
+
+
+_DEFAULT_TERMINAL_PI_MIN = object()
+
+
+def phase1_empirical_budget_limit(
+        phase2_target_budget_per_sample: float,
+        phase1_sample_count: int,
+        maximum_cost_per_sample: float,
+        budget_control_mode: str,
+        phase2_sample_count: int | None = None,
+) -> float:
+    """Return the empirical-cost limit used to tune Local's shadow price.
+
+    ``empirical`` reproduces the implementation used in the paper's
+    experiments. ``crc`` implements the finite-sample selector in Appendix
+    D.4:
+
+        n1/(n1+1) * R_hat(lambda) + L/(n1+1) <= B2.
+
+    Appendix D.4 writes ``L=t_max`` under its additional transformed-loss
+    envelope assumption (35). That condition is not automatic when trajectories
+    may attain ``t_max``. We instead use the always-valid distribution-free
+    envelope
+
+        L = (1 + (n1 + 1) / n2) * t_max,
+
+    because both the expected acquisition cost and the fully observed pilot
+    cost lie in ``[0, t_max]``. This retains the original horizon and costs only
+    ``t_max / n2`` in the selector's per-sample correction.
+    """
+    if budget_control_mode not in {"empirical", "crc"}:
+        raise ValueError(
+            "`budget_control_mode` must be one of: empirical, crc."
+        )
+    if phase1_sample_count <= 0:
+        raise ValueError("`phase1_sample_count` must be positive.")
+    if budget_control_mode == "empirical":
+        return float(phase2_target_budget_per_sample)
+    if phase2_sample_count is None or phase2_sample_count <= 0:
+        raise ValueError(
+            "`phase2_sample_count` must be positive for CRC budget control."
+        )
+    rho = (phase1_sample_count + 1) / phase2_sample_count
+    envelope_upper_bound = (1 + rho) * maximum_cost_per_sample
+    return float(
+        (
+            (phase1_sample_count + 1)
+            * phase2_target_budget_per_sample
+            - envelope_upper_bound
+        )
+        / phase1_sample_count
+    )
 
 
 class AdaptiveOptimizedBudgetAllocator(BudgetAllocator):
@@ -19,16 +75,80 @@ class AdaptiveOptimizedBudgetAllocator(BudgetAllocator):
     3. Ensures a minimum exploration probability to maintain valid IPW properties.
     """
 
-    def __init__(self, conditional_grid, budget_per_sample, taus_range, tau_prior, m_upper_bound, reach_t_max_is_success=False):
+    def __init__(
+            self,
+            conditional_grid,
+            budget_per_sample,
+            taus_range,
+            tau_prior,
+            m_upper_bound,
+            reach_t_max_is_success=False,
+            terminal_pi_min=_DEFAULT_TERMINAL_PI_MIN,
+            terminal_floor_mode="hard",
+            budget_control_mode="empirical"):
         super().__init__(budget_per_sample, taus_range, tau_prior)
         self.conditional_grid = conditional_grid
-        self.min_pi = 0.005
+        if not np.isfinite(m_upper_bound) or m_upper_bound < 1:
+            raise ValueError("`m_upper_bound` must be finite and at least one.")
+        self._uses_default_floor = (
+            terminal_pi_min is _DEFAULT_TERMINAL_PI_MIN
+        )
+        self.min_pi = (
+            1.0 / float(m_upper_bound)
+            if self._uses_default_floor
+            else terminal_pi_min
+        )
+        if self.min_pi is not None and not 0 < self.min_pi <= 1:
+            raise ValueError("`terminal_pi_min` must lie in (0, 1].")
+        if terminal_floor_mode not in {"mixture", "hard", "none"}:
+            raise ValueError(
+                "`terminal_floor_mode` must be one of: mixture, hard, none."
+            )
+        if terminal_floor_mode == "none":
+            # A disabled floor must not retain a misleading numerical floor
+            # in feasibility checks, names, or stored diagnostics.
+            self.min_pi = None
+        elif self.min_pi is None:
+            terminal_floor_mode = "none"
+        self.terminal_floor_mode = terminal_floor_mode
+        if budget_control_mode not in {"empirical", "crc"}:
+            raise ValueError(
+                "`budget_control_mode` must be one of: empirical, crc."
+            )
+        self.budget_control_mode = budget_control_mode
         self.reach_t_max_is_success = reach_t_max_is_success
         # self.budget_per_sample *= 500
 
     @property
     def name(self) -> str:
-        return "adaptive_optimized"
+        if (
+            self._uses_default_floor
+            and self.terminal_floor_mode == "hard"
+        ):
+            suffix = (
+                ""
+                if self.budget_control_mode == "empirical"
+                else f"_{self.budget_control_mode}"
+            )
+            return f"adaptive_optimized{suffix}"
+        if self.min_pi is None:
+            base = "adaptive_optimized_no_terminal_floor"
+            if self.budget_control_mode != "empirical":
+                base += f"_{self.budget_control_mode}"
+            return base
+        floor = (
+            f"{self.min_pi:.6f}"
+            .rstrip("0")
+            .rstrip(".")
+            .replace(".", "p")
+        )
+        base = (
+            f"adaptive_optimized_{self.terminal_floor_mode}"
+            f"_terminal_floor_{floor}"
+        )
+        if self.budget_control_mode != "empirical":
+            base += f"_{self.budget_control_mode}"
+        return base
 
     def allocate_budget(self, probability_est: torch.Tensor, x: torch.Tensor, t: torch.Tensor,
                         quantile_est: torch.Tensor) -> BudgetAllocationResult:
@@ -39,65 +159,140 @@ class AdaptiveOptimizedBudgetAllocator(BudgetAllocator):
         perm = np.random.permutation(N)
         val_idxs = perm[:val_size]
         test_idxs = perm[val_size:]
+        # Compute sample-separable policy inputs once in the original order.
+        # Indexing the much smaller (N,T) result avoids two advanced-index
+        # copies of the full (N,T,T) conditional grid.
+        prior_q = get_prior(
+            quantile_est,
+            self.taus_range,
+            self.tau_prior,
+        )
         # --- Data Splitting ---
         # Validation Set: Used to learn the optimal policy parameters (lambda)
-        val_grid = self.conditional_grid[val_idxs]
-
-        val_prior_q = get_prior(quantile_est[val_idxs], self.taus_range, self.tau_prior)
+        val_prior_q = prior_q[val_idxs]
         t_val = t[val_idxs]
-        val_budget_used = torch.minimum(t_val + 1, val_prior_q + 1).sum().item()
+        val_budget_used = torch.minimum(t_val, val_prior_q).sum().item()
         if total_budget < val_budget_used:
             raise ValueError("Total budget is too small")
 
         # Test Set: The data we need to mine
-        test_grid = self.conditional_grid[test_idxs]
-
-        test_prior_q = get_prior(quantile_est[test_idxs], self.taus_range, self.tau_prior)
+        test_prior_q = prior_q[test_idxs]
         t_test = t[test_idxs]
 
         # Global Target Budget for the test set
         # We assume the budget density (budget per sample) should be consistent
         target_budget_avg = (self.budget_per_sample * N - val_budget_used) / (N - val_size)
         # target_budget_avg = (target_budget_avg  * val_size - val_prior_q.max().item()) / (val_size + 1)
-        val_expected_remaining = precompute_expected_remaining(
-            val_grid,
-            val_prior_q,
+        expected_remaining = precompute_expected_remaining(
+            self.conditional_grid,
+            prior_q,
             sample_chunk_size=256,
         )
+        val_expected_remaining = expected_remaining[val_idxs]
+        test_expected_remaining = expected_remaining[test_idxs]
 
-        test_expected_remaining = precompute_expected_remaining(
-            test_grid,
-            test_prior_q,
-            sample_chunk_size=256,
-        )
-
-        lam_low, lam_high = 0.0, 256.0
-
-        for _ in range(30):
-            mid = (lam_low + lam_high) / 2
-
-            _, val_C_probs, val_expected_cost = simulate_process_vectorized(
+        def validation_expected_cost(lam):
+            return expected_acquisition_cost(
                 val_expected_remaining,
                 val_prior_q,
                 t_val,
-                mid,
-                stochastic=False,
-                reach_t_max_is_success=self.reach_t_max_is_success,
+                lam,
+                terminal_pi_min=self.min_pi,
+                terminal_floor_mode=self.terminal_floor_mode,
+            ).item()
+
+        active_lengths = torch.minimum(
+            t_val.to(torch.long),
+            val_prior_q.to(torch.long),
+        ).clamp(min=0, max=T_max_curr)
+        floor_minimum_cost = (
+            0.0
+            if self.min_pi is None
+            else self.min_pi * active_lengths.sum().item()
+        )
+        empirical_budget_limit = phase1_empirical_budget_limit(
+            target_budget_avg,
+            val_size,
+            T_max_curr,
+            self.budget_control_mode,
+            phase2_sample_count=len(test_idxs),
+        )
+        if empirical_budget_limit < 0:
+            raise ValueError(
+                "The finite-sample Local budget correction is infeasible: "
+                f"its Phase-I empirical-cost limit is "
+                f"{empirical_budget_limit:.6g} per sample. Increase the "
+                "budget or Phase-I sample count."
+            )
+        target_validation_cost = empirical_budget_limit * val_size
+        tolerance = 1e-7 * max(1.0, target_validation_cost)
+        if floor_minimum_cost > target_validation_cost + tolerance:
+            raise ValueError(
+                "The terminal probability floor makes the Local expected "
+                "budget infeasible: minimum Phase-I cost "
+                f"{floor_minimum_cost / val_size:.6g} exceeds target "
+                f"{empirical_budget_limit:.6g} per sample."
             )
 
-            assert val_expected_cost <= val_budget_used + 1e-6
-            avg_cost = val_expected_cost / val_size
+        lam_low, lam_high = 0.0, 256.0
+        high_cost = validation_expected_cost(lam_high)
+        while (
+            high_cost > target_validation_cost + tolerance
+            and lam_high < 1e30
+        ):
+            lam_high *= 2
+            high_cost = validation_expected_cost(lam_high)
+        if high_cost > target_validation_cost + tolerance:
+            raise ValueError(
+                "Could not bracket a Local policy satisfying the expected "
+                "budget. Reduce the terminal floor or increase the budget."
+            )
 
-            if abs(avg_cost - target_budget_avg) < 1e-10:
-                break
+        low_cost = validation_expected_cost(lam_low)
+        if low_cost <= target_validation_cost + tolerance:
+            # The full-follow boundary is already feasible and is optimal.
+            best_lambda = lam_low
+        else:
+            for _ in range(50):
+                mid = (lam_low + lam_high) / 2
+                val_expected_cost = validation_expected_cost(mid)
+                if val_expected_cost > target_validation_cost:
+                    lam_low = mid
+                else:
+                    lam_high = mid
 
-            if avg_cost > target_budget_avg:
-                lam_low = mid
-            else:
-                lam_high = mid
+            # Return the known feasible endpoint, not the midpoint.
+            best_lambda = lam_high
 
-        best_lambda = (lam_low + lam_high) / 2
-
+        tuned_validation_expected_cost = expected_acquisition_cost(
+            val_expected_remaining,
+            val_prior_q,
+            t_val,
+            best_lambda,
+            terminal_pi_min=self.min_pi,
+            terminal_floor_mode=self.terminal_floor_mode,
+        ).item()
+        test_expected_cost = expected_acquisition_cost(
+            test_expected_remaining,
+            test_prior_q,
+            t_test,
+            best_lambda,
+            terminal_pi_min=self.min_pi,
+            terminal_floor_mode=self.terminal_floor_mode,
+        ).item()
+        acquisition_uniforms = self.get_acquisition_uniforms(
+            N,
+            T_max_curr,
+            device=device,
+            dtype=test_expected_remaining.dtype,
+        )
+        test_uniforms = (
+            None
+            if acquisition_uniforms is None
+            else acquisition_uniforms[test_idxs]
+        )
+        if acquisition_uniforms is None:
+            self.reset_acquisition_rng()
         test_C, test_C_probs, test_total_used = simulate_process_vectorized(
             test_expected_remaining,
             test_prior_q,
@@ -105,21 +300,33 @@ class AdaptiveOptimizedBudgetAllocator(BudgetAllocator):
             best_lambda,
             stochastic=True,
             reach_t_max_is_success=self.reach_t_max_is_success,
+            terminal_pi_min=self.min_pi,
+            terminal_floor_mode=self.terminal_floor_mode,
+            uniforms=test_uniforms,
         )
 
         total_budget_used = test_total_used + val_budget_used
+        total_expected_budget = val_budget_used + test_expected_cost
+        crc_rho = (val_size + 1) / len(test_idxs)
+        crc_envelope_upper_bound = (1 + crc_rho) * T_max_curr
+        crc_selector_left_side = (
+            val_size / (val_size + 1)
+            * (tuned_validation_expected_cost / val_size)
+            + crc_envelope_upper_bound / (val_size + 1)
+        )
 
         # Reconstruct full-size tensors
         # Val C: Standard logic (stop at event or horizon)
-        prior_q = torch.empty(N, device=device)
-        prior_q[val_idxs] = val_prior_q
-        prior_q[test_idxs] = test_prior_q
-        val_C = val_prior_q + 1  # torch.minimum(t[:val_size], val_prior_q)
+        val_C = val_prior_q
         # For Validation set, we don't care about C_probs (set to 1.0 or dummy)
         val_C_probs = torch.ones(val_size, device=device)
 
         # Concatenate
-        final_C = torch.empty(N, device=device)
+        final_C = torch.empty(
+            N,
+            device=device,
+            dtype=val_C.dtype,
+        )
         final_C[val_idxs] = val_C
         final_C[test_idxs] = test_C.to(final_C.dtype)
 
@@ -137,8 +344,91 @@ class AdaptiveOptimizedBudgetAllocator(BudgetAllocator):
         # expected_test_budget = val_expected_cost / val_size * (N - val_size)
         # total_budget_used = int(target_budget_avg * (N - val_size) + val_budget_used)
 
-        print(f"adaptive weights {mean_val_weight} | lambda {best_lambda} | total_budget_used {total_budget_used} "
-              f"| total_budget {total_budget} | # observed: {(final_C > t).float().sum().item()}"
-              f"| achieved prior: {(final_C.squeeze() >= prior_q).float().sum().item()}")
-        return BudgetAllocationResult(quantile_est, final_C, final_C_probs, total_budget_used, mean_weight=mean_val_weight,
-                                      max_weight=max_val_weight)
+        additional_metrics = {
+            "phase1_tuned_expected_cost_per_sample": (
+                tuned_validation_expected_cost / val_size
+            ),
+            "phase1_empirical_budget_limit_per_sample": (
+                empirical_budget_limit
+            ),
+            "budget_control_mode": self.budget_control_mode,
+            "crc_finite_sample_penalty_per_sample": (
+                target_budget_avg - empirical_budget_limit
+            ),
+            "crc_selector_left_side_per_sample": crc_selector_left_side,
+            "crc_distribution_free_envelope_upper_bound": (
+                crc_envelope_upper_bound
+            ),
+            "crc_transformed_loss_rho": crc_rho,
+            "crc_distribution_free_envelope_used": int(
+                self.budget_control_mode == "crc"
+            ),
+            "crc_selector_valid": int(
+                self.budget_control_mode != "crc"
+                or crc_selector_left_side <= target_budget_avg + 1e-7
+            ),
+            "local_shadow_price_lambda": best_lambda,
+            "phase1_tuned_expected_cost_total": (
+                tuned_validation_expected_cost
+            ),
+            "phase1_realized_cost_per_sample": (
+                val_budget_used / val_size
+            ),
+            "phase1_realized_cost_total": val_budget_used,
+            "phase2_target_budget_per_sample": target_budget_avg,
+            "phase2_expected_cost_total": test_expected_cost,
+            "phase2_expected_cost_per_sample": (
+                test_expected_cost / len(test_idxs)
+            ),
+            "phase2_expected_budget_gap_per_sample": (
+                test_expected_cost / len(test_idxs) - target_budget_avg
+            ),
+            "phase2_expected_budget_valid": int(
+                test_expected_cost / len(test_idxs)
+                <= target_budget_avg + 1e-7
+            ),
+            "phase2_realized_cost_per_sample": (
+                test_total_used / len(test_idxs)
+            ),
+            "total_expected_budget": total_expected_budget,
+            "total_expected_budget_per_sample": (
+                total_expected_budget / N
+            ),
+            "total_expected_budget_gap": (
+                total_expected_budget - total_budget
+            ),
+            "total_expected_budget_gap_per_sample": (
+                total_expected_budget / N - self.budget_per_sample
+            ),
+            "total_expected_budget_valid": int(
+                total_expected_budget
+                <= total_budget + 1e-7 * max(1.0, N)
+            ),
+            "configured_total_budget": total_budget,
+            "terminal_pi_min": (
+                self.min_pi if self.min_pi is not None else np.nan
+            ),
+            "terminal_floor_mode": self.terminal_floor_mode,
+            "floor_minimum_expected_cost_per_sample": (
+                floor_minimum_cost / val_size
+            ),
+            "phase1_sample_count": val_size,
+            "phase2_sample_count": len(test_idxs),
+            "phase2_mean_inverse_probability": (
+                (1 / test_C_probs).mean().item()
+            ),
+            "phase2_variance_inverse_probability": (
+                (1 / test_C_probs.to(torch.float64))
+                .var(unbiased=False)
+                .item()
+            ),
+        }
+        return BudgetAllocationResult(
+            quantile_est,
+            final_C,
+            final_C_probs,
+            total_budget_used,
+            mean_weight=mean_val_weight,
+            max_weight=max_val_weight,
+            additional_metrics=additional_metrics,
+        )

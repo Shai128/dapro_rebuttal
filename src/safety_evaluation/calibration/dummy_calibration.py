@@ -1,9 +1,11 @@
 from typing import Dict
 
-import numpy as np
 import torch
 
 from src.safety_evaluation.calibration.abstract_calibration import SurvivalLPBCalibration, SurvivalUPBCalibration
+from src.safety_evaluation.calibration.calibration_utils import (
+    select_calibration_positions,
+)
 from src.train_model.models.utils import ModelPrediction, SurvivalModelPrediction
 
 
@@ -22,8 +24,10 @@ class UncalibratedLPBSurvivalCalibration(SurvivalLPBCalibration):
         miscoverage = self.miscoverage
         quantile_est = model_prediction.quantile_est
         target_taus = target_taus.to(quantile_est.device)
-        tau_diff = target_taus - miscoverage[:, np.newaxis]
-        smallest_pos = torch.where(tau_diff > 0, 1, -1.0 * np.inf).cumsum(dim=0).argmax(dim=0)
+        smallest_pos = select_calibration_positions(
+            miscoverage,
+            target_taus,
+        )
         calibrated_test_quantile_est = quantile_est[:, smallest_pos].squeeze()
         return calibrated_test_quantile_est
 
@@ -50,8 +54,10 @@ class UncalibratedUPBSurvivalCalibration(SurvivalUPBCalibration):
         miscoverage = self.miscoverage
         quantile_est = model_prediction.quantile_est
         target_taus = target_taus.to(quantile_est.device)
-        tau_diff = target_taus - miscoverage[:, np.newaxis]
-        smallest_pos = torch.where(tau_diff > 0, 1, -1.0 * np.inf).cumsum(dim=0).argmax(dim=0)
+        smallest_pos = select_calibration_positions(
+            miscoverage,
+            target_taus,
+        )
         calibrated_test_quantile_est = quantile_est[:, smallest_pos].squeeze()
         return calibrated_test_quantile_est
 

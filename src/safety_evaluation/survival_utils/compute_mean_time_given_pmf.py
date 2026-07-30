@@ -417,6 +417,150 @@ def compute_quantile_survival_time(probs, quantile=0.5, tail_distribution='expon
     return quantile_times
 
 
+def compute_quantiles_survival_time(
+        probs,
+        quantiles,
+        tail_distribution='exponential',
+        tail_param=None,
+        quantile_chunk_size=128):
+    """
+    Vectorized equivalent of :func:`compute_quantile_survival_time`.
+
+    The probability normalization, CDF, and fitted tail parameter do not
+    depend on the requested quantile.  Computing them once avoids repeating
+    the same work for every element of a calibration grid.  Quantiles are
+    processed in chunks so memory grows with ``B * T_curr * chunk_size``
+    rather than ``B * T_curr * len(quantiles) * T_future``.
+
+    Returns
+    -------
+    torch.Tensor
+        Shape ``(B, T_curr, n_quantiles)`` in the same zero-based convention
+        as ``compute_quantile_survival_time``.
+    """
+    if probs.ndim != 3:
+        raise ValueError(
+            "`probs` must have shape (B, T_curr, T_future)."
+        )
+    if quantile_chunk_size <= 0:
+        raise ValueError("`quantile_chunk_size` must be positive.")
+
+    B, T_curr, T_future = probs.shape
+    device = probs.device
+    T_max = T_future - 1
+    if T_max <= 0:
+        raise ValueError("`probs` must contain at least one observed-time bin.")
+
+    quantiles = torch.as_tensor(
+        quantiles,
+        dtype=probs.dtype,
+        device=device,
+    ).reshape(-1)
+    if torch.any((quantiles < 0) | (quantiles > 1)):
+        raise ValueError("All quantiles must lie in [0, 1].")
+
+    probs = mask_and_renormalize_probs(probs)
+    probs_observed = probs[:, :, :-1]
+    probs_survival = probs[:, :, -1]
+    cdf_observed = torch.cumsum(probs_observed, dim=-1)
+    cdf_at_tmax = cdf_observed[:, :, -1]
+
+    if tail_param is None:
+        if tail_distribution in ['exponential', 'geometric']:
+            tail_param = estimate_tail_decay_rate(
+                probs,
+                method=tail_distribution,
+                lookback=3,
+            )
+        elif tail_distribution == 'power':
+            tail_param = 2.0
+        elif tail_distribution == 'linear':
+            tail_param = 0.1
+        else:
+            tail_param = 1.0
+
+    if isinstance(tail_param, (int, float)):
+        tail_param = torch.tensor(
+            tail_param,
+            device=device,
+            # Preserve the scalar implementation's historical dtype exactly.
+            dtype=torch.float,
+        )
+    else:
+        tail_param = tail_param.to(device=device)
+    if tail_param.dim() == 0:
+        tail_param = tail_param.unsqueeze(0).unsqueeze(0).expand(B, T_curr)
+    if tuple(tail_param.shape) != (B, T_curr):
+        raise ValueError(
+            "`tail_param` must be scalar or have shape (B, T_curr)."
+        )
+
+    blocks = []
+    for start in range(0, len(quantiles), quantile_chunk_size):
+        q = quantiles[start:start + quantile_chunk_size]
+        q_values = q.reshape(1, 1, -1).expand(B, T_curr, -1).contiguous()
+
+        # searchsorted(..., right=False) is exactly the first CDF coordinate
+        # satisfying CDF >= q, which is the scalar implementation's argmax.
+        quantile_indices = torch.searchsorted(
+            cdf_observed.contiguous(),
+            q_values,
+            right=False,
+        )
+        empirical_quantile = quantile_indices.clamp(
+            max=T_max - 1
+        ).to(torch.float)
+
+        tail_needed = cdf_at_tmax.unsqueeze(-1) < q_values
+        target_prob = (
+            (q_values - cdf_at_tmax.unsqueeze(-1))
+            / (probs_survival.unsqueeze(-1) + 1e-10)
+        ).clamp(0, 0.9999)
+        expanded_tail_param = tail_param.unsqueeze(-1)
+
+        if tail_distribution == 'constant':
+            tail_quantile = torch.full_like(
+                empirical_quantile,
+                T_max + 1.0,
+            )
+        elif tail_distribution == 'geometric':
+            K = (
+                torch.log(1 - target_prob + 1e-10)
+                / torch.log(1 - expanded_tail_param + 1e-10)
+            )
+            tail_quantile = T_max + K.clamp(min=1)
+        elif tail_distribution == 'exponential':
+            K = (
+                -torch.log(1 - target_prob + 1e-10)
+                / (expanded_tail_param + 1e-10)
+            )
+            tail_quantile = T_max + K.clamp(min=1)
+        elif tail_distribution == 'power':
+            K = (
+                (1 - target_prob + 1e-10)
+                ** (1.0 / (1.0 - expanded_tail_param + 1e-10))
+            )
+            tail_quantile = T_max + K.clamp(min=1)
+        elif tail_distribution == 'linear':
+            max_k = (1.0 / (expanded_tail_param + 1e-10)).floor()
+            K = target_prob * max_k
+            tail_quantile = T_max + K.clamp(min=1)
+        else:
+            raise ValueError(
+                f"Unknown tail_distribution: {tail_distribution}"
+            )
+
+        blocks.append(
+            torch.where(
+                tail_needed,
+                tail_quantile,
+                empirical_quantile,
+            )
+        )
+
+    return torch.cat(blocks, dim=-1)
+
+
 def compute_median_survival_time(probs, tail_distribution='exponential', tail_param=None):
     """Compute median (50th percentile) of T | T >= t_curr."""
     return compute_quantile_survival_time(probs, quantile=0.5,
