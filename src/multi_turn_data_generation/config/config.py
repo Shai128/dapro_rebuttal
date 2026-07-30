@@ -42,6 +42,8 @@ class Model(Enum):
     qwen3_30b = 'qwen3_30b'
     neural_chat_7b = 'neural_chat_7b'
     gpt_oss_20b = 'gpt_oss_20b'
+    mistral3_14b_it = 'mistral3_14b_it'
+    gemma4_12b_it = 'gemma4_12b_it'
 
 
 HF_MODEL_NAMES: Dict[Model, str] = {
@@ -64,11 +66,13 @@ HF_MODEL_NAMES: Dict[Model, str] = {
     Model.gemma2_9b_it: 'google/gemma-2-9b-it',
     Model.gemma3_4b_it: 'google/gemma-3-4b-it',
     Model.gemma3_12b_it: 'google/gemma-3-12b-it',
+    Model.gemma4_12b_it: 'google/gemma-4-12B-it',
     Model.qwen3_4b: 'Qwen/Qwen3-4B',
     Model.qwen3_8b: 'Qwen/Qwen3-8B',
     Model.qwen3_30b: 'Qwen/Qwen3-30B-A3B',
     Model.neural_chat_7b: "Intel/neural-chat-7b-v3-1",
     Model.gpt_oss_20b: "openai/gpt-oss-20b",
+    Model.mistral3_14b_it: "mistralai/Ministral-3-14B-Instruct-2512",
 }
 
 MODEL_NAMES = [model.value for model in Model]

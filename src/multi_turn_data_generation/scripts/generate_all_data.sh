@@ -1,10 +1,20 @@
 #!/bin/bash
+source ~/.bashrc
+cd ~/dapro_rebuttal
+conda activate torchenv
+squeue -u $USER | awk '{print $1}' | tail -n+2 | xargs scancel
+git pull
 
 # Configuration arrays
-dataset_names=('toxicity' 'red_team' 'hallucination' 'autoif')
-attacker_models=('qwen25-14b-instruct')
-target_models=('qwen25-14b-instruct' 'llama-3.1-8B-instruct' 'mini_phi_4_instruct' 'gemma3_4b_it')
+#dataset_names=('toxicity' 'red_team' 'hallucination' 'autoif')
+#attacker_models=('qwen25-14b-instruct')
+#target_models=('qwen25-14b-instruct' 'llama-3.1-8B-instruct' 'mini_phi_4_instruct' 'gemma3_4b_it')
 
+# 'gemma4_12b_it'
+dataset_names=('toxicity' )
+attacker_models=('mistral3_14b_it' )
+target_models=('llama-3.1-8B-instruct')
+export PYTHONPATH="src/multi_turn_data_generation:${PYTHONPATH:-}"
 # Iterate through combinations
 for dataset in "${dataset_names[@]}"; do
 
@@ -29,20 +39,48 @@ for dataset in "${dataset_names[@]}"; do
         for attacker in "${attacker_models[@]}"; do
             for target in "${target_models[@]}"; do
 
-                echo "Running: dataset=$dataset, judge=$judge, attacker=$attacker, target=$target"
+                pids=()
 
-                python main.py \
-                    --data-index-start 0 \
-                    --data-index-end 10000 \
-                    --target-model "$target" \
-                    --n-iterations 200 \
-                    --dataset-name "$dataset" \
-                    --judge-model "$judge" \
-                    --batch-size 100 \
-                    --max-n-attack-attempts 20 \
-                    --attack-model "$attacker"
+                for ((i = 0; i < 10; i++)); do
+                    index_start=$((i * 1000))
+                    index_end=$(((i + 1) * 1000))
 
-                echo "Finished: $dataset with $judge (Target: $target)"
+                    echo "Starting process $i: dataset=$dataset, judge=$judge, attacker=$attacker, target=$target, indices=$index_start-$index_end"
+
+                    srun -A galileo \
+                        -p galileo \
+                        -c 4 \
+                        --gres=gpu:1 \
+                        python -m src.multi_turn_data_generation.main \
+                            --data-index-start "$index_start" \
+                            --data-index-end "$index_end" \
+                            --target-model "$target" \
+                            --n-iterations 200 \
+                            --dataset-name "$dataset" \
+                            --judge-model "$judge" \
+                            --batch-size 1000 \
+                            --max-n-attack-attempts 20 \
+                            --attack-model "$attacker" &
+
+                    pids+=("$!")
+                done
+
+                # Wait for all 10 processes for this configuration
+                failed=0
+
+                for pid in "${pids[@]}"; do
+                    if ! wait "$pid"; then
+                        echo "Process $pid failed."
+                        failed=1
+                    fi
+                done
+
+                if ((failed)); then
+                    echo "One or more processes failed: dataset=$dataset, judge=$judge, attacker=$attacker, target=$target"
+                else
+                    echo "Finished all index ranges: dataset=$dataset, judge=$judge, attacker=$attacker, target=$target"
+                fi
+
                 echo "-----------------------------------"
             done
         done
