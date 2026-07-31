@@ -168,7 +168,7 @@ class HFLLMProcess(LanguageModel):
                     texts.append(item)
                 else:
                     if any(type(m['content']) != str for m in item):
-                        all_contents = '\ncontent: '.join(m['content'] for m in item)
+                        all_contents = '\ncontent: '.join(str(m['content']) for m in item)
                         error_message = f"found a non-str content: {all_contents}"
                         print(error_message)
                         raise Exception(error_message)
