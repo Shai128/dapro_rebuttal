@@ -10,6 +10,8 @@ import torch
 from safetensors import SafetensorError
 
 from vllm import LLM, SamplingParams
+import os
+import resource
 
 from src.multi_turn_data_generation.config.config import HF_MODEL_NAMES
 from src.multi_turn_data_generation.llm_wrappers.HFModel import hf_login
@@ -86,6 +88,16 @@ class VLLMModelProcess(LanguageModel):
             target=_vllm_persistent_worker,
             args=(self.init_kwargs, self._task_queue, self._result_queue)
         )
+
+        open_fds = len(os.listdir("/proc/self/fd"))
+        soft_limit, hard_limit = resource.getrlimit(resource.RLIMIT_NOFILE)
+
+        print(
+            f"[FD DEBUG] pid={os.getpid()}, "
+            f"open={open_fds}, soft_limit={soft_limit}, hard_limit={hard_limit}",
+            flush=True,
+        )
+
         self._worker_process.start()
 
     def batched_generate(
