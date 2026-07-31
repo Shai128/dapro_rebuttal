@@ -167,6 +167,11 @@ class HFLLMProcess(LanguageModel):
                 if isinstance(item, str):
                     texts.append(item)
                 else:
+                    if any(type(m['content']) != str for m in item):
+                        all_contents = '\ncontent: '.join(m['content'] for m in item)
+                        error_message = f"found a non-str content: {all_contents}"
+                        print(error_message)
+                        raise Exception(error_message)
                     texts.append("".join(m["content"] for m in item) + "\n\n### RESPONSE BEGINS HERE:\n")
 
             if self.tok.pad_token is None:
