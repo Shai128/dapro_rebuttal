@@ -12,7 +12,7 @@ git pull
 
 # 'gemma4_12b_it'
 dataset_names=('toxicity' )
-attacker_models=('mistral3_14b_it' )
+attacker_models=('gemma4_12b_it' )
 target_models=('llama-3.1-8B-instruct')
 export PYTHONPATH="src/multi_turn_data_generation:${PYTHONPATH:-}"
 # Iterate through combinations
@@ -58,7 +58,7 @@ for dataset in "${dataset_names[@]}"; do
                             --n-iterations 200 \
                             --dataset-name "$dataset" \
                             --judge-model "$judge" \
-                            --batch-size 1000 \
+                            --batch-size 100 \
                             --max-n-attack-attempts 20 \
                             --attack-model "$attacker" &
 
