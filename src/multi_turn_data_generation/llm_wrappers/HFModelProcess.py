@@ -167,7 +167,7 @@ class HFLLMProcess(LanguageModel):
                 if isinstance(item, str):
                     texts.append(item)
                 else:
-                    texts.append("".join(m["content"] for m in item) + "\n\n### RESPONSE BEGINS HERE:\n")
+                    texts.append("".join(str(m["content"]) for m in item) + "\n\n### RESPONSE BEGINS HERE:\n")
 
             if self.tok.pad_token is None:
                 self.tok.pad_token = self.tok.eos_token
