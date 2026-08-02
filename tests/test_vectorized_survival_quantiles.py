@@ -1,7 +1,7 @@
 import pytest
 import torch
 
-from src.safety_evaluation.survival_utils.compute_mean_time_given_pmf import (
+from src.predictive_bounds.survival_utils.compute_mean_time_given_pmf import (
     compute_quantile_survival_time,
     compute_quantiles_survival_time,
 )

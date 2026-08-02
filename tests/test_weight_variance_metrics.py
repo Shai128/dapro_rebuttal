@@ -1,17 +1,17 @@
 import numpy as np
 import torch
 
-from src.safety_evaluation.budget_allocators.budget_allocator import (
+from src.predictive_bounds.budget_allocators.budget_allocator import (
     BudgetAllocationResult,
     BudgetAllocator,
 )
-from src.safety_evaluation.calibration.calibration_utils import (
+from src.predictive_bounds.calibration.calibration_utils import (
     indexed_tensor_metrics,
 )
-from src.safety_evaluation.calibration.survival_calibration_with_known_weights import (
+from src.predictive_bounds.calibration.survival_calibration_with_known_weights import (
     SurvivalCalibrationWithKnownWeights,
 )
-from src.safety_evaluation.calibration.survival_upb_calibration_with_known_weights import (
+from src.predictive_bounds.calibration.survival_upb_calibration_with_known_weights import (
     SurvivalUPBCalibrationWithKnownWeights,
 )
 from src.train_model.models.utils import SurvivalModelPrediction
@@ -232,3 +232,51 @@ def test_literal_selected_a_is_separate_from_estimability_gate():
     assert metrics["all_observed_jailbreaks_0"] == 1
     assert metrics["all_f_lower_c_0"] == 1
     assert metrics["all_observed_both_0"] == 0
+
+
+def test_upb_selected_a_weight_metrics_use_the_upper_tail_event():
+    taus = torch.tensor([0.5, 0.7, 0.9])
+    allocator = DummyAllocator(1.0, taus, tau_prior=0.9)
+    calibration = SurvivalUPBCalibrationWithKnownWeights(
+        allocator,
+        taus,
+        tau_prior=0.9,
+    )
+    f = torch.tensor([
+        [2.0, 3.0, 4.0],
+        [2.0, 3.0, 4.0],
+        [3.0, 4.0, 5.0],
+    ])
+    calibration.t_cal = torch.tensor([1.0, 5.0, 4.0])
+    calibration.miscoverage = torch.tensor([0.4, 0.2, 0.1])
+    calibration.allocation_result = BudgetAllocationResult(
+        f=f,
+        C=torch.tensor([4.0, 4.0, 4.0]),
+        C_probs=torch.tensor([0.5, 0.25, 1.0]),
+        total_budget_used=12,
+    )
+    prediction = SurvivalModelPrediction(
+        quantile_est=f,
+        probability_est=torch.zeros(3, 1),
+    )
+
+    metrics = calibration.compute_metrics(
+        prediction,
+        torch.tensor([0.7]),
+    )
+
+    np.testing.assert_allclose(metrics["alpha_hat_per_tau_0"], 0.2)
+    np.testing.assert_allclose(
+        metrics["mean_a_weighted_inverse_probability_minus_one_0"],
+        1.0,
+    )
+    np.testing.assert_allclose(
+        metrics["mean_a_weighted_inverse_probability_0"],
+        4 / 3,
+    )
+    np.testing.assert_allclose(
+        metrics["variance_a_weighted_inverse_probability_0"],
+        32 / 9,
+    )
+    assert metrics["all_observed_jailbreaks_0"] == 1
+    assert metrics["all_observed_both_0"] == 1

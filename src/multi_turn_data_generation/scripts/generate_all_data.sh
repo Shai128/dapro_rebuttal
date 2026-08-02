@@ -41,7 +41,7 @@ for dataset in "${dataset_names[@]}"; do
 
                 pids=()
 
-                for ((i = 0; i < 10; i++)); do
+                for ((i = 0; i < 1; i++)); do
                     index_start=$((i * 1000))
                     index_end=$(((i + 1) * 1000))
 

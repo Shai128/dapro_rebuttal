@@ -1,3 +1,5 @@
+"""Generate synthetic sequential data under the shared one-based timing contract."""
+
 import os
 
 import numpy as np
@@ -8,6 +10,7 @@ from sklearn.model_selection import train_test_split
 from torch import nn
 
 from src.utils.utils import set_seeds
+from src.dataset_utils.temporal import event_metadata_from_labels, normalize_event_times
 
 
 def simulate_converging_probabilities(
@@ -123,6 +126,16 @@ def generate_syn_data(train_size=4000, cal_size = 4000, test_size = 4000):
         n_samples_train = np.load(f"{data_store_dir}/n_samples_train.npy", allow_pickle=True)[:train_size]
         n_samples_cal = np.load(f"{data_store_dir}/n_samples_cal.npy", allow_pickle=True)
         n_samples_test = np.load(f"{data_store_dir}/n_samples_test.npy", allow_pickle=True)
+        horizon = y_train.shape[1]
+        t_tilde_train = normalize_event_times(
+            torch.as_tensor(t_tilde_train), torch.as_tensor(e_train), horizon
+        ).numpy()
+        t_tilde_cal = normalize_event_times(
+            torch.as_tensor(t_tilde_cal), torch.as_tensor(e_cal), horizon
+        ).numpy()
+        t_tilde_test = normalize_event_times(
+            torch.as_tensor(t_tilde_test), torch.as_tensor(e_test), horizon
+        ).numpy()
         return (
             p_train, p_cal, p_test, x_train, x_cal, x_test, y_train, y_cal, y_test, t_tilde_train, t_tilde_cal,
             t_tilde_test,
@@ -176,10 +189,9 @@ def generate_syn_data(train_size=4000, cal_size = 4000, test_size = 4000):
     # t_tilde = np.random.geometric(p, size=len(p))
     # t_tilde = np.minimum(t_tilde, n_samples)
 
-    t_tilde = np.array([yi.argmax().item() + 1 if any(yi) else yi.shape[0] for yi in y])
-
-    # Event indicator: 1 if there is at least one success, else 0.
-    e = np.array([1 if yi.any() else 0 for yi in y])
+    t_tilde_tensor, e_tensor = event_metadata_from_labels(torch.as_tensor(y))
+    t_tilde = t_tilde_tensor.numpy()
+    e = e_tensor.numpy()
     x = torch.Tensor(x).permute(0, 2, 1).numpy()
     (
         p_train,

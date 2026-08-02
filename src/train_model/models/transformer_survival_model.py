@@ -18,20 +18,39 @@ class DiscreteSurvivalLoss(nn.Module):
         self.censored_mode = censored_mode
 
     def forward(self, probs, true_times, event_indicators):
+        """Compute NLL under the repository's one-based event-time contract.
+
+        For observed events, ``true_times`` is in ``1..T`` and maps to output
+        class ``true_times - 1``.  For censored partial sequences it is the
+        number of consecutive negative labels already revealed (``0..T``).
+        Full-data callers may pass the canonical no-event sentinel ``T + 1``;
+        it is clamped to the terminal survival class.
+        """
         B, T_curr, T_future = probs.shape
         device = probs.device
 
-        # Valid mask
+        event_indicators = event_indicators.bool()
         t_curr_grid = torch.arange(T_curr, device=device).unsqueeze(0)
         true_times_expanded = true_times.unsqueeze(1)
-        valid_mask = t_curr_grid <= true_times_expanded
+        # Before an event at count k, x rows 0..k-1 are valid.  With c known
+        # negative labels, x rows 0..c are valid unless c is the full horizon.
+        event_valid = t_curr_grid < true_times_expanded
+        censor_last_x = true_times_expanded.clamp(max=T_curr - 1)
+        censor_valid = t_curr_grid <= censor_last_x
+        valid_mask = torch.where(
+            event_indicators.unsqueeze(1), event_valid, censor_valid
+        )
 
-        # Target indices
-        target_indices = true_times_expanded.clamp(max=T_future - 1).long()
-        target_indices_exp = target_indices.expand(-1, T_curr)
+        event_indices = (true_times_expanded - 1).clamp(
+            min=0, max=T_future - 2
+        ).long()
+        event_indices_exp = event_indices.expand(-1, T_curr)
+        censor_threshold = true_times_expanded.clamp(
+            min=0, max=T_future - 1
+        ).long()
 
         # UNCENSORED: P(T = true_time)
-        prob_event = probs.gather(-1, target_indices_exp.unsqueeze(-1)).squeeze(-1)
+        prob_event = probs.gather(-1, event_indices_exp.unsqueeze(-1)).squeeze(-1)
 
         # CENSORED: Different approaches
         if self.censored_mode == 'survival_class':
@@ -44,7 +63,7 @@ class DiscreteSurvivalLoss(nn.Module):
             # Approach 1: Sum all probabilities > true_time
             # Theoretically correct but harder to optimize
             time_grid = torch.arange(T_future, device=device).reshape(1, 1, -1)
-            survival_mask = time_grid >= target_indices.unsqueeze(-1)  # Strictly > TODO: notice this... >
+            survival_mask = time_grid >= censor_threshold.unsqueeze(-1)
             prob_survival = (probs * survival_mask.float()).sum(dim=-1)
 
         elif self.censored_mode == 'hybrid':
@@ -56,7 +75,7 @@ class DiscreteSurvivalLoss(nn.Module):
 
             # Get sum of probabilities > true_time (excluding survival class)
             time_grid = torch.arange(T_future - 1, device=device).reshape(1, 1, -1)
-            future_mask = time_grid > target_indices.unsqueeze(-1)
+            future_mask = time_grid >= censor_threshold.unsqueeze(-1)
             future_prob = (probs[:, :, :-1] * future_mask.float()).sum(dim=-1)
 
             # Weighted combination (emphasize survival class)
@@ -334,9 +353,10 @@ def plot_survival_calibration(probs, true_times, event_indicators, t_curr, t_int
     # If censored before t_interest, we usually exclude them or use IPCW (simplified here)
 
     # Simple approach: Drop patients censored before t_interest
-    valid_idx = (true_times >= t_interest) | (event_indicators == 1)
+    target_count = t_interest + 1
+    valid_idx = (true_times >= target_count) | (event_indicators == 1)
 
-    y_true = (true_times[valid_idx] <= t_interest).float().cpu().numpy()
+    y_true = (true_times[valid_idx] <= target_count).float().cpu().numpy()
     y_prob = risk_scores[valid_idx]
 
     # 3. Calculate curve
@@ -351,4 +371,3 @@ def plot_survival_calibration(probs, true_times, event_indicators, t_curr, t_int
     plt.title(f'Calibration Plot at t={t_interest}')
     plt.legend()
     plt.show()
-

@@ -8,7 +8,7 @@ from mpl_toolkits.axes_grid1.inset_locator import mark_inset
 from matplotlib.ticker import FormatStrFormatter
 
 # Import parameter functions from your internal source
-from src.safety_evaluation.utils.get_best_params_utils import (
+from src.predictive_bounds.utils.get_best_params_utils import (
     get_best_rexp3_params,
     new_alg_best_params,
     get_best_discounted_ucb_params

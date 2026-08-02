@@ -2,30 +2,30 @@ import numpy as np
 import pytest
 import torch
 
-from src.safety_evaluation.budget_allocators.basic_allocator import (
+from src.predictive_bounds.budget_allocators.basic_allocator import (
     BasicBudgetAllocator,
 )
-from src.safety_evaluation.budget_allocators.budget_allocator import (
+from src.predictive_bounds.budget_allocators.budget_allocator import (
     summarize_expected_budget,
 )
-from src.safety_evaluation.budget_allocators.DAPRO import (
-    DAPRO,
+from src.predictive_bounds.budget_allocators.DAPRO import (
+    LegacyMeanWeightDAPRO,
     RandomAnchoredTargetAWeightedDAPRO,
     TargetAWeightedDAPRO,
 )
-from src.safety_evaluation.budget_allocators.naive_allocator import (
+from src.predictive_bounds.budget_allocators.naive_allocator import (
     NaiveBudgetAllocator,
 )
-from src.safety_evaluation.budget_allocators.optimized_allocators import (
+from src.predictive_bounds.budget_allocators.optimized_allocators import (
     OptimizedBudgetAllocator,
 )
-from src.safety_evaluation.budget_allocators.trimmed_allocator import (
+from src.predictive_bounds.budget_allocators.trimmed_allocator import (
     TrimmedBudgetAllocator,
 )
-from src.safety_evaluation.budget_allocators.uniform_allocator import (
+from src.predictive_bounds.budget_allocators.uniform_allocator import (
     UniformBudgetAllocator,
 )
-from src.safety_evaluation.calibration.survival_calibration_with_known_weights import (
+from src.predictive_bounds.calibration.survival_calibration_with_known_weights import (
     SurvivalCalibrationWithKnownWeights,
 )
 from src.train_model.models.utils import SurvivalModelPrediction
@@ -230,7 +230,7 @@ def test_all_dapro_families_report_complete_expected_budget_identity(target_a):
             target_alpha=0.10,
         )
         if target_a
-        else DAPRO(**common_kwargs)
+        else LegacyMeanWeightDAPRO(**common_kwargs)
     )
     allocator.set_acquisition_randomness(
         seed=31,

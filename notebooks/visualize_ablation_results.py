@@ -2,12 +2,12 @@ import os.path
 import pandas as pd
 import os
 
-from src.safety_evaluation.calibration.survival_calibration_with_known_weights import get_gamma
+from src.predictive_bounds.calibration.survival_calibration_with_known_weights import get_gamma
 
 import numpy as np
 import matplotlib.pyplot as plt
 
-from src.safety_evaluation.utils.utils import get_merged_calibration_result_path
+from src.predictive_bounds.utils.utils import get_merged_calibration_result_path
 
 
 def load_results(dataset_name, data_setup, budget_per_sample, cal_size, m_upper_bound, tau_prior):

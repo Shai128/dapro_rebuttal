@@ -2,20 +2,20 @@ import numpy as np
 import pytest
 import torch
 
-from src.safety_evaluation.budget_allocators.adaptive_optimized_allocator import (
+from src.predictive_bounds.budget_allocators.adaptive_optimized_allocator import (
     AdaptiveOptimizedBudgetAllocator,
 )
-from src.safety_evaluation.budget_allocators.budget_allocator import (
+from src.predictive_bounds.budget_allocators.budget_allocator import (
     BudgetAllocator,
 )
-from src.safety_evaluation.budget_allocators.DAPRO import DAPRO
-from src.safety_evaluation.budget_allocators.projected_optimization_utils import (
+from src.predictive_bounds.budget_allocators.DAPRO import LegacyMeanWeightDAPRO
+from src.predictive_bounds.budget_allocators.projected_optimization_utils import (
     adaptive_budget_allocation,
 )
-from src.safety_evaluation.budget_allocators.random_adaptive_optimized_allocator import (
+from src.predictive_bounds.budget_allocators.random_adaptive_optimized_allocator import (
     RandomAdaptiveOptimizedBudgetAllocator,
 )
-from src.safety_evaluation.construct_calibrated_bound import (
+from src.predictive_bounds.construct_calibrated_bound import (
     _make_common_acquisition_uniforms,
 )
 from src.utils.utils import set_seeds
@@ -175,7 +175,7 @@ def _run_dynamic_allocators_in_order(order):
     results = {}
     for name in order:
         if name == "dapro":
-            allocator = DAPRO(
+            allocator = LegacyMeanWeightDAPRO(
                 grid,
                 1.8,
                 taus,

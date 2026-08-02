@@ -1,3 +1,5 @@
+"""Load, jointly shuffle, and tensorize aligned sequential-data fields."""
+
 from src.dataset_utils.real_data import generate_real_data
 from src.dataset_utils.synthetic_data import generate_syn_data
 
@@ -7,6 +9,7 @@ import gc  # Garbage Collection
 
 
 def get_data(is_real, device, dataset_name, data_setup, load_x=True, seed=0):
+    """Return aligned train/calibration/test tensors under one shared permutation."""
     print(f"loading data real: {is_real}, dataset_name: {dataset_name}, data_setup: {data_setup}")
 
     # 1. Load initial Data
@@ -17,7 +20,6 @@ def get_data(is_real, device, dataset_name, data_setup, load_x=True, seed=0):
     else:
         p_train, p_cal, p_test, x_train, x_cal, x_test, y_train, y_cal, y_test, t_tilde_train, t_tilde_cal, t_tilde_test, \
             e_train, e_cal, e_test, b_train, b_cal, b_test, n_samples_train, n_samples_cal, n_samples_test = generate_syn_data()
-        train_size = 500
     #     p_train, x_train, y_train, t_tilde_train, e_train, b_train, n_samples_train = p_train[:train_size], \
     #         x_train[:train_size], \
     #         y_train[:train_size], \
@@ -39,6 +41,9 @@ def get_data(is_real, device, dataset_name, data_setup, load_x=True, seed=0):
     t_tilde_all = np.concatenate([t_tilde_train, t_tilde_cal, t_tilde_test], axis=0)
     e_all = np.concatenate([e_train, e_cal, e_test], axis=0)
     b_all = np.concatenate([b_train, b_cal, b_test], axis=0)
+    n_samples_all = np.concatenate(
+        [n_samples_train, n_samples_cal, n_samples_test], axis=0
+    )
     # Generate shuffled indices based on the seed
     total_samples = len(p_all)
 
@@ -47,17 +52,18 @@ def get_data(is_real, device, dataset_name, data_setup, load_x=True, seed=0):
         rng.shuffle(arr)  # In-place operation on the first axis
 
     if load_x:
-        # MEMORY OPTIMIZATION 1: Concatenate into a float32 array immediately
-        # float32 = 4 bytes (vs 8 bytes for double). This cuts memory usage by 50%.
-        # We pre-allocate the buffer to avoid memory fragmentation.
-        # print("Concatenating X (converting to float64)...")
+        # Pre-allocate one buffer to avoid a second large concatenate copy.
+        # Preserve the cached embedding dtype (normally float32); the old
+        # float64 allocation silently doubled peak memory.
 
         # Determine shape
         feat_dim = x_train.shape[2]  # 2048
         # Note: We do NOT add the time dimension here. It adds 32GB overhead for a simple index.
         # Add the time feature in your Model's forward() method instead.
 
-        x_all = np.empty((total_samples, x_train.shape[1], feat_dim ), dtype=np.float64)
+        x_all = np.empty(
+            (total_samples, x_train.shape[1], feat_dim), dtype=x_train.dtype
+        )
 
         # Fill buffer
         x_all[:n_train, :,] = x_train
@@ -92,6 +98,7 @@ def get_data(is_real, device, dataset_name, data_setup, load_x=True, seed=0):
     shuffle_in_place(t_tilde_all, seed)
     shuffle_in_place(e_all, seed)
     shuffle_in_place(b_all, seed)
+    shuffle_in_place(n_samples_all, seed)
 
     # Split back into train, cal, test
     p_train, p_cal, p_test = p_all[:n_train], p_all[n_train:n_train + n_cal], p_all[n_train + n_cal:]
@@ -100,6 +107,11 @@ def get_data(is_real, device, dataset_name, data_setup, load_x=True, seed=0):
                                                                                                             n_train + n_cal:]
     e_train, e_cal, e_test = e_all[:n_train], e_all[n_train:n_train + n_cal], e_all[n_train + n_cal:]
     b_train, b_cal, b_test = b_all[:n_train], b_all[n_train:n_train + n_cal], b_all[n_train + n_cal:]
+    n_samples_train, n_samples_cal, n_samples_test = (
+        n_samples_all[:n_train],
+        n_samples_all[n_train:n_train + n_cal],
+        n_samples_all[n_train + n_cal:],
+    )
 
     # -------------------------------------------------------------------------
 

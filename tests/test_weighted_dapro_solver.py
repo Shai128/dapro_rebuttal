@@ -3,33 +3,33 @@ import pytest
 import torch
 from types import SimpleNamespace
 
-from src.safety_evaluation.budget_allocators.DAPRO import (
+from src.predictive_bounds.budget_allocators.DAPRO import (
     BandRegularizedTargetAWeightedDAPRO,
     RegularizedTargetAWeightedDAPRO,
     RobustTargetAWeightedDAPRO,
     TargetAWeightedDAPRO,
 )
-from src.safety_evaluation.budget_allocators.optimization_solver_utils import (
+from src.predictive_bounds.budget_allocators.optimization_solver_utils import (
     solve_binned_deployable_policy,
     solve_exact_fast,
     solve_time_only_cumulative_policy,
 )
-from src.safety_evaluation.budget_allocators.projected_optimization_utils import (
+from src.predictive_bounds.budget_allocators.projected_optimization_utils import (
     correct_projected_cumulative_probabilities_to_budget,
     correct_projected_probabilities_to_budget,
     enforce_terminal_probability_floor,
     expected_acquisition_cost,
 )
-from src.safety_evaluation.calibration.calibration_utils import (
+from src.predictive_bounds.calibration.calibration_utils import (
     select_calibration_positions,
 )
-from src.safety_evaluation.construct_calibrated_bound import (
+from src.predictive_bounds.construct_calibrated_bound import (
     get_baseline_calibrations,
 )
-from src.safety_evaluation.merge_bounds_results import (
+from src.predictive_bounds.merge_bounds_results import (
     get_calibration_methods as get_merge_calibration_methods,
 )
-from src.safety_evaluation.utils.utils import resolve_m_upper_bound
+from src.predictive_bounds.utils.utils import resolve_m_upper_bound
 
 
 def terminal_probabilities(probabilities, lengths):
@@ -85,6 +85,7 @@ def test_construct_registers_all_a_weighted_lpb_variants():
         cal_model_prediction=prediction,
         t_tilde_cal=torch.ones(101),
         bound_type="lpb",
+        dapro_n1_values=(100,),
     )
     names = {calibration.name for calibration in calibrations}
 
@@ -146,10 +147,11 @@ def test_construct_registers_all_a_weighted_lpb_variants():
             taus_range=taus,
             tau_prior=0.56,
             m_upper_bound=5,
-            allocations="none",
-            device="cpu",
-            bound_type="lpb",
-        )
+                allocations="none",
+                device="cpu",
+                bound_type="lpb",
+                dapro_n1_values=(100,),
+            )
     }
     assert names == merge_names
     ordinary_name = (
@@ -171,6 +173,7 @@ def test_construct_registers_all_a_weighted_lpb_variants():
         t_tilde_cal=torch.ones(101),
         bound_type="lpb",
         evaluate_dapro_projection=True,
+        dapro_n1_values=(100,),
     )
     diagnostic_ordinary = next(
         calibration

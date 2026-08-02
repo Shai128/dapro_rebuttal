@@ -82,7 +82,7 @@ class ActiveLearner:
         """
         Counts number of events (y == 1) among observed timesteps.
         Handles dataset.y being numpy or torch tensor.
-        Only counts up to dataset.obs_lens[idx] for each idx.
+        Counts only labels whose reveal mask is true.
         Returns integer total.
         """
         total_events = 0
@@ -90,8 +90,8 @@ class ActiveLearner:
         # try to get y as numpy for speed, otherwise handle per-sample
         y_all = getattr(self.dataset, 'y', None)
         for idx in range(N):
-            obs_len = int(self.dataset.obs_lens[idx])
-            if obs_len <= 0:
+            known = self.dataset.label_known[idx]
+            if not bool(known.any()):
                 continue
             if y_all is None:
                 # fallback: fetch item via dataset[idx] (may be expensive)
@@ -106,11 +106,11 @@ class ActiveLearner:
                 # y_all exists; handle torch or numpy
                 yi = y_all[idx]
                 if isinstance(yi, torch.Tensor):
-                    # slice [:obs_len] and sum equality to 1
-                    total_events += int((yi[:obs_len] == 1).sum().item())
+                    total_events += int(((yi == 1) & known).sum().item())
                 else:
-                    # assume numpy-like
-                    total_events += int((np.array(yi[:obs_len]) == 1).sum())
+                    total_events += int(
+                        ((np.asarray(yi) == 1) & known.cpu().numpy()).sum()
+                    )
         return total_events
 
     def _make_validation_dataloader(self, validation_indices: List[int], batch_size: int, shuffle: bool = True):
@@ -118,7 +118,9 @@ class ActiveLearner:
         return DataLoader(subset, batch_size=batch_size, shuffle=shuffle, num_workers=0)
 
     def _make_train_dataloader(self, validation_indices: List[int], batch_size: int, shuffle: bool = True):
-        indices = list(set((self.dataset.obs_lens > 1).nonzero().squeeze().tolist()) - set(validation_indices))
+        has_known_label = self.dataset.label_known.any(dim=1)
+        indices = has_known_label.nonzero(as_tuple=False).flatten().tolist()
+        indices = list(set(indices) - set(validation_indices))
         subset = Subset(self.dataset, indices)
         return DataLoader(subset, batch_size=batch_size, shuffle=shuffle, num_workers=0)
 
@@ -244,7 +246,8 @@ class ActiveLearner:
          - model weights
         """
         os.makedirs(outdir, exist_ok=True)
-        # make sure obs_lens is serializable (list of ints)
+        # Store both visibility and label revelation.  obs_lens alone cannot
+        # distinguish "x[t] visible, y[t] unknown" from a terminal state.
         obs_lens = [int(x) for x in getattr(self.dataset, 'obs_lens')]
         state = {
             'labeled_indices': self.labeled_indices,
@@ -252,6 +255,7 @@ class ActiveLearner:
             'history': self.history,
             'current_round': round,
             'obs_lens': obs_lens,
+            'label_known': self.dataset.label_known.detach().cpu(),
             'total_acquisitions': int(self.total_acquisitions),
         }
         torch.save({
@@ -274,12 +278,25 @@ class ActiveLearner:
         self.history = state['history']
         last_round = state['current_round']
 
-        # restore dataset observed lengths exactly so the stepwise reveal continues where it left off
+        # Restore the exact online reveal state.  Legacy checkpoints only
+        # stored obs_lens; reconstruct their guaranteed-known negative prefix
+        # conservatively instead of replaying one observation too many.
         saved_obs = state.get('obs_lens', None)
         if saved_obs is not None and update_steps:
-            for i in range(len(saved_obs)):
-                for _ in range(saved_obs[i]):
-                    self.dataset.observe_next_step([i])
+            saved_known = state.get('label_known')
+            if saved_known is None:
+                saved_obs_tensor = torch.as_tensor(
+                    saved_obs, dtype=torch.long, device=self.dataset.y.device
+                )
+                saved_known = torch.zeros_like(self.dataset.label_known)
+                known_counts = (saved_obs_tensor - 1).clamp_min(0)
+                time = torch.arange(self.dataset.T, device=self.dataset.y.device)
+                saved_known = time.unsqueeze(0) < known_counts.unsqueeze(1)
+                # Seed/validation samples are initialized as fully observed by
+                # the caller and remain exactly recoverable in old states.
+                initially_full = self.dataset.label_known.all(dim=1)
+                saved_known[initially_full] = True
+            self.dataset.restore_observation_state(saved_obs, saved_known)
 
         # restore cumulative acquisitions counter
         self.total_acquisitions = int(
@@ -325,28 +342,26 @@ class ActiveLearner:
         for idx, ev in zip(selected_idxs, event_flags):
             if idx not in self.labeled_indices:
                 self.labeled_indices.append(idx)
-            # if event observed or obs_len == T -> remove from pool (no more revealing)
-            if ev or (self.dataset.obs_lens[idx] >= self.dataset.T):
+            # Reaching obs_len == T only reveals x[T-1]; y[T-1] still needs
+            # one final acquisition. Remove only after an event or all labels.
+            if ev or self.dataset.is_terminal(idx):
                 if idx in self.pool_indices:
                     self.pool_indices.remove(idx)
 
     def __conduct_one_batch_full_time_acquire(self, selected_idxs: List[int], total_budget_left):
-        assert (len(selected_idxs) - 1) * self.max_time < total_budget_left
         n_acquired = 0
-        if len(selected_idxs) * self.max_time > total_budget_left:
-            partial_select_idx = selected_idxs[-1]
-            selected_idxs = selected_idxs[:-1]
-            for _ in range(0, total_budget_left - (len(selected_idxs) - 1) * self.max_time):
-                self.dataset.observe_next_step([partial_select_idx])
-                n_acquired += 1
-                # total_budget_left -= 1
-                self.total_acquisitions += 1
-        self.dataset.set_fully_observed(selected_idxs)
         for idx in selected_idxs:
-            self.pool_indices.remove(idx)
-        n_acquired += len(selected_idxs) * self.max_time
-        # total_budget_left -= len(selected_idxs) * self.max_time
-        self.total_acquisitions += len(selected_idxs) * self.max_time
+            acquired_before = n_acquired
+            while n_acquired < total_budget_left and not self.dataset.is_terminal(idx):
+                self.dataset.observe_next_step([idx])
+                n_acquired += 1
+                self.total_acquisitions += 1
+            if n_acquired > acquired_before and idx not in self.labeled_indices:
+                self.labeled_indices.append(idx)
+            if self.dataset.is_terminal(idx) and idx in self.pool_indices:
+                self.pool_indices.remove(idx)
+            if n_acquired >= total_budget_left:
+                break
         return n_acquired
 
     def __conduct_one_batch_acquire(self, model, total_budget_left, acquire_batch_size, samples_acquire_batch_size,
@@ -363,15 +378,20 @@ class ActiveLearner:
                     all_selected.append(selected)
                     n_acquired = self.__conduct_one_batch_full_time_acquire(selected, total_budget_left)
                     total_acquired += n_acquired
-                    total_budget_left -= total_acquired
+                    total_budget_left -= n_acquired
+                    if total_budget_left <= 0:
+                        break
             else:
                 for _ in range(n_repeated_samples_acquire):
                     max_acquire = min(samples_acquire_batch_size, len(self.pool_indices), total_budget_left, samples_acquire_batch_size)
                     selected = self.acquire(model, k=max_acquire, batch_size=acquire_batch_size)
                     all_selected.append(selected)
                     self.__conduct_one_batch_one_time_acquire(selected)
-                    total_acquired += len(selected)
-                    total_budget_left -= total_acquired
+                    batch_acquired = len(selected)
+                    total_acquired += batch_acquired
+                    total_budget_left -= batch_acquired
+                    if total_budget_left <= 0:
+                        break
         return all_selected, total_acquired
 
     # --- Changes to run (bookkeeping/round_info updates) ---

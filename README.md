@@ -26,14 +26,15 @@ Once conversations are generated, we extract semantic embeddings to represent th
 We treat safety evaluation as a survival analysis problem—predicting *when* a model might fail (or be jailbroken) across conversational turns. 
 - A **Transformer Survival Model** is trained on the embeddings to estimate survival probabilities and failure quantiles.
 
-### 4. Safety Evaluation & Bounds Construction (`src/safety_evaluation/`)
+### 4. Predictive Bounds & Metric Evaluation (`src/predictive_bounds/`)
 With the model trained, we construct confidence bounds and estimate metrics. This is where **Budget Allocators** (like DAPRO, Naive, Uniform, etc.) are utilized to efficiently allocate "compute budget" (e.g., the number of attack attempts to simulate) to different samples.
 - **LPB / UPB Construction:** Run `construct_calibrated_bound.py --bound-type lpb` (or `upb`) to compute calibrated lower and upper safety bounds.
-- **Metrics Estimation:** Run `estimate_metrics.py` to simulate trajectories and calculate exact metrics (like Cumulative Jailbreak Rate or Cost Per Jailbreak) using IPCW weighting.
+- **Metrics Estimation:** Run `python -m src.predictive_bounds.experiments.metrics.estimate` to simulate trajectories and calculate exact metrics (like Cumulative Jailbreak Rate or Cost Per Jailbreak) using IPCW weighting.
+- **Paper experiments and ablations:** See `src/predictive_bounds/experiments/README.md` for the full comparison, all eight ablations, strict mergers, report generators, and the combined server runner.
 
 ### 5. Result Merging
 The evaluation outputs are generated across multiple seeds and methods. We merge them into unified DataFrames for easy downstream analysis.
-- Run `merge_bounds_results.py` or `merge_estimate_metrics_results.py` to aggregate the `.csv` outputs.
+- Run `python -m src.predictive_bounds.merge_bounds_results` or `python -m src.predictive_bounds.experiments.metrics.merge_results` to aggregate the `.csv` outputs.
 
 ### 6. Visualization & Demonstration (`notebooks/`)
 Finally, explore the results interactively! The `notebooks/` directory contains rich Jupyter Notebooks that load the merged dataframes and plot coverage bounds, budget usages, and safety metric comparisons.
@@ -42,7 +43,7 @@ Finally, explore the results interactively! The `notebooks/` directory contains 
 
 ## 🛠️ Environment Setup
 
-To run this project, ensure you have Python 3.8+ installed. We recommend creating a virtual environment:
+To run this project, ensure you have Python 3.10+ installed. We recommend creating a virtual environment:
 
 ```bash
 # Create and activate a virtual environment
@@ -85,7 +86,7 @@ Run evaluations from the project root so Python can resolve the `src.` imports p
 
 **To Estimate Safety Metrics:**
 ```bash
-python -m src.safety_evaluation.estimate_metrics \
+python -m src.predictive_bounds.experiments.metrics.estimate \
     --data-type real \
     --dataset-name <dataset_name> \
     --dataset-setup <setup> \
@@ -95,7 +96,7 @@ python -m src.safety_evaluation.estimate_metrics \
 
 **To Construct Calibrated Bounds (LPB/UPB):**
 ```bash
-python -m src.safety_evaluation.construct_calibrated_bound \
+python -m src.predictive_bounds.construct_calibrated_bound \
     --bound-type lpb \
     --data-type real \
     --dataset-name <dataset_name> \
@@ -109,14 +110,14 @@ python -m src.safety_evaluation.construct_calibrated_bound \
 This experiment loads the survival-model checkpoint associated with `MODEL_DATASET_SETUP`, applies it to embeddings from `EVALUATION_DATASET_SETUP`, constructs all LPB methods, verifies completion manifests, and merges the results.
 
 ```bash
-bash src/safety_evaluation/scripts/cross_setup_lpb.sh
+bash src/predictive_bounds/experiments/cross_setup/scripts/run.sh
 ```
 
 The script defaults to the red-team Qwen-target model setup evaluated on the red-team Gemma-target setup. Override any setting with environment variables, for example:
 
 ```bash
 SEED_END=10 BUDGET_PER_SAMPLE=20 DEVICE=cuda:0 \
-  bash src/safety_evaluation/scripts/cross_setup_lpb.sh
+  bash src/predictive_bounds/experiments/cross_setup/scripts/run.sh
 ```
 
 The source setup must already have a trained survival-model checkpoint, and both setups must have matching embedding feature dimensions and time horizons. Open `notebooks/visualize_cross_setup_lpb.ipynb` after the script completes.
@@ -126,7 +127,7 @@ The source setup must already have a trained survival-model checkpoint, and both
 This experiment calibrates exclusively on `Programming & Technology` AutoIF tasks and evaluates exclusively on `Marketing & Social Media` tasks:
 
 ```bash
-bash src/safety_evaluation/scripts/autoif_cross_class_lpb.sh
+bash src/predictive_bounds/experiments/autoif_cross_class/scripts/run.sh
 ```
 
 The script first verifies a one-to-one correspondence between
@@ -149,7 +150,7 @@ overridden with environment variables, for example:
 
 ```bash
 CAL_SIZE=600 TEST_SIZE=0 SEED_END=10 \
-  bash src/safety_evaluation/scripts/autoif_cross_class_lpb.sh
+  bash src/predictive_bounds/experiments/autoif_cross_class/scripts/run.sh
 ```
 
 `TEST_SIZE=0` evaluates on every eligible row of the requested test class.
@@ -168,7 +169,7 @@ realized budget gap = projected expected budget gap + sampling gap.
 Run the evaluator and strict merger with:
 
 ```bash
-bash src/safety_evaluation/scripts/evaluate_dapro_projection.sh
+bash src/predictive_bounds/experiments/dapro_projection/scripts/run.sh
 ```
 
 The defaults evaluate Platt and beta projections with probability and quantile
@@ -176,7 +177,7 @@ scores over 50 seeds. Override configurations through environment variables:
 
 ```bash
 SEED_END=10 PROJECTIONS="platt beta" SCORES="prob" N1_VALUES="50 100 200" \
-  bash src/safety_evaluation/scripts/evaluate_dapro_projection.sh
+  bash src/predictive_bounds/experiments/dapro_projection/scripts/run.sh
 ```
 
 Open `notebooks/visualize_dapro_projection_metrics.ipynb` after merging. The
@@ -195,7 +196,7 @@ trajectories and cached survival-model predictions and will refuse to regenerate
 either.
 
 ```bash
-bash src/safety_evaluation/scripts/phase1_optimization_ablation.sh
+bash src/predictive_bounds/ablations/scripts/run_phase1_optimization.sh
 ```
 
 The runner shards the requested seed range across four worker processes by
@@ -203,7 +204,7 @@ default, gives every worker a private temporary output directory, and merges
 only after all workers finish. To use more CPU cores:
 
 ```bash
-NUM_JOBS=12 DEVICE=cpu bash src/safety_evaluation/scripts/phase1_optimization_ablation.sh
+NUM_JOBS=12 DEVICE=cpu bash src/predictive_bounds/ablations/scripts/run_phase1_optimization.sh
 ```
 
 Each worker loads the cached tensors independently, so increase `NUM_JOBS`
@@ -217,20 +218,20 @@ the script. When data caches are not present, the analysis code itself can be
 validated without any model or API calls using:
 
 ```bash
-python -m src.safety_evaluation.phase1_optimization_ablation --dry-run-fixture
+python -m src.predictive_bounds.ablations.phase1_optimization --dry-run-fixture
 ```
 
 ### Step 4: Merge Results
 After running your evaluations across multiple seeds, merge the results into a single dataset:
 ```bash
 # For metrics
-python -m src.safety_evaluation.merge_estimate_metrics_results \
+python -m src.predictive_bounds.experiments.metrics.merge_results \
     --dataset-name <dataset_name> \
     --dataset-setup <setup> \
     --budget-per-sample 40
 
 # For Bounds (LPB/UPB)
-python -m src.safety_evaluation.merge_bounds_results \
+python -m src.predictive_bounds.merge_bounds_results \
     --bound-type lpb \
     --dataset-name <dataset_name> \
     --dataset-setup <setup> \
@@ -246,13 +247,29 @@ Check out `notebooks/README.md` for a detailed guide on which notebook to use fo
 
 ---
 
+## Sequential timing convention
+
+At the start of zero-based turn `t`, `x[i, t]` is known. The label `y[i, t]`
+is revealed at the end of the turn and, after a negative label, `x[i, t + 1]`
+becomes available. Event times and allocation horizons are one-based counts:
+an event at `y[i, t]` has `t_tilde = t + 1`, while no event within `T` turns
+has `t_tilde = T + 1`. See `src/predictive_bounds/README.md` for the real-data
+feature layout.
+
 ## 🧠 Key Concepts: Budget Allocators
 
 This project introduces several **Budget Allocators** that determine how much compute effort to spend testing a specific conversation. Instead of blindly testing all conversations for a fixed number of turns (which is incredibly expensive), our allocators smartly distribute the budget:
 
 - **Naive / Uniform Allocators:** Spends budget equally or randomly across all samples.
 - **Optimized / Adaptive Allocators:** Allocates budget based on the survival model's probability estimates, spending more computational effort on inputs that appear more likely to fail.
-- **DAPRO Allocator:** Uses a two-step projection algorithm to dynamically calibrate and assign budget, ensuring mathematically valid bounds while dramatically saving compute costs.
+- **DAPRO Allocator:** The public allocator is a regularized, variance-aligned
+  two-bin policy. It optimizes the target-event Horvitz-Thompson variance proxy,
+  enforces its terminal propensity floor inside the budget correction, and
+  reserves explicit expected cost for Phase-I-to-deployment projection error.
+  The former mean-weight DAPRO is retained only as an ablation class.
+
+The definitive configuration and five-dataset reproducibility runners are in
+`src/predictive_bounds/experiments/definitive_dapro/`.
 
 ---
 
@@ -269,14 +286,18 @@ These `.sh` files wrap the underlying Python pipeline to execute across all test
 **2. Model Training:** (`src/train_model/scripts/`)
 - `train_model.sh`: Automates the training of the survival transformer models across different setups.
 
-**3. Safety Evaluation:** (`src/safety_evaluation/scripts/`)
+**3. Primary Predictive-Bound Runs:** (`src/predictive_bounds/scripts/`)
 - `calibrate.sh`: Runs the LPB calibration experiments.
 - `calibrate_upb.sh`: Runs the UPB calibration experiments.
-- `compute_metrics.sh`: Runs the safety metric estimation.
+
+Additional experiment and ablation runners live beside their modules under
+`src/predictive_bounds/experiments/*/scripts/` and
+`src/predictive_bounds/ablations/scripts/`. Windows PowerShell runners are
+included for the ablations.
 
 To execute any of these, run them from the project root. For example:
 ```bash
-bash src/safety_evaluation/scripts/calibrate.sh
+bash src/predictive_bounds/scripts/calibrate.sh
 ```
 
 ---

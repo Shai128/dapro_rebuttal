@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from src.safety_evaluation.budget_allocators.risk_controlled_budget import (
+from src.predictive_bounds.budget_allocators.risk_controlled_budget import (
     affine_cumulative_policy_family,
     cumulative_policy_costs,
     row_local_horizon_budget_cap,

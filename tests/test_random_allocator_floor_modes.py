@@ -2,10 +2,10 @@ import numpy as np
 import pytest
 import torch
 
-from src.safety_evaluation.budget_allocators.random_adaptive_optimized_allocator import (
+from src.predictive_bounds.budget_allocators.random_adaptive_optimized_allocator import (
     RandomAdaptiveOptimizedBudgetAllocator,
 )
-from src.safety_evaluation.budget_allocators.vectorized_adaptive_allocator_patch import (
+from src.predictive_bounds.budget_allocators.vectorized_adaptive_allocator_patch import (
     simulate_process_vectorized,
 )
 
@@ -122,6 +122,58 @@ def test_random_floor_paths_have_expected_constant_policy_semantics():
         hard,
         expected_raw.clamp_min(0.05),
     )
+
+
+def test_complement_power_alpha_only_reparameterizes_the_same_family():
+    width = 12
+    beta = 0.64
+    schedules = []
+    for alpha in [0.5, 1.0, 2.0]:
+        allocator = RandomAdaptiveOptimizedBudgetAllocator(
+            conditional_grid=torch.ones(200, width, width),
+            budget_per_sample=6.0,
+            taus_range=torch.tensor([0.56]),
+            tau_prior=0.56,
+            m_upper_bound=200,
+            schedule_family="complement_power",
+            schedule_alpha=alpha,
+        )
+        requested_lambda = beta ** (1 / alpha)
+        schedules.append(allocator._conditional_schedule(
+            1 - requested_lambda,
+            width,
+            device=torch.device("cpu"),
+            dtype=torch.float64,
+        ))
+
+    for candidate in schedules[1:]:
+        torch.testing.assert_close(candidate, schedules[0])
+
+
+def test_power_reach_schedule_has_requested_cumulative_shape():
+    width = 10
+    alpha = 1.7
+    aggressiveness = 0.91
+    allocator = RandomAdaptiveOptimizedBudgetAllocator(
+        conditional_grid=torch.ones(200, width, width),
+        budget_per_sample=6.0,
+        taus_range=torch.tensor([0.56]),
+        tau_prior=0.56,
+        m_upper_bound=200,
+        schedule_family="power_reach",
+        schedule_alpha=alpha,
+    )
+    conditionals = allocator._conditional_schedule(
+        aggressiveness,
+        width,
+        device=torch.device("cpu"),
+        dtype=torch.float64,
+    )
+    expected = aggressiveness ** torch.pow(
+        torch.arange(1, width + 1, dtype=torch.float64),
+        alpha,
+    )
+    torch.testing.assert_close(conditionals.cumprod(dim=1)[0], expected)
 
 
 def test_large_random_weights_are_real_only_without_the_terminal_floor():

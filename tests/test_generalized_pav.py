@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from src.safety_evaluation.budget_allocators.optimization_solver_utils import (
+from src.predictive_bounds.budget_allocators.optimization_solver_utils import (
     _generalized_pav,
     _generalized_pav_compiled,
 )

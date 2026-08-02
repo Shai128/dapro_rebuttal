@@ -1,0 +1,518 @@
+\documentclass[10pt]{article}
+
+\usepackage[margin=0.78in]{geometry}
+\usepackage{amsmath,amssymb,booktabs,tabularx,microtype}
+\usepackage[hidelinks]{hyperref}
+\usepackage{xcolor}
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{5pt}
+\renewcommand{\arraystretch}{1.12}
+
+\newcounter{proposition}
+\newenvironment{proposition}[1][]{%
+  \refstepcounter{proposition}\par\medskip\noindent
+  \textbf{Proposition \theproposition\ifx\relax#1\relax\else\ (#1)\fi.}\ \itshape
+}{\par\medskip}
+\newcounter{assumption}
+\newenvironment{assumption}[1][]{%
+  \refstepcounter{assumption}\par\medskip\noindent
+  \textbf{Assumption \theassumption\ifx\relax#1\relax\else\ (#1)\fi.}\ \itshape
+}{\par\medskip}
+\newenvironment{proof}{\par\noindent\textit{Proof.}\ }{\hfill$\square$\par}
+\newcommand{\E}{\mathbb{E}}
+\newcommand{\Var}{\operatorname{Var}}
+\newcommand{\Ind}{\mathbb{1}}
+\newcommand{\R}{\mathcal{R}}
+
+\title{Definitive DAPRO with Finite-Sample Expected-Budget Control\\
+\large Reconsideration of projection control, constant allocation, and dynamic schedules}
+\author{Technical report for the DAPRO manuscript}
+\date{August 1, 2026}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+We reconsider the final DAPRO design against two alternatives: the previously
+selected projection-reserve method and a constant-continuation policy.  The
+new definitive method retains the variance-aligned two-bin allocation model,
+but separates 200 fully observed rows into 100 policy-fit and 100 independent
+budget-control rows.  A label-free per-row cost cap of twice the average
+budget tightens the loss envelope, after which conformal risk control (CRC)
+selects a nested cumulative-reach contraction.  The resulting method has a
+finite-sample marginal expected-total-budget guarantee under exchangeability,
+without a projection-accuracy assumption.  In a matched 20-seed confirmation
+on five real-data settings, it lowers geometric-mean coverage variance by
+3.9\% relative to CRC constant allocation and wins on four settings.  The
+projection-reserve version has nearly identical aggregate performance (4.2\%
+lower than CRC constant) but retains an empirically imperfect projection
+assumption.  We therefore select the CRC version: the negligible empirical
+difference is outweighed by the stronger guarantee, lower mean weights, better
+budget use, and faster fitting.  We also prove that the proposed family
+$1-\lambda^{\alpha t}$ is independent of $\alpha$ after reparameterization,
+and give a Jensen argument explaining why constant allocation is difficult to
+beat when policy scores add little target-event information beyond time.
+\end{abstract}
+
+\section{Final decision}
+
+The public name \textbf{DAPRO} now denotes the following single method.
+
+\begin{center}
+\fcolorbox{black}{gray!7}{\begin{minipage}{0.93\linewidth}
+\textbf{Definitive CRC-DAPRO.}
+Use $N_1=200$ fully observed calibration rows: 100 policy-fit rows and 100
+independent budget-control rows.  On the fit fold, define the raw
+$\alpha_0=0.10$ target event $A_i$ and weights
+\[
+W_i=\frac{A_i+0.001}{1.001}.
+\]
+Fit a two-score-bin continuation table by minimizing
+$\sum_i W_i/\pi_i$ under the sequential expected-cost constraint.  Enforce a
+trajectory-mixture propensity floor $\epsilon=0.005$.  Using only the
+label-free prior horizon $q(x)$, contract each row so its expected cost through
+$q(x)$ is at most $K=2b$, where $b$ is the target budget per sample.  Freeze
+the resulting policy and the 401-member nested family
+\[
+R_s(x,t)=\epsilon+s\{R_{\rm cap}(x,t)-\epsilon\},
+\qquad s\in\{1,0.9975,\ldots,0\}.
+\]
+Use the independent control fold and CRC to select the largest feasible $s$.
+Deploy that policy unchanged in Phase II.
+\end{minipage}}
+\end{center}
+
+The implementation exposes this method as
+\texttt{DAPRO = DefinitiveCRCDAPRO}.  The assumption-based method remains
+available as \texttt{DefinitiveDAPRO}; legacy mean-weight DAPRO remains an
+explicit ablation.
+
+\section{Why the variance-aligned objective is correct but incomplete}
+
+For a fixed calibration event $A_i\in\{0,1\}$, let $Z_i$ indicate that the
+sequential policy reveals the required endpoint, with inclusion probability
+$\pi_i$.  The centered inverse-probability term is
+\[
+V_i=A_i\left(\frac{Z_i}{\pi_i}-1\right).
+\]
+
+\begin{proposition}[Exact fixed-target acquisition variance]
+Conditional on the complete trajectories and a predictable frozen policy,
+\[
+\E[V_i\mid\mathrm{data}]=0,
+\qquad
+\Var(V_i\mid\mathrm{data})
+=A_i\left(\frac1{\pi_i}-1\right).
+\]
+\end{proposition}
+
+\begin{proof}
+$Z_i$ is Bernoulli with mean $\pi_i$, so
+$\E[Z_i/\pi_i]=1$ and
+$\Var(Z_i/\pi_i)=1/\pi_i-1$.  Use $A_i^2=A_i$.
+\end{proof}
+
+Thus $\E[A_i(1/\pi_i-1)]$ is the right mechanistic objective for a
+\emph{fixed} target.  Overall mean weight $\E[1/\pi_i]$ is not: it spends
+equal effort on non-target rows.  This distinction is visible in the dynamic
+schedule experiment.  The complement-power schedule has mean weights as low
+as 2--8 in several settings, yet substantially larger $A/\pi$ and roughly
+twice the geometric coverage variance of CRC constant allocation.
+
+The fixed-target objective is nevertheless not the variance of the complete
+LPB pipeline.  The final calibrated candidate is selected from neighboring
+quantiles; data splitting, candidate switching, and test-population variation
+remain after the acquisition variance of one anchor is nearly zero.  In the
+matched experiment, projection DAPRO often makes the raw-anchor proxy
+numerically zero while coverage variance remains comparable to constant.  The
+correct conclusion is diminishing returns for this surrogate, not a failure
+of Proposition~1.
+
+For a fixed candidate, policy-fit randomness changes variance through policy
+regret---the learned propensities may be worse than oracle propensities.  It
+does not create a second bias term when the Phase-II policy is non-leaky and
+the Horvitz--Thompson identity holds.  For the selected LPB, policy changes can
+also move the chosen threshold; that instability is outside Proposition~1.
+
+\section{Policy fitting and the row-local cap}
+
+For row $i$, let $L_i=\min(T_i,q_i)$ be its unknown active length and let
+$p_{i,t}$ be the predictable conditional continuation probability at
+one-based step $t$.  Cumulative reach and expected cost are
+\[
+R_i(t)=\prod_{u=1}^t p_{i,u},\qquad
+\pi_i=R_i(L_i),\qquad
+c_i=\sum_{t=1}^{L_i}R_i(t).
+\]
+The temporal implementation observes $x_{i,t}$ before choosing $p_{i,t}$;
+$y_{i,t}$ is revealed only afterward.  The two score bins and their cutpoints
+are learned only on the 100-row fit fold.  The target weights are
+$W_i=(A_i+0.001)/1.001$, so a target row is about one thousand times more
+important than a non-target row while flat zero-target directions remain
+regularized.
+
+The cumulative-logit budget correction and trajectory floor are also fit on
+the policy-fit fold.  The floor is included inside cost fitting, not added
+afterward.  Hence $R_i(t)\ge\epsilon=0.005$, every terminal weight is at most
+200, and a reported floored mean weight above $10^5$ is impossible.
+
+The raw fitted policy can have a distribution-free cost bound equal to the
+full horizon $T_{\max}=200$.  That makes CRC unnecessarily conservative.  Let
+\[
+h(x)=\sum_{t=1}^{q(x)}R_{\rm fit}(x,t),\qquad
+h_0(x)=\epsilon q(x),\qquad K=2b.
+\]
+If $h(x)>K$, set
+\[
+\eta(x)=\frac{K-h_0(x)}{h(x)-h_0(x)},
+\qquad
+R_{\rm cap}(x,t)=\epsilon+\eta(x)
+\{R_{\rm fit}(x,t)-\epsilon\};
+\]
+otherwise use $\eta(x)=1$.  This map uses only $x$, the predicted prior
+horizon, and the frozen policy.  It never uses $T$ or a Phase-II label.
+
+\begin{proposition}[Label-free support bound]
+If $\epsilon q(x)\le K$, then for every possible event time $T$,
+\[
+\sum_{t=1}^{\min(T,q(x))}R_{\rm cap}(x,t)\le K.
+\]
+Every further affine contraction toward $\epsilon$ has the same bound.
+\end{proposition}
+
+\begin{proof}
+The construction makes the sum through $q(x)$ at most $K$.  All cumulative
+probabilities are nonnegative and $\min(T,q(x))\le q(x)$, so every shorter
+prefix also costs at most $K$.  Contracting toward the floor cannot increase
+the sum.
+\end{proof}
+
+The cap is not merely a post-hoc correction.  It reduces the valid candidate
+loss envelope from 200 to 40 when $b=20$, and to 20 when $b=10$.  The five-seed
+cap screen compared $K=b$ and $K=2b$.  The tighter cap prevented useful
+concentration; $K=2b$ was selected and then frozen for the independent
+20-seed confirmation.
+
+\section{Finite-sample expected-budget guarantee}
+
+Let the total calibration count be $N=n_f+n_c+m$, with policy-fit size
+$n_f=100$, independent control size $n_c=100$, and deployment size $m$.  Let
+$B_{\rm tot}=Nb$ and let $C_f$ be the realized fully observed fit-fold cost.
+For a control row $Z_i$, let $b_i\in[0,T_{\max}]$ be its fully observed pilot
+cost and $c_i(s)\in[0,K]$ the conditional expected cost of fixed candidate
+$s$.  Define
+\[
+\rho=\frac{n_c}{m},\qquad
+\ell_i(s)=c_i(s)+\rho b_i,qquad
+M=K+\rho T_{\max},\qquad
+a=\frac{B_{\rm tot}-C_f}{m}.
+\]
+Candidates are ordered from aggressive to conservative, so $\ell_i(s)$ is
+nested.  CRC selects the first candidate satisfying
+\[
+\frac{\sum_{i=1}^{n_c}\ell_i(s)+M}{n_c+1}\le a.
+\tag{1}
+\]
+
+\begin{assumption}[CRC sampling conditions]
+Conditional on the policy-fit fold, the control and deployment rows are
+exchangeable; the candidate family is fixed before control labels are seen;
+losses are nested and bounded by $M$; and at least one candidate satisfies
+(1).
+\end{assumption}
+
+\begin{proposition}[Marginal expected total budget]
+Under Assumption~1, definitive CRC-DAPRO satisfies
+\[
+\E[C_{\rm total}\mid\mathrm{policy\ fit}]
+\le B_{\rm tot}.
+\]
+The result does not assume projection accuracy.
+\end{proposition}
+
+\begin{proof}
+The standard finite-sample CRC lemma for a fixed nested family, bounded loss,
+and selector (1) gives
+$\E[\ell_{\rm new}(\widehat s)\mid\mathrm{fit}]\le a$ by exchangeability.
+Since a fresh row has the same pilot-cost distribution as a control row,
+\[
+\begin{aligned}
+\E[C_{\rm total}\mid\mathrm{fit}]
+&=C_f+n_c\E[b_{\rm new}]
+  +m\E[c_{\rm new}(\widehat s)]\\
+&=C_f+m\E[c_{\rm new}(\widehat s)+\rho b_{\rm new}]\\
+&\le C_f+ma=B_{\rm tot}.
+\end{aligned}
+\]
+\end{proof}
+
+This is a \emph{marginal} expectation statement over the independent
+control/deployment sample.  An individual split may have conditional expected
+cost above $B_{\rm tot}$ without contradicting the theorem.  Conversely,
+checking only that most splits are below budget is not a proof of the theorem.
+
+\section{What the non-CRC version guarantees}
+
+The assumption-based version uses all 200 Phase-I rows for policy fitting and
+reserves $r=1$ expected interaction per deployment row.  If $\widehat c_f$ is
+corrected fit-fold cost and $c_d$ is population deployment cost, it enforces
+\[
+\widehat c_f\le b_2-r,
+\qquad
+b_2=\frac{B_{\rm tot}-C_1}{m}.
+\]
+Its expected-budget implication is valid under the precise condition
+\[
+\E[c_d-\widehat c_f]\le r.
+\tag{2}
+\]
+If the stronger splitwise inequality holds, it gives conditional expected
+budget control on that split.  With no reserve, (2) requires nonpositive mean
+projection error.  The 10-seed matched screen found that reserve-zero DAPRO
+exceeded mean budget on four of five settings (by 0.03--0.47 interactions per
+row), so it is not a defensible finite-sample budget method.
+
+Reserve one was empirically safe in mean, but the observed splitwise transfer
+inequality held on 85--100\% of the 20 confirmation splits, not all of them.
+This supports sensitivity, not a distribution-free guarantee.  We retain the
+method as a transparent ablation rather than the public default.
+
+\section{Why constant continuation is strong}
+
+A constant conditional probability $p$ gives $R(t)=p^t$.  It has one fitted
+degree of freedom, negligible estimation variance, and automatically spends
+more on early endpoints.  The target $A$ corresponds to an early 10\%
+quantile, while acquisition is allowed through a broader 56\% prior horizon;
+exponential front-loading is therefore already well aligned with the task.
+
+The following idealized result formalizes the value of low capacity.  Let
+$H$ be an endpoint/time stratum and let $\Pi$ be terminal propensity under a
+possibly score-adaptive policy.
+
+\begin{proposition}[No-signal optimality of stratum-constant reach]
+Suppose $A\perp\Pi\mid H$ and policies being compared have the same
+$\mu_H=\E[\Pi\mid H]$.  Then
+\[
+\E\!\left[A\left(\frac1\Pi-1\right)\middle|H\right]
+\ge
+\Pr(A=1\mid H)\left(\frac1{\mu_H}-1\right),
+\]
+with equality when $\Pi=\mu_H$ within the stratum.
+\end{proposition}
+
+\begin{proof}
+Conditional independence factors out $\Pr(A=1\mid H)$.  Jensen's inequality
+for the convex function $x\mapsto1/x$ gives
+$\E[1/\Pi\mid H]\ge1/\E[\Pi\mid H]$.
+\end{proof}
+
+Constant continuation is terminal-propensity constant among rows with the
+same active length.  Score adaptation can improve it only if the score
+predicts the target event within such groups or if it learns a better
+reallocation across time groups.  A 100-row fit fold contains only about
+10--20 positive raw-target events in these experiments, so that extra signal
+is difficult to estimate.  DAPRO's two bins are a deliberately small attempt
+to exploit it; high-capacity projected policies pay more estimation regret.
+
+The result is conditional, not a universal optimality theorem.  It explains
+why a simple policy can be near oracle when target signal is weak, and exactly
+where DAPRO must find gains.
+
+\section{Dynamic time schedules}
+
+The proposed family has conditional continuation
+\[
+p_t=1-\lambda^{\alpha t},\qquad \lambda\in[0,1],\ \alpha>0.
+\]
+
+\begin{proposition}[Alpha is non-identifiable]
+For every fixed $\alpha>0$, the set of schedules above is exactly
+$\{1-\beta^t:\beta\in[0,1]\}$.
+\end{proposition}
+
+\begin{proof}
+Set $\beta=\lambda^\alpha$.  The map
+$\lambda\mapsto\beta$ is a bijection of $[0,1]$ for every $\alpha>0$.
+\end{proof}
+
+Thus tuning $\lambda$ continuously makes $\alpha=0.5,1,2$ identical.  The
+implementation confirmed this: across all tested rows/seeds, the maximum
+difference in expected budget was $1.1\times10^{-5}$ and the maximum
+difference in mean $A/\pi$ was $2.2\times10^{-7}$.
+
+This family also has a heavy-tail property.  Its cumulative reach is
+\[
+R(t)=\prod_{u=1}^t(1-\beta^u).
+\]
+For $0<\beta<1$, the infinite product is positive because
+$\sum_u\beta^u<\infty$.  It therefore spends asymptotically linear expected
+cost on long trajectories rather than exponentially suppressing them.  This
+keeps overall weights small but is poorly matched to early target events.
+
+We also tested the genuinely different family
+\[
+R_\alpha(t)=p^{t^\alpha},\qquad
+p_t=p^{t^\alpha-(t-1)^\alpha}.
+\]
+$\alpha=1$ is exactly constant continuation; $\alpha>1$ is more front-loaded,
+and $\alpha<1$ has a heavier tail.  In the 10-seed five-dataset screen, the
+geometric coverage-variance ratios relative to CRC constant were 1.136 for
+$\alpha=2$ and 1.177 for $\alpha=0.5$; each won only two datasets.  The
+complement-power family had ratio 2.028.  No fixed time-only alternative
+consistently surpassed constant continuation.
+
+\section{Matched empirical results}
+
+All confirmation results use calibration size 3,000, common data splits and
+acquisition uniforms, 20 seeds, and five cached real-data configurations:
+toxicity/Detoxify, AutoIF, hallucination/Qwen, and red-team data judged by
+Llama-Guard or Qwen.  Budgets are 20 for toxicity, AutoIF, and red-team/Qwen,
+and 10 for hallucination and red-team/Llama-Guard.
+
+\begin{table}[t]
+\centering
+\small
+\caption{Coverage variance in squared percentage points and mean expected
+budget per calibration row.  P is projection-reserve DAPRO, D is definitive
+CRC-DAPRO, and C is CRC constant continuation.}
+\label{tab:main}
+\begin{tabular}{lrrrrrrr}
+\toprule
+Dataset & Var P & Var D & Var C & Budget P & Budget D & Budget C & Target\\
+\midrule
+Toxicity & 0.371 & 0.349 & 0.310 & 19.12 & 19.81 & 18.15 & 20\\
+AutoIF & 0.728 & 0.731 & 0.915 & 19.18 & 19.77 & 18.34 & 20\\
+Hallucination & 0.635 & 0.694 & 0.727 & 9.43 & 9.98 & 8.49 & 10\\
+Red-team/Llama-Guard & 0.814 & 0.871 & 0.907 & 9.18 & 9.28 & 8.02 & 10\\
+Red-team/Qwen & 0.521 & 0.480 & 0.482 & 19.09 & 19.85 & 18.13 & 20\\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Relative to CRC constant, the geometric variance ratio is 0.958 for the
+projection-reserve version and 0.961 for definitive CRC-DAPRO.  The former
+wins on three datasets and the latter on four.  Their aggregate difference is
+only 0.3 percentage points.  Definitive CRC-DAPRO loses on toxicity but wins
+by 0.5--20\% on the other four point comparisons.  These estimates do not
+support universal dominance; they support near-parity with a small average
+gain and a stronger theorem.
+
+\begin{table}[t]
+\centering
+\small
+\caption{Mean inverse propensity and fixed raw-target $A/\pi$ diagnostic.}
+\label{tab:weights}
+\begin{tabular}{lrrrrrr}
+\toprule
+Dataset & Weight P & Weight D & Weight C & $A/\pi$ P & $A/\pi$ D & $A/\pi$ C\\
+\midrule
+Toxicity & 25.72 & 19.74 & 113.90 & 0.1107 & 0.1375 & 0.1125\\
+AutoIF & 20.72 & 12.40 & 110.62 & 0.0988 & 0.1276 & 0.1076\\
+Hallucination & 2.05 & 1.92 & 6.43 & 0.0971 & 0.1045 & 0.1042\\
+Red-team/Llama-Guard & 3.62 & 3.08 & 26.51 & 0.0999 & 0.1037 & 0.1076\\
+Red-team/Qwen & 9.23 & 6.19 & 40.09 & 0.0995 & 0.1138 & 0.1285\\
+\bottomrule
+\end{tabular}
+\end{table}
+
+CRC-DAPRO has substantially smaller mean weights than CRC constant on all
+five datasets.  Its $A/\pi$ diagnostic is better on both red-team settings,
+approximately tied on hallucination, and worse on toxicity and AutoIF.  Yet
+coverage variance improves on AutoIF.  This is direct evidence that the fixed
+raw-target variance term is not a complete ordering statistic for the
+selected LPB.
+
+The cap materially improves budget use.  The un-capped CRC candidate paid a
+correction near 2.05 interactions per row and had geometric variance ratio
+1.29--1.41 versus CRC constant, depending on the fit split.  With $K=2b$, the
+correction is 0.467 on budget-20 tasks and 0.269 on budget-10 tasks.  The
+selected scale averages 0.75--0.99 across datasets.  The final method focuses
+more budget on score-favored rows while retaining the support bound.
+
+The projection method's observed transfer inequality held on 85--100\% of
+splits.  Definitive CRC-DAPRO's mean expected cost was below target on all
+five settings.  Splitwise exceedance rates ranged from 0 to 45\%, which is
+compatible with a marginal guarantee and illustrates why the theorem should
+not be described as per-split control.
+
+Runtime is also favorable relative to projection DAPRO.  Depending on the
+dataset, definitive CRC-DAPRO averages 0.97--5.65 seconds per method/seed,
+versus 1.27--10.25 seconds for projection DAPRO.  Constant allocation remains
+much faster at roughly 0.05 seconds.
+
+\section{Recommendation and manuscript claims}
+
+Definitive CRC-DAPRO offers the best balance requested:
+\begin{itemize}
+\item \textbf{Theoretical correctness:} finite-sample marginal expected-total-
+budget control without projection accuracy; predictable IPCW acquisition and
+strict positivity are preserved.
+\item \textbf{Empirical performance:} 3.9\% geometric variance reduction and
+four of five point wins versus the guarantee-matched constant policy.
+\item \textbf{Simplicity:} two score bins, one fixed row cap, and one scalar
+CRC contraction; no per-time projection regression.
+\item \textbf{Numerical stability:} $\pi\ge0.005$ caps every weight at 200;
+the floor and row cap are included inside expected-cost accounting.
+\item \textbf{Reproducibility:} all defaults are fixed, all candidate families
+are named, common acquisition randomness is stored, and Linux/PowerShell
+runners reproduce the screens and confirmation.
+\end{itemize}
+
+The defensible headline is deliberately modest:
+\begin{quote}
+Across five 20-seed real-data settings, row-capped CRC-DAPRO had 3.9\% lower
+geometric-mean coverage variance than CRC constant allocation and won four
+point comparisons, while providing a finite-sample marginal expected-budget
+guarantee without a projection-accuracy assumption.
+\end{quote}
+
+Do not claim that DAPRO universally dominates constant allocation.  Do not
+use mean weight as the variance objective.  Do not claim that an individual
+CRC split must be under budget.  The constant method should remain the primary
+baseline because Proposition~5 explains why it can be essentially optimal
+when the learned score has little within-time target signal.
+
+\section{Implementation and reproduction}
+
+The core implementation and tests are:
+\begin{verbatim}
+src/predictive_bounds/budget_allocators/DAPRO.py
+src/predictive_bounds/budget_allocators/risk_controlled_budget.py
+src/predictive_bounds/budget_allocators/random_adaptive_optimized_allocator.py
+tests/test_definitive_dapro.py
+tests/test_risk_controlled_budget.py
+tests/test_random_allocator_floor_modes.py
+\end{verbatim}
+
+The complete screen and confirmation packages are under
+\begin{verbatim}
+src/predictive_bounds/experiments/crc_dynamic_schedules/
+\end{verbatim}
+with Linux and PowerShell runners.  Principal machine-readable outputs are
+\begin{verbatim}
+outputs/crc_dynamic_schedules/method_summary.csv
+outputs/crc_row_caps/method_summary.csv
+outputs/crc_rowcap2_confirm/method_summary.csv
+outputs/crc_rowcap2_confirm/geometric_variance_comparison.csv
+\end{verbatim}
+
+The selected public defaults are $N_1=200$, fit/control sizes 100/100,
+$\alpha_0=0.10$, global regularization $0.001$, two score bins,
+$\epsilon=0.005$, row cap $K=2b$, and 401 CRC candidates.  Alternative
+schedules, un-capped CRC, larger fit folds, and the projection-reserve method
+are ablations rather than hidden switches in the paper's algorithm.
+
+\begin{thebibliography}{2}
+\bibitem{dapro-manuscript}
+S. Feldman and Y. Romano.
+\newblock How Many Iterations to Jailbreak? Dynamic Budget Allocation for
+Multi-Turn LLM Evaluation.
+\newblock arXiv:2605.06605, version 5, 2026.
+
+\bibitem{crc}
+A. N. Angelopoulos, S. Bates, A. Fisch, L. Lei, and T. Schuster.
+\newblock Conformal Risk Control.
+\newblock International Conference on Learning Representations, 2024.
+\end{thebibliography}
+
+\end{document}
