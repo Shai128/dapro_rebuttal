@@ -10,10 +10,11 @@ git pull
 #attacker_models=('qwen25-14b-instruct')
 #target_models=('qwen25-14b-instruct' 'llama-3.1-8B-instruct' 'mini_phi_4_instruct' 'gemma3_4b_it')
 
-# 'gemma4_12b_it'
-dataset_names=('toxicity' )
-attacker_models=('gemma4_12b_it' )
+
+dataset_names=('hallucination')
+attacker_models=('gemma3_12b_it')
 target_models=('llama-3.1-8B-instruct')
+exclude_list=$(sinfo -N -h -o "%n %G" | awk '$2 !~ /A100|A40|A6000|6000ADA|L40|L4|A4000/ {print $1}' | paste -sd, -)
 export PYTHONPATH="src/multi_turn_data_generation:${PYTHONPATH:-}"
 # Iterate through combinations
 for dataset in "${dataset_names[@]}"; do
@@ -41,25 +42,23 @@ for dataset in "${dataset_names[@]}"; do
 
                 pids=()
 
-                for ((i = 0; i < 1; i++)); do
+                for ((i = 0; i < 10; i++)); do
                     index_start=$((i * 1000))
                     index_end=$(((i + 1) * 1000))
 
                     echo "Starting process $i: dataset=$dataset, judge=$judge, attacker=$attacker, target=$target, indices=$index_start-$index_end"
+#                   srun -p public,ash,nlp,dym,galileo,bml,tdk,espresso,euler,newton,ran -c4 --gres=gpu:1 --mem=20G  \
+#                    --exclude="$exclude_list" -J plsNoKil \
 
-                    srun -A galileo \
-                        -p galileo \
-                        -c 4 \
-                        --gres=gpu:1 \
-                        python -m src.multi_turn_data_generation.main \
-                            --data-index-start "$index_start" \
-                            --data-index-end "$index_end" \
-                            --target-model "$target" \
-                            --n-iterations 200 \
-                            --dataset-name "$dataset" \
-                            --judge-model "$judge" \
-                            --batch-size 100 \
-                            --max-n-attack-attempts 20 \
+#                   srun -A galileo -p galileo  -c 4 --gres=gpu:1 \
+
+                    srun -A galileo -p galileo  -c 4 --gres=gpu:1\
+                    --exclude="$exclude_list" -J plsNoKil \
+                       python -m src.multi_turn_data_generation.main \
+                            --data-index-start "$index_start"  --data-index-end "$index_end" \
+                            --target-model "$target"  --n-iterations 200 \
+                            --dataset-name "$dataset"  --judge-model "$judge" \
+                            --batch-size 1000  --max-n-attack-attempts 20 \
                             --attack-model "$attacker" &
 
                     pids+=("$!")
