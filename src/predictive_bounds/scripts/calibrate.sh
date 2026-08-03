@@ -46,9 +46,9 @@ ARCHIVE_PATH="results/lpb_merged_${EXPERIMENT_SUFFIX}.tar.gz"
 SLURM_ACCOUNT="galileo"
 SLURM_PARTITION="galileo"
 SLURM_CPUS=4
-SLURM_GRES="gpu:1"                 # Set to "" for a CPU-only Slurm job.
+SLURM_GRES="gpu:1"                 # One GPU; Python addresses it as cuda:0.
 SLURM_JOB_NAME="plsNoKil"
-SLURM_PARALLEL_SEED_JOBS=50         # 1 runs the full seed range in one job.
+MAX_CONCURRENT_SRUNS=50             # 1 runs the full seed range in one srun.
 EXCLUDE_LIST=""                    # Leave empty to use the automatic GPU filter.
 AUTO_EXCLUDE_INCOMPATIBLE_GPUS=1
 # ====================== END EDITABLE CONFIGURATION ======================
@@ -93,7 +93,7 @@ while (( $# > 0 )); do
         echo "--parallel-jobs requires a positive integer." >&2
         exit 2
       fi
-      SLURM_PARALLEL_SEED_JOBS="$2"
+      MAX_CONCURRENT_SRUNS="$2"
       shift
       ;;
     --seed-end)
@@ -138,8 +138,13 @@ if (( CRC_CONTROL_SIZE >= DAPRO_N1 )); then
   echo "CRC_CONTROL_SIZE must be smaller than DAPRO_N1." >&2
   exit 2
 fi
-if ! [[ "$SLURM_PARALLEL_SEED_JOBS" =~ ^[1-9][0-9]*$ ]]; then
-  echo "SLURM_PARALLEL_SEED_JOBS must be a positive integer." >&2
+if ! [[ "$MAX_CONCURRENT_SRUNS" =~ ^[1-9][0-9]*$ ]]; then
+  echo "MAX_CONCURRENT_SRUNS must be a positive integer." >&2
+  exit 2
+fi
+if [[ "$RUN_MODE" == "slurm" && -v SLURM_JOB_ID ]]; then
+  echo "Do not start this launcher from inside srun, sbatch, or salloc." >&2
+  echo "Run it on the login node so each child srun requests an independent job." >&2
   exit 2
 fi
 
@@ -306,10 +311,13 @@ run_configuration() {
     --calibration-names "$METHOD_CSV"
   )
 
-  if [[ "$RUN_MODE" == "slurm" && "$SLURM_PARALLEL_SEED_JOBS" -gt 1 ]]; then
+  if [[ "$RUN_MODE" == "slurm" && "$MAX_CONCURRENT_SRUNS" -gt 1 ]]; then
     local seed
     local seed_end
     local seed_jobs=()
+    local seed_count=$((SEED_END - SEED_START))
+    echo "Submitting $seed_count independent srun jobs"
+    echo "Maximum concurrently active srun commands: $MAX_CONCURRENT_SRUNS"
     for (( seed = SEED_START; seed < SEED_END; seed++ )); do
       seed_end=$((seed + 1))
       run_python_module \
@@ -319,8 +327,9 @@ run_configuration() {
         --seed-start "$seed" \
         --seed-end "$seed_end" &
       seed_jobs+=("$!")
+      echo "Submitted seed $seed (launcher PID $!)"
 
-      if (( ${#seed_jobs[@]} == SLURM_PARALLEL_SEED_JOBS )); then
+      if (( ${#seed_jobs[@]} == MAX_CONCURRENT_SRUNS )); then
         if ! wait_for_job_batch "${seed_jobs[@]}"; then
           return 1
         fi
@@ -353,7 +362,7 @@ run_configuration() {
 echo "Mode: $RUN_MODE | device: $DEVICE | seeds: [$SEED_START, $SEED_END)"
 echo "Methods: ${#METHODS[@]} | experiment suffix: $EXPERIMENT_SUFFIX"
 if [[ "$RUN_MODE" == "slurm" ]]; then
-  echo "Concurrent seed jobs: $SLURM_PARALLEL_SEED_JOBS"
+  echo "Maximum concurrent srun commands: $MAX_CONCURRENT_SRUNS"
 fi
 
 for dataset_key in "${DATASETS[@]}"; do
