@@ -8,7 +8,6 @@ from src.predictive_bounds.budget_allocators.adaptive_optimized_allocator import
 from src.predictive_bounds.budget_allocators.bandits_allocator import BanditsBudgetAllocator
 from src.predictive_bounds.budget_allocators.basic_allocator import BasicBudgetAllocator
 from src.predictive_bounds.budget_allocators.budget_allocator import BudgetAllocator
-from src.predictive_bounds.budget_allocators.naive_allocator import NaiveBudgetAllocator
 from src.predictive_bounds.budget_allocators.optimized_allocators import OptimizedBudgetAllocator
 from src.predictive_bounds.budget_allocators.DAPRO import (
     AWeightedDAPRO,
@@ -23,8 +22,6 @@ from src.predictive_bounds.budget_allocators.DAPRO import (
     RobustTargetAWeightedDAPRO,
     TargetAWeightedDAPRO,
 )
-from src.predictive_bounds.budget_allocators.projected_optimization_allocator_score_error import \
-    ProjectedOptimizationBudgetAllocatorScoreError
 from src.predictive_bounds.budget_allocators.random_adaptive_optimized_allocator import \
     RandomAdaptiveOptimizedBudgetAllocator
 from src.predictive_bounds.budget_allocators.trimmed_allocator import TrimmedBudgetAllocator
@@ -59,10 +56,10 @@ def get_baseline_calibrations(
         tau_prior,
         m_upper_bound,
         include_a_weighted=True,
+        evaluate_dapro_projection=False,
         dapro_n1_values=(200,),
         definitive_dapro_margins=(1.0,),
 ):
-    naive_allocation = NaiveBudgetAllocator(budget_per_sample, taus_range, tau_prior)
     basic_allocation = BasicBudgetAllocator(budget_per_sample, taus_range, tau_prior)
     trimmed_allocation = TrimmedBudgetAllocator(budget_per_sample, taus_range, tau_prior, m_upper_bound)
     optimized_allocation = OptimizedBudgetAllocator(budget_per_sample, taus_range, tau_prior, m_upper_bound)
@@ -180,6 +177,16 @@ def get_baseline_calibrations(
             taus_range,
             tau_prior,
             m_upper_bound,
+            terminal_pi_min=None,
+            terminal_floor_mode="none",
+            budget_control_mode="crc",
+        ),
+        RandomAdaptiveOptimizedBudgetAllocator(
+            conditional_grid,
+            budget_per_sample,
+            taus_range,
+            tau_prior,
+            m_upper_bound,
             terminal_pi_min=1.0 / float(m_upper_bound),
             terminal_floor_mode="hard",
             budget_control_mode="crc",
@@ -225,10 +232,45 @@ def get_baseline_calibrations(
                     projection=projection,
                     score='prob',
                     n1=n1,
+                    evaluate_projection=evaluate_dapro_projection,
                 )
             )
             if not include_a_weighted:
                 continue
+            if projection == "direct_bins_2" and n1 >= 100:
+                control_size = min(100, n1 // 2)
+                crc_kwargs = {
+                    "budget_control_mode": "crc",
+                    "budget_control_size": control_size,
+                    "risk_candidate_row_cost_cap": 2.0 * budget_per_sample,
+                }
+                all_allocations.extend([
+                    LegacyMeanWeightDAPRO(
+                        conditional_grid,
+                        budget_per_sample,
+                        taus_range,
+                        tau_prior,
+                        m_upper_bound,
+                        projection=projection,
+                        score="prob",
+                        n1=n1,
+                        evaluate_projection=evaluate_dapro_projection,
+                        **crc_kwargs,
+                    ),
+                    TargetAWeightedDAPRO(
+                        conditional_grid,
+                        budget_per_sample,
+                        taus_range,
+                        tau_prior,
+                        m_upper_bound,
+                        projection=projection,
+                        score="prob",
+                        n1=n1,
+                        anchor_kind="raw_alpha",
+                        target_alpha=0.10,
+                        **crc_kwargs,
+                    ),
+                ])
             all_allocations.append(
                 AWeightedDAPRO(
                     conditional_grid,

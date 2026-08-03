@@ -9,6 +9,7 @@ from src.predictive_bounds.budget_allocators.DAPRO import (
     DefinitiveCRCUPBDAPRO,
     DefinitiveDAPRO,
     LegacyMeanWeightDAPRO,
+    TargetAWeightedDAPRO,
 )
 from src.utils.utils import set_seeds
 
@@ -61,6 +62,45 @@ def test_definitive_dapro_configuration_is_fixed_and_auditable():
     assert "budget_crc" in allocator.name
     assert "row_cap_2p00x_budget" in allocator.name
     assert allocator.name.endswith("n1_200")
+
+
+def test_generic_crc_dapro_names_do_not_collide_with_uncontrolled_variants():
+    grid, taus, _, _, _ = _inputs(n=220)
+    common = {
+        "conditional_grid": grid,
+        "budget_per_sample": 3.0,
+        "taus_range": taus,
+        "tau_prior": 0.50,
+        "m_upper_bound": 4,
+        "projection": "direct_bins_2",
+        "score": "prob",
+        "n1": 200,
+    }
+    legacy = LegacyMeanWeightDAPRO(**common)
+    legacy_crc = LegacyMeanWeightDAPRO(
+        **common,
+        budget_control_mode="crc",
+        budget_control_size=100,
+        risk_candidate_row_cost_cap=6.0,
+    )
+    target = TargetAWeightedDAPRO(
+        **common,
+        anchor_kind="raw_alpha",
+        target_alpha=0.10,
+    )
+    target_crc = TargetAWeightedDAPRO(
+        **common,
+        anchor_kind="raw_alpha",
+        target_alpha=0.10,
+        budget_control_mode="crc",
+        budget_control_size=100,
+        risk_candidate_row_cost_cap=6.0,
+    )
+
+    assert legacy.name != legacy_crc.name
+    assert target.name != target_crc.name
+    assert "budget_crc_control_100_row_cap_2p00x_budget" in legacy_crc.name
+    assert "budget_crc_control_100_row_cap_2p00x_budget" in target_crc.name
 
 
 def test_projection_margin_implies_expected_total_budget_bound():

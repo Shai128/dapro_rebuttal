@@ -59,6 +59,20 @@ def test_random_floor_variant_names_are_unambiguous():
         crc.name
         == "random_adaptive_optimized_hard_terminal_floor_0p005_crc"
     )
+    constant_crc = RandomAdaptiveOptimizedBudgetAllocator(
+        conditional_grid=torch.ones(200, 10, 10),
+        budget_per_sample=6.0,
+        taus_range=torch.tensor([0.56]),
+        tau_prior=0.56,
+        m_upper_bound=200,
+        terminal_pi_min=None,
+        terminal_floor_mode="none",
+        budget_control_mode="crc",
+    )
+    assert (
+        constant_crc.name
+        == "random_adaptive_optimized_no_terminal_floor_crc"
+    )
     explicit_none = RandomAdaptiveOptimizedBudgetAllocator(
         conditional_grid=torch.ones(200, 10, 10),
         budget_per_sample=6.0,

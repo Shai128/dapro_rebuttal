@@ -183,10 +183,28 @@ class LegacyMeanWeightDAPRO(BudgetAllocator):
 
     @property
     def name(self) -> str:
-        if self.n1 == 100:
-            return f"projected_optimization_{self.projection}_{self.score}"
-        else:
-            return f"projected_optimization_{self.projection}_{self.score}_n1_{self.n1}"
+        base = f"projected_optimization_{self.projection}_{self.score}"
+        base += self.budget_control_name_suffix
+        if self.n1 != 100:
+            base += f"_n1_{self.n1}"
+        return base
+
+    @property
+    def budget_control_name_suffix(self) -> str:
+        """Distinguish risk-controlled variants from empirical allocators."""
+        if self.budget_control_mode is None:
+            return ""
+        suffix = (
+            f"_budget_{self.budget_control_mode}"
+            f"_control_{self.budget_control_size}"
+        )
+        if self.risk_candidate_row_cost_cap is not None:
+            multiplier = (
+                self.risk_candidate_row_cost_cap / self.budget_per_sample
+            )
+            formatted = f"{multiplier:.2f}".replace(".", "p")
+            suffix += f"_row_cap_{formatted}x_budget"
+        return suffix
 
     @property
     def objective_kind(self) -> str:
@@ -1705,6 +1723,7 @@ class AWeightedDAPRO(LegacyMeanWeightDAPRO):
             f"projected_optimization_{self.projection}_{self.score}"
             "_a_weighted"
         )
+        base += self.budget_control_name_suffix
         if self.n1 != 100:
             base += f"_n1_{self.n1}"
         return base
@@ -1780,6 +1799,7 @@ class TargetAWeightedDAPRO(AWeightedDAPRO):
             f"projected_optimization_{self.projection}_{self.score}"
             f"_a_target_{anchor}_alpha_{alpha}"
         )
+        base += self.budget_control_name_suffix
         if self.n1 != 100:
             base += f"_n1_{self.n1}"
         return base
