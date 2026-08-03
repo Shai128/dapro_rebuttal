@@ -5,6 +5,7 @@
 #   bash src/predictive_bounds/scripts/calibrate.sh --local
 #   bash src/predictive_bounds/scripts/calibrate.sh --local --cpu --available-only
 #   bash src/predictive_bounds/scripts/calibrate.sh --slurm
+#   bash src/predictive_bounds/scripts/calibrate.sh --slurm --parallel-jobs 50
 #   bash src/predictive_bounds/scripts/calibrate.sh --slurm --dry-run
 #
 # Edit only the configuration block below to change the experiment matrix.
@@ -45,15 +46,17 @@ ARCHIVE_PATH="results/lpb_merged_${EXPERIMENT_SUFFIX}.tar.gz"
 SLURM_ACCOUNT="galileo"
 SLURM_PARTITION="galileo"
 SLURM_CPUS=4
-SLURM_GRES="gpu:0"                 # Set to "" for a CPU-only Slurm job.
+SLURM_GRES="gpu:1"                 # Set to "" for a CPU-only Slurm job.
 SLURM_JOB_NAME="plsNoKil"
+SLURM_PARALLEL_SEED_JOBS=50         # 1 runs the full seed range in one job.
 EXCLUDE_LIST=""                    # Leave empty to use the automatic GPU filter.
 AUTO_EXCLUDE_INCOMPATIBLE_GPUS=1
 # ====================== END EDITABLE CONFIGURATION ======================
 
 usage() {
   echo "Usage: $0 [--local | --slurm] [--cpu | --device DEVICE]"
-  echo "          [--available-only] [--dry-run] [--seed-end N]"
+  echo "          [--available-only] [--parallel-jobs N] [--dry-run]"
+  echo "          [--seed-end N]"
   echo
   echo "The editable block at the top controls datasets, models, budgets,"
   echo "Slurm resources, result isolation, and the output archive."
@@ -84,6 +87,14 @@ while (( $# > 0 )); do
       ;;
     --dry-run)
       DRY_RUN=1
+      ;;
+    --parallel-jobs)
+      if (( $# < 2 )); then
+        echo "--parallel-jobs requires a positive integer." >&2
+        exit 2
+      fi
+      SLURM_PARALLEL_SEED_JOBS="$2"
+      shift
       ;;
     --seed-end)
       if (( $# < 2 )); then
@@ -125,6 +136,10 @@ if (( DAPRO_N1 >= CAL_SIZE )); then
 fi
 if (( CRC_CONTROL_SIZE >= DAPRO_N1 )); then
   echo "CRC_CONTROL_SIZE must be smaller than DAPRO_N1." >&2
+  exit 2
+fi
+if ! [[ "$SLURM_PARALLEL_SEED_JOBS" =~ ^[1-9][0-9]*$ ]]; then
+  echo "SLURM_PARALLEL_SEED_JOBS must be a positive integer." >&2
   exit 2
 fi
 
@@ -209,6 +224,18 @@ run_python_module() {
   fi
 }
 
+wait_for_job_batch() {
+  local failed=0
+  local pid
+  for pid in "$@"; do
+    if ! wait "$pid"; then
+      echo "Parallel construction job $pid failed." >&2
+      failed=1
+    fi
+  done
+  return "$failed"
+}
+
 configure_dataset() {
   local key="$1"
   local target_model="$2"
@@ -269,8 +296,6 @@ run_configuration() {
     --dataset-setup "$DATASET_SETUP"
     --budget-per-sample "$BUDGET_PER_SAMPLE"
     --cal-size "$CAL_SIZE"
-    --seed-start "$SEED_START"
-    --seed-end "$SEED_END"
     --tau-prior "$TAU_PRIOR"
     --m-upper-bound "$M_UPPER_BOUND"
     --device "$DEVICE"
@@ -281,20 +306,55 @@ run_configuration() {
     --calibration-names "$METHOD_CSV"
   )
 
-  run_python_module \
-    src.predictive_bounds.construct_calibrated_bound \
-    "${job_key}_construct" \
-    "${common_args[@]}"
+  if [[ "$RUN_MODE" == "slurm" && "$SLURM_PARALLEL_SEED_JOBS" -gt 1 ]]; then
+    local seed
+    local seed_end
+    local seed_jobs=()
+    for (( seed = SEED_START; seed < SEED_END; seed++ )); do
+      seed_end=$((seed + 1))
+      run_python_module \
+        src.predictive_bounds.construct_calibrated_bound \
+        "${job_key}_seed_${seed}_construct" \
+        "${common_args[@]}" \
+        --seed-start "$seed" \
+        --seed-end "$seed_end" &
+      seed_jobs+=("$!")
+
+      if (( ${#seed_jobs[@]} == SLURM_PARALLEL_SEED_JOBS )); then
+        if ! wait_for_job_batch "${seed_jobs[@]}"; then
+          return 1
+        fi
+        seed_jobs=()
+      fi
+    done
+    if (( ${#seed_jobs[@]} > 0 )); then
+      if ! wait_for_job_batch "${seed_jobs[@]}"; then
+        return 1
+      fi
+    fi
+  else
+    run_python_module \
+      src.predictive_bounds.construct_calibrated_bound \
+      "${job_key}_construct" \
+      "${common_args[@]}" \
+      --seed-start "$SEED_START" \
+      --seed-end "$SEED_END"
+  fi
 
   echo "[$dataset_key / $target_model] merge LPBs"
   run_python_module \
     src.predictive_bounds.merge_bounds_results \
     "${job_key}_merge" \
-    "${common_args[@]}"
+    "${common_args[@]}" \
+    --seed-start "$SEED_START" \
+    --seed-end "$SEED_END"
 }
 
 echo "Mode: $RUN_MODE | device: $DEVICE | seeds: [$SEED_START, $SEED_END)"
 echo "Methods: ${#METHODS[@]} | experiment suffix: $EXPERIMENT_SUFFIX"
+if [[ "$RUN_MODE" == "slurm" ]]; then
+  echo "Concurrent seed jobs: $SLURM_PARALLEL_SEED_JOBS"
+fi
 
 for dataset_key in "${DATASETS[@]}"; do
   for target_model in "${TARGET_MODELS[@]}"; do
