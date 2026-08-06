@@ -8,7 +8,13 @@ from src.predictive_bounds.budget_allocators.adaptive_optimized_allocator import
 from src.predictive_bounds.budget_allocators.bandits_allocator import BanditsBudgetAllocator
 from src.predictive_bounds.budget_allocators.basic_allocator import BasicBudgetAllocator
 from src.predictive_bounds.budget_allocators.budget_allocator import BudgetAllocator
+from src.predictive_bounds.budget_allocators.naive_allocator import NaiveBudgetAllocator
 from src.predictive_bounds.budget_allocators.optimized_allocators import OptimizedBudgetAllocator
+from src.predictive_bounds.budget_allocators.oracle_dapro_allocator import (
+    CRCOracleTargetADAPRO,
+    GlobalOracleTargetADAPRO,
+    SplitOracleTargetADAPRO,
+)
 from src.predictive_bounds.budget_allocators.DAPRO import (
     AWeightedDAPRO,
     BandRegularizedTargetAWeightedDAPRO,
@@ -22,8 +28,10 @@ from src.predictive_bounds.budget_allocators.DAPRO import (
     RobustTargetAWeightedDAPRO,
     TargetAWeightedDAPRO,
 )
-from src.predictive_bounds.budget_allocators.random_adaptive_optimized_allocator import \
-    RandomAdaptiveOptimizedBudgetAllocator
+from src.predictive_bounds.budget_allocators.random_adaptive_optimized_allocator import (
+    ConstantCRCBudgetAllocator,
+    RandomAdaptiveOptimizedBudgetAllocator,
+)
 from src.predictive_bounds.budget_allocators.trimmed_allocator import TrimmedBudgetAllocator
 from src.predictive_bounds.calibration.abstract_calibration import SurvivalLPBCalibration
 from src.predictive_bounds.calibration.dummy_calibration import UncalibratedLPBSurvivalCalibration
@@ -100,20 +108,64 @@ def get_baseline_calibrations(
         adaptive_no_floor_allocation,
         adaptive_crc_allocation,
     ]
-    for n1 in dapro_n1_values:
-        if include_a_weighted:
-            for margin in definitive_dapro_margins:
-                all_allocations.append(DefinitiveDAPRO(
-                    conditional_grid,
-                    budget_per_sample,
-                    taus_range,
-                    tau_prior,
-                    m_upper_bound,
-                    n1=n1,
-                    projection_budget_margin=margin,
-                ))
-            if n1 >= 100:
-                all_allocations.append(DefinitiveCRCDAPRO(
+    all_allocations = []
+    # for n1 in dapro_n1_values:
+    #     if include_a_weighted:
+    #         for margin in definitive_dapro_margins:
+    #             all_allocations.append(DefinitiveDAPRO(
+    #                 conditional_grid,
+    #                 budget_per_sample,
+    #                 taus_range,
+    #                 tau_prior,
+    #                 m_upper_bound,
+    #                 n1=n1,
+    #                 projection_budget_margin=margin,
+    #             ))
+    #         if n1 >= 100:
+    #             all_allocations.append(DefinitiveCRCDAPRO(
+    #                 conditional_grid,
+    #                 budget_per_sample,
+    #                 taus_range,
+    #                 tau_prior,
+    #                 m_upper_bound,
+    #                 n1=n1,
+    #                 budget_control_size=min(100, n1 // 2),
+    #                 row_cost_cap_multiplier=None,
+    #             ))
+    #             for row_cost_cap_multiplier in [1.0, 2.0]:
+    #                 all_allocations.append(DefinitiveCRCDAPRO(
+    #                     conditional_grid,
+    #                     budget_per_sample,
+    #                     taus_range,
+    #                     tau_prior,
+    #                     m_upper_bound,
+    #                     n1=n1,
+    #                     budget_control_size=min(100, n1 // 2),
+    #                     row_cost_cap_multiplier=row_cost_cap_multiplier,
+    #                 ))
+    #     elif n1 >= 100:
+    #         all_allocations.append(DefinitiveCRCUPBDAPRO(
+    #             conditional_grid,
+    #             budget_per_sample,
+    #             taus_range,
+    #             tau_prior,
+    #             m_upper_bound,
+    #             n1=n1,
+    #             budget_control_size=min(100, n1 // 2),
+    #             row_cost_cap_multiplier=2.0,
+    #         ))
+    if include_a_weighted:
+        for n1 in dapro_n1_values:
+            all_allocations.append(SplitOracleTargetADAPRO(
+                conditional_grid,
+                budget_per_sample,
+                taus_range,
+                tau_prior,
+                m_upper_bound,
+                n1=n1,
+            ))
+            if n1 >= 2:
+                all_allocations.append(CRCOracleTargetADAPRO(
                     conditional_grid,
                     budget_per_sample,
                     taus_range,
@@ -121,292 +173,273 @@ def get_baseline_calibrations(
                     m_upper_bound,
                     n1=n1,
                     budget_control_size=min(100, n1 // 2),
-                    row_cost_cap_multiplier=None,
                 ))
-                for row_cost_cap_multiplier in [1.0, 2.0]:
-                    all_allocations.append(DefinitiveCRCDAPRO(
-                        conditional_grid,
-                        budget_per_sample,
-                        taus_range,
-                        tau_prior,
-                        m_upper_bound,
-                        n1=n1,
-                        budget_control_size=min(100, n1 // 2),
-                        row_cost_cap_multiplier=row_cost_cap_multiplier,
-                    ))
-        elif n1 >= 100:
-            all_allocations.append(DefinitiveCRCUPBDAPRO(
-                conditional_grid,
-                budget_per_sample,
-                taus_range,
-                tau_prior,
-                m_upper_bound,
-                n1=n1,
-                budget_control_size=min(100, n1 // 2),
-                row_cost_cap_multiplier=2.0,
-            ))
-    all_allocations.extend([
-        RandomAdaptiveOptimizedBudgetAllocator(
+        all_allocations.append(GlobalOracleTargetADAPRO(
             conditional_grid,
             budget_per_sample,
             taus_range,
             tau_prior,
             m_upper_bound,
-        ),
-        RandomAdaptiveOptimizedBudgetAllocator(
-            conditional_grid,
-            budget_per_sample,
-            taus_range,
-            tau_prior,
-            m_upper_bound,
-            terminal_pi_min=1.0 / float(m_upper_bound),
-            terminal_floor_mode="hard",
-        ),
-        RandomAdaptiveOptimizedBudgetAllocator(
-            conditional_grid,
-            budget_per_sample,
-            taus_range,
-            tau_prior,
-            m_upper_bound,
-            terminal_pi_min=None,
-            terminal_floor_mode="none",
-        ),
-        RandomAdaptiveOptimizedBudgetAllocator(
-            conditional_grid,
-            budget_per_sample,
-            taus_range,
-            tau_prior,
-            m_upper_bound,
-            terminal_pi_min=None,
-            terminal_floor_mode="none",
-            budget_control_mode="crc",
-        ),
-        RandomAdaptiveOptimizedBudgetAllocator(
-            conditional_grid,
-            budget_per_sample,
-            taus_range,
-            tau_prior,
-            m_upper_bound,
-            terminal_pi_min=1.0 / float(m_upper_bound),
-            terminal_floor_mode="hard",
-            budget_control_mode="crc",
-        ),
-        RandomAdaptiveOptimizedBudgetAllocator(
-            conditional_grid,
-            budget_per_sample,
-            taus_range,
-            tau_prior,
-            m_upper_bound,
-            budget_control_mode="crc",
-        ),
-    ])
-    for schedule_family in ["complement_power", "power_reach"]:
-        for schedule_alpha in [0.5, 1.0, 2.0]:
-            all_allocations.append(
-                RandomAdaptiveOptimizedBudgetAllocator(
-                    conditional_grid,
-                    budget_per_sample,
-                    taus_range,
-                    tau_prior,
-                    m_upper_bound,
-                    schedule_family=schedule_family,
-                    schedule_alpha=schedule_alpha,
-                    budget_control_mode="crc",
-                )
-            )
-    for projection in [
-        'platt',
-        'cumulative_platt',
-        'direct_time',
-        'direct_bins_2',
-        'direct_bins_4',
-    ]:
-        for n1 in dapro_n1_values:
-            all_allocations.append(
-                LegacyMeanWeightDAPRO(
-                    conditional_grid,
-                    budget_per_sample,
-                    taus_range,
-                    tau_prior,
-                    m_upper_bound,
-                    projection=projection,
-                    score='prob',
-                    n1=n1,
-                    evaluate_projection=evaluate_dapro_projection,
-                )
-            )
-            if not include_a_weighted:
-                continue
-            if projection == "direct_bins_2" and n1 >= 100:
-                control_size = min(100, n1 // 2)
-                crc_kwargs = {
-                    "budget_control_mode": "crc",
-                    "budget_control_size": control_size,
-                    "risk_candidate_row_cost_cap": 2.0 * budget_per_sample,
-                }
-                all_allocations.extend([
-                    LegacyMeanWeightDAPRO(
-                        conditional_grid,
-                        budget_per_sample,
-                        taus_range,
-                        tau_prior,
-                        m_upper_bound,
-                        projection=projection,
-                        score="prob",
-                        n1=n1,
-                        evaluate_projection=evaluate_dapro_projection,
-                        **crc_kwargs,
-                    ),
-                    TargetAWeightedDAPRO(
-                        conditional_grid,
-                        budget_per_sample,
-                        taus_range,
-                        tau_prior,
-                        m_upper_bound,
-                        projection=projection,
-                        score="prob",
-                        n1=n1,
-                        anchor_kind="raw_alpha",
-                        target_alpha=0.10,
-                        **crc_kwargs,
-                    ),
-                ])
-            all_allocations.append(
-                AWeightedDAPRO(
-                    conditional_grid,
-                    budget_per_sample,
-                    taus_range,
-                    tau_prior,
-                    m_upper_bound,
-                    projection=projection,
-                    score='prob',
-                    n1=n1,
-                )
-            )
-            for anchor_kind in ["raw_alpha", "phase1_unweighted"]:
-                all_allocations.append(
-                    TargetAWeightedDAPRO(
-                        conditional_grid,
-                        budget_per_sample,
-                        taus_range,
-                        tau_prior,
-                        m_upper_bound,
-                        projection=projection,
-                        score='prob',
-                        n1=n1,
-                        anchor_kind=anchor_kind,
-                        target_alpha=0.10,
-                    )
-                )
-            if projection == "direct_time":
-                if n1 >= 100:
-                    for target_policy_fraction in [
-                        0.00,
-                        0.25,
-                        0.50,
-                        0.75,
-                        1.00,
-                    ]:
-                        all_allocations.append(
-                            RandomAnchoredTargetAWeightedDAPRO(
-                                conditional_grid,
-                                budget_per_sample,
-                                taus_range,
-                                tau_prior,
-                                m_upper_bound,
-                                projection=projection,
-                                score='prob',
-                                n1=n1,
-                                target_alpha=0.10,
-                                target_policy_fraction=(
-                                    target_policy_fraction
-                                ),
-                                budget_control_mode="crc",
-                                budget_control_size=n1 // 2,
-                            )
-                        )
-                        if target_policy_fraction in {0.50, 0.75}:
-                            all_allocations.append(
-                                RandomAnchoredTargetAWeightedDAPRO(
-                                    conditional_grid,
-                                    budget_per_sample,
-                                    taus_range,
-                                    tau_prior,
-                                    m_upper_bound,
-                                    projection=projection,
-                                    score='prob',
-                                    n1=n1,
-                                    target_alpha=0.10,
-                                    target_policy_fraction=(
-                                        target_policy_fraction
-                                    ),
-                                    fill_random_slack=True,
-                                    budget_control_mode="crc",
-                                    budget_control_size=n1 // 2,
-                                )
-                            )
-                for robustness_weight in [0.10, 0.50]:
-                    all_allocations.append(
-                        RobustTargetAWeightedDAPRO(
-                            conditional_grid,
-                            budget_per_sample,
-                            taus_range,
-                            tau_prior,
-                            m_upper_bound,
-                            projection=projection,
-                            score='prob',
-                            n1=n1,
-                            target_alpha=0.10,
-                            robustness_weight=robustness_weight,
-                        )
-                    )
-                for global_regularization in [0.001, 0.01, 0.05]:
-                    all_allocations.append(
-                        RegularizedTargetAWeightedDAPRO(
-                            conditional_grid,
-                            budget_per_sample,
-                            taus_range,
-                            tau_prior,
-                            m_upper_bound,
-                            projection=projection,
-                            score='prob',
-                            n1=n1,
-                            target_alpha=0.10,
-                            global_regularization=global_regularization,
-                        )
-                    )
-                    all_allocations.append(
-                        RegularizedTargetAWeightedDAPRO(
-                            conditional_grid,
-                            budget_per_sample,
-                            taus_range,
-                            tau_prior,
-                            m_upper_bound,
-                            projection=projection,
-                            score='prob',
-                            n1=n1,
-                            anchor_kind="phase1_unweighted",
-                            target_alpha=0.10,
-                            global_regularization=global_regularization,
-                        )
-                    )
-                all_allocations.append(
-                    BandRegularizedTargetAWeightedDAPRO(
-                        conditional_grid,
-                        budget_per_sample,
-                        taus_range,
-                        tau_prior,
-                        m_upper_bound,
-                        projection=projection,
-                        score='prob',
-                        n1=n1,
-                        target_alphas=tuple(
-                            0.07 + 0.01 * offset
-                            for offset in range(7)
-                        ),
-                        global_regularization=0.01,
-                    )
-                )
+        ))
+    # all_allocations.extend([
+    #     RandomAdaptiveOptimizedBudgetAllocator(
+    #         conditional_grid,
+    #         budget_per_sample,
+    #         taus_range,
+    #         tau_prior,
+    #         m_upper_bound,
+    #     ),
+    #     RandomAdaptiveOptimizedBudgetAllocator(
+    #         conditional_grid,
+    #         budget_per_sample,
+    #         taus_range,
+    #         tau_prior,
+    #         m_upper_bound,
+    #         terminal_pi_min=1.0 / float(m_upper_bound),
+    #         terminal_floor_mode="hard",
+    #     ),
+    #     RandomAdaptiveOptimizedBudgetAllocator(
+    #         conditional_grid,
+    #         budget_per_sample,
+    #         taus_range,
+    #         tau_prior,
+    #         m_upper_bound,
+    #         terminal_pi_min=None,
+    #         terminal_floor_mode="none",
+    #     ),
+    #     ConstantCRCBudgetAllocator(
+    #         conditional_grid,
+    #         budget_per_sample,
+    #         taus_range,
+    #         tau_prior,
+    #         m_upper_bound,
+    #     ),
+    #     RandomAdaptiveOptimizedBudgetAllocator(
+    #         conditional_grid,
+    #         budget_per_sample,
+    #         taus_range,
+    #         tau_prior,
+    #         m_upper_bound,
+    #         terminal_pi_min=1.0 / float(m_upper_bound),
+    #         terminal_floor_mode="hard",
+    #         budget_control_mode="crc",
+    #     ),
+    #     RandomAdaptiveOptimizedBudgetAllocator(
+    #         conditional_grid,
+    #         budget_per_sample,
+    #         taus_range,
+    #         tau_prior,
+    #         m_upper_bound,
+    #         budget_control_mode="crc",
+    #     ),
+    # ])
+    # for schedule_family in ["complement_power", "power_reach"]:
+    #     for schedule_alpha in [0.5, 1.0, 2.0]:
+    #         all_allocations.append(
+    #             RandomAdaptiveOptimizedBudgetAllocator(
+    #                 conditional_grid,
+    #                 budget_per_sample,
+    #                 taus_range,
+    #                 tau_prior,
+    #                 m_upper_bound,
+    #                 schedule_family=schedule_family,
+    #                 schedule_alpha=schedule_alpha,
+    #                 budget_control_mode="crc",
+    #             )
+    #         )
+    # for projection in [
+    #     'platt',
+    #     'cumulative_platt',
+    #     'direct_time',
+    #     'direct_bins_2',
+    #     'direct_bins_4',
+    # ]:
+    #     for n1 in dapro_n1_values:
+    #         all_allocations.append(
+    #             LegacyMeanWeightDAPRO(
+    #                 conditional_grid,
+    #                 budget_per_sample,
+    #                 taus_range,
+    #                 tau_prior,
+    #                 m_upper_bound,
+    #                 projection=projection,
+    #                 score='prob',
+    #                 n1=n1,
+    #                 evaluate_projection=evaluate_dapro_projection,
+    #             )
+    #         )
+    #         if not include_a_weighted:
+    #             continue
+    #         if projection == "direct_bins_2" and n1 >= 100:
+    #             control_size = min(100, n1 // 2)
+    #             crc_kwargs = {
+    #                 "budget_control_mode": "crc",
+    #                 "budget_control_size": control_size,
+    #                 "risk_candidate_row_cost_cap": 2.0 * budget_per_sample,
+    #             }
+    #             all_allocations.extend([
+    #                 LegacyMeanWeightDAPRO(
+    #                     conditional_grid,
+    #                     budget_per_sample,
+    #                     taus_range,
+    #                     tau_prior,
+    #                     m_upper_bound,
+    #                     projection=projection,
+    #                     score="prob",
+    #                     n1=n1,
+    #                     evaluate_projection=evaluate_dapro_projection,
+    #                     **crc_kwargs,
+    #                 ),
+    #                 TargetAWeightedDAPRO(
+    #                     conditional_grid,
+    #                     budget_per_sample,
+    #                     taus_range,
+    #                     tau_prior,
+    #                     m_upper_bound,
+    #                     projection=projection,
+    #                     score="prob",
+    #                     n1=n1,
+    #                     anchor_kind="raw_alpha",
+    #                     target_alpha=0.10,
+    #                     **crc_kwargs,
+    #                 ),
+    #             ])
+    #         all_allocations.append(
+    #             AWeightedDAPRO(
+    #                 conditional_grid,
+    #                 budget_per_sample,
+    #                 taus_range,
+    #                 tau_prior,
+    #                 m_upper_bound,
+    #                 projection=projection,
+    #                 score='prob',
+    #                 n1=n1,
+    #             )
+    #         )
+    #         for anchor_kind in ["raw_alpha", "phase1_unweighted"]:
+    #             all_allocations.append(
+    #                 TargetAWeightedDAPRO(
+    #                     conditional_grid,
+    #                     budget_per_sample,
+    #                     taus_range,
+    #                     tau_prior,
+    #                     m_upper_bound,
+    #                     projection=projection,
+    #                     score='prob',
+    #                     n1=n1,
+    #                     anchor_kind=anchor_kind,
+    #                     target_alpha=0.10,
+    #                 )
+    #             )
+    #         if projection == "direct_time":
+    #             if n1 >= 100:
+    #                 for target_policy_fraction in [
+    #                     0.00,
+    #                     0.25,
+    #                     0.50,
+    #                     0.75,
+    #                     1.00,
+    #                 ]:
+    #                     all_allocations.append(
+    #                         RandomAnchoredTargetAWeightedDAPRO(
+    #                             conditional_grid,
+    #                             budget_per_sample,
+    #                             taus_range,
+    #                             tau_prior,
+    #                             m_upper_bound,
+    #                             projection=projection,
+    #                             score='prob',
+    #                             n1=n1,
+    #                             target_alpha=0.10,
+    #                             target_policy_fraction=(
+    #                                 target_policy_fraction
+    #                             ),
+    #                             budget_control_mode="crc",
+    #                             budget_control_size=n1 // 2,
+    #                         )
+    #                     )
+    #                     if target_policy_fraction in {0.50, 0.75}:
+    #                         all_allocations.append(
+    #                             RandomAnchoredTargetAWeightedDAPRO(
+    #                                 conditional_grid,
+    #                                 budget_per_sample,
+    #                                 taus_range,
+    #                                 tau_prior,
+    #                                 m_upper_bound,
+    #                                 projection=projection,
+    #                                 score='prob',
+    #                                 n1=n1,
+    #                                 target_alpha=0.10,
+    #                                 target_policy_fraction=(
+    #                                     target_policy_fraction
+    #                                 ),
+    #                                 fill_random_slack=True,
+    #                                 budget_control_mode="crc",
+    #                                 budget_control_size=n1 // 2,
+    #                             )
+    #                         )
+    #             for robustness_weight in [0.10, 0.50]:
+    #                 all_allocations.append(
+    #                     RobustTargetAWeightedDAPRO(
+    #                         conditional_grid,
+    #                         budget_per_sample,
+    #                         taus_range,
+    #                         tau_prior,
+    #                         m_upper_bound,
+    #                         projection=projection,
+    #                         score='prob',
+    #                         n1=n1,
+    #                         target_alpha=0.10,
+    #                         robustness_weight=robustness_weight,
+    #                     )
+    #                 )
+    #             for global_regularization in [0.001, 0.01, 0.05]:
+    #                 all_allocations.append(
+    #                     RegularizedTargetAWeightedDAPRO(
+    #                         conditional_grid,
+    #                         budget_per_sample,
+    #                         taus_range,
+    #                         tau_prior,
+    #                         m_upper_bound,
+    #                         projection=projection,
+    #                         score='prob',
+    #                         n1=n1,
+    #                         target_alpha=0.10,
+    #                         global_regularization=global_regularization,
+    #                     )
+    #                 )
+    #                 all_allocations.append(
+    #                     RegularizedTargetAWeightedDAPRO(
+    #                         conditional_grid,
+    #                         budget_per_sample,
+    #                         taus_range,
+    #                         tau_prior,
+    #                         m_upper_bound,
+    #                         projection=projection,
+    #                         score='prob',
+    #                         n1=n1,
+    #                         anchor_kind="phase1_unweighted",
+    #                         target_alpha=0.10,
+    #                         global_regularization=global_regularization,
+    #                     )
+    #                 )
+    #             all_allocations.append(
+    #                 BandRegularizedTargetAWeightedDAPRO(
+    #                     conditional_grid,
+    #                     budget_per_sample,
+    #                     taus_range,
+    #                     tau_prior,
+    #                     m_upper_bound,
+    #                     projection=projection,
+    #                     score='prob',
+    #                     n1=n1,
+    #                     target_alphas=tuple(
+    #                         0.07 + 0.01 * offset
+    #                         for offset in range(7)
+    #                     ),
+    #                     global_regularization=0.01,
+    #                 )
+    #             )
     # for projection in ['platt', 'beta']:
     #     for score in ['prob', 'quantile']:
     #         all_allocations.append(DAPRO(conditional_grid,

@@ -5,7 +5,7 @@
 #   bash src/predictive_bounds/scripts/calibrate.sh --local
 #   bash src/predictive_bounds/scripts/calibrate.sh --local --cpu --available-only
 #   bash src/predictive_bounds/scripts/calibrate.sh --slurm
-#   bash src/predictive_bounds/scripts/calibrate.sh --slurm --parallel-jobs 50
+#   bash src/predictive_bounds/scripts/calibrate.sh --slurm --cpu --parallel-jobs 50
 #   bash src/predictive_bounds/scripts/calibrate.sh --slurm --dry-run
 #
 # Edit only the configuration block below to change the experiment matrix.
@@ -173,6 +173,11 @@ METHODS=(
   "calibration_projected_optimization_direct_bins_2_prob_budget_crc_control_${CRC_CONTROL_SIZE}_row_cap_2p00x_budget_n1_${DAPRO_N1}_allocation"
   "calibration_projected_optimization_direct_bins_2_prob_a_target_raw_alpha_0p10_budget_crc_control_${CRC_CONTROL_SIZE}_row_cap_2p00x_budget_n1_${DAPRO_N1}_allocation"
   "calibration_dapro_variance_aligned_bins_2_alpha_0p10_global_0p001_budget_crc_control_${CRC_CONTROL_SIZE}_row_cap_2p00x_budget_n1_${DAPRO_N1}_allocation"
+  # Full-trajectory Target-A oracle diagnostics. The split variants retain
+  # DAPRO's pilot accounting; the global variant optimizes every row.
+  "calibration_oracle_target_a_dapro_alpha_0p10_n1_${DAPRO_N1}_allocation"
+  "calibration_oracle_target_a_dapro_alpha_0p10_crc_control_${CRC_CONTROL_SIZE}_n1_${DAPRO_N1}_allocation"
+  calibration_oracle_target_a_dapro_no_split_alpha_0p10_allocation
 )
 METHOD_CSV="$(IFS=,; echo "${METHODS[*]}")"
 
@@ -396,3 +401,6 @@ mkdir -p "$(dirname "$ARCHIVE_PATH")"
 tar -czf "$ARCHIVE_PATH" "${MERGED_FILES[@]}"
 echo
 echo "Archived ${#MERGED_FILES[@]} merged CSV files at $ARCHIVE_PATH"
+exit 0
+EXPERIMENT_SUFFIX="lpb_all_methods_v1"
+tar -czf "results/lpb_merged_lpb_all_methods_v1.tar.gz" results/merged_calibration_dfs/

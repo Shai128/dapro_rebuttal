@@ -15,6 +15,11 @@ from src.predictive_bounds.budget_allocators.adaptive_optimized_allocator import
 from src.predictive_bounds.budget_allocators.basic_allocator import BasicBudgetAllocator
 from src.predictive_bounds.budget_allocators.budget_allocator import BudgetAllocator
 from src.predictive_bounds.budget_allocators.optimized_allocators import OptimizedBudgetAllocator
+from src.predictive_bounds.budget_allocators.oracle_dapro_allocator import (
+    CRCOracleTargetADAPRO,
+    GlobalOracleTargetADAPRO,
+    SplitOracleTargetADAPRO,
+)
 from src.predictive_bounds.budget_allocators.DAPRO import (
     DAPRO,
     DefinitiveCRCDAPRO,
@@ -23,8 +28,10 @@ from src.predictive_bounds.budget_allocators.DAPRO import (
     LegacyMeanWeightDAPRO,
     TargetAWeightedDAPRO,
 )
-from src.predictive_bounds.budget_allocators.random_adaptive_optimized_allocator import \
-    RandomAdaptiveOptimizedBudgetAllocator
+from src.predictive_bounds.budget_allocators.random_adaptive_optimized_allocator import (
+    ConstantCRCBudgetAllocator,
+    RandomAdaptiveOptimizedBudgetAllocator,
+)
 from src.predictive_bounds.budget_allocators.trimmed_allocator import TrimmedBudgetAllocator
 
 # LPB Calibrations
@@ -505,15 +512,12 @@ def get_baseline_calibrations(conditional_grid, budget_per_sample, taus_range, t
             m_upper_bound,
             **alloc_kwargs,
         ),
-        RandomAdaptiveOptimizedBudgetAllocator(
+        ConstantCRCBudgetAllocator(
             conditional_grid,
             budget_per_sample,
             taus_range,
             tau_prior,
             m_upper_bound,
-            terminal_pi_min=None,
-            terminal_floor_mode="none",
-            budget_control_mode="crc",
             **alloc_kwargs,
         ),
         RandomAdaptiveOptimizedBudgetAllocator(
@@ -614,6 +618,35 @@ def get_baseline_calibrations(conditional_grid, budget_per_sample, taus_range, t
                         **alloc_kwargs,
                     ),
                 ])
+        for n1 in dapro_n1_values:
+            all_allocations.append(SplitOracleTargetADAPRO(
+                conditional_grid,
+                budget_per_sample,
+                taus_range,
+                tau_prior,
+                m_upper_bound,
+                n1=n1,
+                **alloc_kwargs,
+            ))
+            if n1 >= 2:
+                all_allocations.append(CRCOracleTargetADAPRO(
+                    conditional_grid,
+                    budget_per_sample,
+                    taus_range,
+                    tau_prior,
+                    m_upper_bound,
+                    n1=n1,
+                    budget_control_size=min(100, n1 // 2),
+                    **alloc_kwargs,
+                ))
+        all_allocations.append(GlobalOracleTargetADAPRO(
+            conditional_grid,
+            budget_per_sample,
+            taus_range,
+            tau_prior,
+            m_upper_bound,
+            **alloc_kwargs,
+        ))
     else:
         for n1 in dapro_n1_values:
             if n1 >= 100:

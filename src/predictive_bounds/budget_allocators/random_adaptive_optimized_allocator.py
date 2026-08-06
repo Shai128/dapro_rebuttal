@@ -131,6 +131,8 @@ class RandomAdaptiveOptimizedBudgetAllocator(BudgetAllocator):
             base = "random_adaptive_optimized_no_terminal_floor"
             if self.budget_control_mode != "empirical":
                 base += f"_{self.budget_control_mode}"
+            if self.phase1_size != 100:
+                base += f"_n1_{self.phase1_size}"
             return base
         floor = (
             f"{self.min_pi:.6f}"
@@ -144,6 +146,8 @@ class RandomAdaptiveOptimizedBudgetAllocator(BudgetAllocator):
         )
         if self.budget_control_mode != "empirical":
             base += f"_{self.budget_control_mode}"
+        if self.phase1_size != 100:
+            base += f"_n1_{self.phase1_size}"
         return base
 
     def _conditional_schedule(
@@ -322,6 +326,21 @@ class RandomAdaptiveOptimizedBudgetAllocator(BudgetAllocator):
             # aggressiveness; the lower endpoint is known feasible.
             best_lambda = lam_low
 
+        phase2_active_lengths = torch.minimum(
+            t_test.to(torch.long),
+            test_prior_q.to(torch.long),
+        ).clamp(min=0, max=T_max_curr)
+        if (
+                best_lambda <= 0
+                and self.min_pi is None
+                and torch.any(phase2_active_lengths > 0)
+        ):
+            raise ValueError(
+                "The available budget selects zero continuation probability, "
+                "which violates the positivity required by inverse-propensity "
+                "calibration. Increase the budget."
+            )
+
         _, _, tuned_validation_expected_cost = simulate_process_vectorized(
             val_expected_remaining,
             val_prior_q,
@@ -333,6 +352,9 @@ class RandomAdaptiveOptimizedBudgetAllocator(BudgetAllocator):
             terminal_pi_min=self.min_pi,
             terminal_floor_mode=self.terminal_floor_mode,
         )
+        # ``t_test`` appears below only because this offline simulator must stop
+        # charging after an event is revealed.  The already-selected scalar
+        # probability and ``test_p_func`` do not depend on Phase-II labels.
         _, _, test_expected_cost = simulate_process_vectorized(
             test_expected_remaining,
             test_prior_q,
@@ -416,10 +438,6 @@ class RandomAdaptiveOptimizedBudgetAllocator(BudgetAllocator):
             )),
             torch.zeros((), dtype=torch.float64, device=device),
         ).sum(dim=1))
-        phase2_active_lengths = torch.minimum(
-            t_test.to(torch.long),
-            test_prior_q.to(torch.long),
-        ).clamp(min=0, max=T_max_curr)
         phase2_active_mask = (
             torch.arange(T_max_curr, device=device).unsqueeze(0)
             < phase2_active_lengths.unsqueeze(1)
@@ -573,6 +591,11 @@ class RandomAdaptiveOptimizedBudgetAllocator(BudgetAllocator):
             "crc_distribution_free_envelope_used": int(
                 self.budget_control_mode == "crc"
             ),
+            "budget_guarantee_kind": (
+                "crc_marginal_expected_total_budget"
+                if self.budget_control_mode == "crc"
+                else "empirical_budget_fit_only"
+            ),
             "crc_selector_valid": int(
                 self.budget_control_mode != "crc"
                 or crc_selector_left_side <= target_budget_avg + 1e-7
@@ -627,6 +650,7 @@ class RandomAdaptiveOptimizedBudgetAllocator(BudgetAllocator):
                 self.schedule_family == "constant"
                 and not phase2_floor_changes.any().item()
             ),
+            "random_policy_uses_phase2_event_times": 0,
             "random_parameter_semantics": (
                 "conditional_continuation_probability_not_lagrange_multiplier"
             ),
@@ -668,4 +692,44 @@ class RandomAdaptiveOptimizedBudgetAllocator(BudgetAllocator):
             mean_weight=mean_val_weight,
             max_weight=max_val_weight,
             additional_metrics=additional_metrics,
+        )
+
+
+class ConstantCRCBudgetAllocator(RandomAdaptiveOptimizedBudgetAllocator):
+    """Canonical constant-probability allocation with CRC budget control.
+
+    Phase I is fully observed and is the only part of the calibration sample
+    used to choose the scalar continuation probability.  Every eligible
+    Phase-II interaction then uses that same probability, independently of
+    the sample, time, model output, and latent event time.  No terminal floor
+    is applied because a binding floor would make the executed conditional
+    probabilities nonconstant.
+
+    The parent class remains configurable for named ablations.  This narrow
+    wrapper prevents the paper baseline from accidentally being constructed
+    with empirical budget tuning, a time-varying schedule, or a floor.
+    """
+
+    def __init__(
+            self,
+            conditional_grid,
+            budget_per_sample,
+            taus_range,
+            tau_prior,
+            m_upper_bound,
+            reach_t_max_is_success=False,
+            phase1_size=100):
+        super().__init__(
+            conditional_grid=conditional_grid,
+            budget_per_sample=budget_per_sample,
+            taus_range=taus_range,
+            tau_prior=tau_prior,
+            m_upper_bound=m_upper_bound,
+            reach_t_max_is_success=reach_t_max_is_success,
+            terminal_pi_min=None,
+            terminal_floor_mode="none",
+            budget_control_mode="crc",
+            schedule_family="constant",
+            schedule_alpha=1.0,
+            phase1_size=phase1_size,
         )

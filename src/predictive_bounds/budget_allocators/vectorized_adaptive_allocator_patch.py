@@ -345,7 +345,11 @@ def simulate_process_vectorized(
 
     # Inactive coordinates are treated as automatic successes so only failures
     # while the trajectory is eligible to advance terminate its prefix.
-    decision_success = (~required_mask) | (uniforms <= pi)
+    # ``torch.rand`` samples from [0, 1), so the strict comparison implements
+    # an exact Bernoulli(pi), including the boundary case pi == 0.  Using
+    # ``<=`` would allow an externally supplied zero uniform to advance under
+    # a zero-probability policy.
+    decision_success = (~required_mask) | (uniforms < pi)
     failures_so_far = (~decision_success).to(torch.int32).cumsum(dim=1)
     prefix_survived = failures_so_far.eq(0)
 

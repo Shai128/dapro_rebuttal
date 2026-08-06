@@ -1,9 +1,10 @@
-"""Generate all manuscript box plots for the definitive method comparison.
+"""Generate a navigable, low-resolution summary of merged bound results.
 
-Each ordinary metric is a seed-level box plot grouped by target model with
-method as hue.  Coverage variance is the across-seed sample variance in
-squared percentage points and is therefore shown as a grouped bar plot, as in
-the manuscript.  Low-quality mode guarantees every JPEG is at most 100 KiB.
+The script discovers every ``all_df.csv`` under ``results/merged``, reads only
+the columns required for plotting, and groups outputs by dataset and purpose.
+Seed-level metrics are box plots by target model and method; coverage variance
+is the across-seed sample variance in squared percentage points. Low-quality
+mode is the default and guarantees every JPEG is at most 100 KiB.
 """
 
 from __future__ import annotations
@@ -12,6 +13,8 @@ import argparse
 import os
 from pathlib import Path
 
+import matplotlib
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
@@ -25,8 +28,8 @@ from src.predictive_bounds.experiments.full_bounds.config import (
     TARGET_MODELS,
     UNCALIBRATED,
     ExperimentConfig,
+    all_experiment_configs,
     calibration_names,
-    select_configs,
 )
 from src.predictive_bounds.utils.utils import (
     get_calibration_experiment_name,
@@ -36,36 +39,71 @@ from src.predictive_bounds.utils.utils import (
 
 
 ROOT = Path(__file__).resolve().parents[4]
-DEFAULT_OUTPUT_DIR = ROOT / "figures" / "full"
+DEFAULT_INPUT_DIR = ROOT / "results" / "merged"
+DEFAULT_OUTPUT_DIR = ROOT / "figures" / "full" / "merged"
 LOW_QUALITY_MAX_BYTES = 100 * 1024
 
 TARGET_MODEL_ORDER = tuple(model.display_name for model in TARGET_MODELS)
 
 BOX_METRICS = {
     "mean_weight": {
-        "filename": "mean_weight_boxplot.jpg",
+        "filename": "mean-weight.jpg",
         "ylabel": "Mean inverse-probability weight",
         "allocation_only": True,
+        "log_scale": True,
+        "group": "core",
     },
     "mean_a_weight": {
-        "filename": "mean_a_weight_boxplot.jpg",
+        "filename": "target-weight.jpg",
         "ylabel": r"Mean target weight $A_i/\pi_i$",
         "allocation_only": True,
+        "log_scale": True,
+        "group": "core",
     },
     "coverage_pct": {
-        "filename": "coverage_boxplot.jpg",
+        "filename": "coverage.jpg",
         "ylabel": "Coverage rate (%)",
         "reference": "target_coverage_pct",
+        "group": "core",
     },
     "coverage_diff_pct": {
-        "filename": "coverage_diff_boxplot.jpg",
+        "filename": "coverage-gap.jpg",
         "ylabel": "Absolute coverage difference (pp)",
+        "group": "core",
     },
     "budget_used_per_sample": {
-        "filename": "budget_used_boxplot.jpg",
+        "filename": "realized-budget.jpg",
         "ylabel": "Budget used per sample",
         "reference": "target_budget",
         "allocation_only": True,
+        "exclude_oracle": True,
+        "group": "core",
+    },
+    "total_expected_budget_per_sample": {
+        "filename": "expected-budget.jpg",
+        "ylabel": "Expected budget per sample",
+        "reference": "target_budget",
+        "allocation_only": True,
+        "group": "diagnostics",
+    },
+    "max_weight": {
+        "filename": "max-weight.jpg",
+        "ylabel": "Maximum inverse-probability weight",
+        "allocation_only": True,
+        "log_scale": True,
+        "group": "diagnostics",
+    },
+    "a_weighted_effective_sample_size": {
+        "filename": "target-ess.jpg",
+        "ylabel": "Target-weight effective sample size",
+        "allocation_only": True,
+        "group": "diagnostics",
+    },
+    "method_runtime_seconds": {
+        "filename": "runtime.jpg",
+        "ylabel": "Runtime per seed (seconds)",
+        "log_scale": True,
+        "group": "diagnostics",
     },
 }
 
@@ -99,6 +137,94 @@ def merged_result_path(config: ExperimentConfig, suffix: str) -> Path:
     return ROOT / resolver(name) / "all_df.csv"
 
 
+PLOT_COLUMNS = {
+    "seed",
+    "calibration_name",
+    "target_coverage",
+    "coverage",
+    "mean_weight",
+    "mean_a_weighted_inverse_probability",
+    "budget_used",
+    "max_weight",
+    "total_expected_budget_per_sample",
+    "a_weighted_effective_sample_size",
+    "method_runtime_seconds",
+    "configured_cal_size",
+}
+
+
+def _read_plot_columns(path: Path) -> pd.DataFrame:
+    """Read only plotting columns; merged files contain hundreds of metrics."""
+    return pd.read_csv(
+        _long_io_path(path),
+        usecols=lambda column: column in PLOT_COLUMNS,
+    )
+
+
+def _fallback_method_name(calibration_name: str) -> str:
+    """Create a readable label if a future method is not in the registry."""
+    cleaned = calibration_name
+    for token in ("calibration_", "_allocation", "survival_calibration"):
+        cleaned = cleaned.replace(token, "")
+    return cleaned.replace("_", " ").strip().title()
+
+
+def _prepare_frame(
+        frame: pd.DataFrame,
+        config: ExperimentConfig,
+        source_path: Path,
+) -> pd.DataFrame:
+    for column in PLOT_COLUMNS:
+        if column not in frame:
+            frame[column] = np.nan
+    numeric_columns = PLOT_COLUMNS - {"calibration_name"}
+    for column in numeric_columns:
+        frame[column] = pd.to_numeric(frame[column], errors="coerce")
+
+    frame = frame[np.isclose(
+        frame["target_coverage"],
+        config.target_coverage,
+        atol=5e-7,
+    )].copy()
+    if frame.empty:
+        return frame
+
+    frame["method"] = frame["calibration_name"].map(METHOD_DISPLAY)
+    unknown = frame["method"].isna() & frame["calibration_name"].notna()
+    frame.loc[unknown, "method"] = frame.loc[
+        unknown, "calibration_name"
+    ].map(_fallback_method_name)
+    frame["target_model"] = config.target_model.display_name
+    frame["target_model_key"] = config.target_model.key
+    frame["configuration"] = config.key
+    frame["dataset_key"] = config.figure_dataset_name
+    frame["dataset_display"] = config.display_dataset_name
+    frame["bound_type"] = config.bound_type.upper()
+    frame["source_file"] = str(source_path)
+    frame["target_coverage_pct"] = 100 * config.target_coverage
+    frame["target_budget"] = config.budget_per_sample
+    frame["coverage_pct"] = 100 * frame["coverage"]
+    frame["coverage_diff_pct"] = (
+        frame["coverage_pct"] - frame["target_coverage_pct"]
+    ).abs()
+    frame["mean_a_weight"] = frame[
+        "mean_a_weighted_inverse_probability"
+    ]
+    calibration_size = frame["configured_cal_size"].fillna(config.cal_size)
+    frame["budget_used_per_sample"] = frame["budget_used"] / calibration_size
+
+    raw = frame["calibration_name"] == UNCALIBRATED
+    frame.loc[raw, [
+        "mean_weight",
+        "mean_a_weight",
+        "budget_used_per_sample",
+        "max_weight",
+        "total_expected_budget_per_sample",
+        "a_weighted_effective_sample_size",
+    ]] = np.nan
+    return frame
+
+
 def load_comparison_data(
         configs: tuple[ExperimentConfig, ...],
         suffix: str,
@@ -114,21 +240,14 @@ def load_comparison_data(
         if not os.path.exists(_long_io_path(path)):
             missing_paths.append(path)
             continue
-        frame = pd.read_csv(_long_io_path(path))
+        frame = _read_plot_columns(path)
         requested = set(calibration_names(config.bound_type))
         available = set(frame["calibration_name"].dropna().unique())
         absent = sorted(requested - available)
         if absent:
             missing_methods.append((config.key, absent))
         frame = frame[frame["calibration_name"].isin(requested)].copy()
-        target_coverage = pd.to_numeric(
-            frame["target_coverage"], errors="coerce"
-        )
-        frame = frame[np.isclose(
-            target_coverage,
-            config.target_coverage,
-            atol=5e-7,
-        )].copy()
+        frame = _prepare_frame(frame, config, path)
         if frame.empty:
             missing_methods.append((
                 config.key,
@@ -136,43 +255,6 @@ def load_comparison_data(
             ))
             continue
 
-        for column in [
-            "seed",
-            "coverage",
-            "mean_weight",
-            "mean_a_weighted_inverse_probability",
-            "budget_used",
-        ]:
-            if column not in frame:
-                frame[column] = np.nan
-            frame[column] = pd.to_numeric(frame[column], errors="coerce")
-
-        frame["method"] = frame["calibration_name"].map(METHOD_DISPLAY)
-        frame["target_model"] = config.target_model.display_name
-        frame["target_model_key"] = config.target_model.key
-        frame["configuration"] = config.key
-        frame["dataset_key"] = config.figure_dataset_name
-        frame["dataset_display"] = config.display_dataset_name
-        frame["bound_type"] = config.bound_type.upper()
-        frame["target_coverage_pct"] = 100 * config.target_coverage
-        frame["target_budget"] = config.budget_per_sample
-        frame["coverage_pct"] = 100 * frame["coverage"]
-        frame["coverage_diff_pct"] = (
-            frame["coverage_pct"] - frame["target_coverage_pct"]
-        ).abs()
-        frame["mean_a_weight"] = frame[
-            "mean_a_weighted_inverse_probability"
-        ]
-        frame["budget_used_per_sample"] = (
-            frame["budget_used"] / config.cal_size
-        )
-
-        uncalibrated = frame["calibration_name"] == UNCALIBRATED
-        frame.loc[uncalibrated, [
-            "mean_weight",
-            "mean_a_weight",
-            "budget_used_per_sample",
-        ]] = np.nan
         frames.append(frame)
 
     if (missing_paths or missing_methods) and not allow_missing:
@@ -186,6 +268,56 @@ def load_comparison_data(
         )
     if not frames:
         raise FileNotFoundError("No complete merged comparison results found.")
+    return pd.concat(frames, ignore_index=True)
+
+
+def _match_result_config(path: Path) -> ExperimentConfig | None:
+    directory_name = path.parent.name
+    matches = []
+    for config in all_experiment_configs():
+        base = experiment_name(config, "")
+        if directory_name == base or directory_name.startswith(f"{base}__"):
+            matches.append((len(base), config))
+    if not matches:
+        return None
+    return max(matches, key=lambda item: item[0])[1]
+
+
+def load_merged_directory(
+        input_dir: Path,
+        *,
+        configuration_keys: set[str] | None = None,
+        target_models: set[str] | None = None,
+) -> pd.DataFrame:
+    """Discover and load every recognized ``all_df.csv`` below a directory."""
+    paths = sorted(input_dir.rglob("all_df.csv"))
+    if not paths:
+        raise FileNotFoundError(f"No all_df.csv files found below {input_dir}.")
+
+    frames = []
+    unrecognized = []
+    for path in paths:
+        config = _match_result_config(path)
+        if config is None:
+            unrecognized.append(path)
+            continue
+        if configuration_keys and config.key not in configuration_keys:
+            continue
+        if target_models and config.target_model.key not in target_models:
+            continue
+        frame = _prepare_frame(_read_plot_columns(path), config, path)
+        if not frame.empty:
+            frames.append(frame)
+
+    if unrecognized:
+        print(f"Skipped {len(unrecognized)} unrecognized result directories.")
+        for path in unrecognized:
+            print(f"  {path}")
+    if not frames:
+        raise FileNotFoundError(
+            f"No recognized results with the requested coverage were found "
+            f"below {input_dir}."
+        )
     return pd.concat(frames, ignore_index=True)
 
 
@@ -211,7 +343,8 @@ def coverage_variance_frame(frame: pd.DataFrame) -> pd.DataFrame:
 
 def _ordered_present(values: pd.Series, order: tuple[str, ...]) -> list[str]:
     present = set(values.dropna().unique())
-    return [value for value in order if value in present]
+    known = [value for value in order if value in present]
+    return known + sorted(present - set(known))
 
 
 def _style_axis(axis, ylabel: str) -> None:
@@ -223,17 +356,17 @@ def _style_axis(axis, ylabel: str) -> None:
     axis.spines["right"].set_visible(False)
 
 
-def _place_legend(axis) -> None:
+def _place_legend(axis, figure) -> None:
     handles, labels = axis.get_legend_handles_labels()
     if axis.legend_ is not None:
         axis.legend_.remove()
     if handles:
-        axis.legend(
+        figure.legend(
             handles,
             labels,
             title="Method",
-            loc="lower center",
-            bbox_to_anchor=(0.5, 1.01),
+            loc="upper center",
+            bbox_to_anchor=(0.5, 0.94),
             ncol=4,
             frameon=False,
         )
@@ -254,9 +387,9 @@ def _save_jpeg(figure, path: Path, quality: str) -> None:
     figure.savefig(
         path,
         format="jpg",
-        dpi=145,
+        dpi=110,
         bbox_inches="tight",
-        pil_kwargs={"quality": 82, "optimize": True, "progressive": True},
+        pil_kwargs={"quality": 76, "optimize": True, "progressive": True},
     )
     jpeg_quality = 78
     while path.stat().st_size > LOW_QUALITY_MAX_BYTES:
@@ -294,12 +427,14 @@ def _plot_box_metric(
 ) -> None:
     plot_frame = frame.dropna(subset=[metric, "method"]).copy()
     if specification.get("allocation_only"):
-        plot_frame = plot_frame[plot_frame["method"] != "Uncalibrated"]
+        plot_frame = plot_frame[plot_frame["method"] != "Raw"]
+    if specification.get("exclude_oracle"):
+        plot_frame = plot_frame[plot_frame["method"] != "Oracle"]
     hue_order = _ordered_present(plot_frame["method"], METHOD_ORDER)
     target_order = _ordered_present(
         plot_frame["target_model"], TARGET_MODEL_ORDER
     )
-    figure, axis = plt.subplots(figsize=(12.5, 6.5))
+    figure, axis = plt.subplots(figsize=(11.5, 5.8))
     sns.boxplot(
         data=plot_frame,
         x="target_model",
@@ -319,6 +454,10 @@ def _plot_box_metric(
         fliersize=2.5,
         ax=axis,
     )
+    if specification.get("log_scale"):
+        positive = plot_frame.loc[plot_frame[metric] > 0, metric]
+        if not positive.empty:
+            axis.set_yscale("log")
     reference = specification.get("reference")
     if reference:
         values = plot_frame[reference].dropna().unique()
@@ -328,8 +467,10 @@ def _plot_box_metric(
                 label="Target",
             )
     _style_axis(axis, specification["ylabel"])
-    _place_legend(axis)
-    figure.tight_layout(rect=(0, 0, 1, 0.90))
+    dataset_name = str(plot_frame["dataset_display"].iloc[0])
+    figure.suptitle(f"{dataset_name}: {specification['ylabel']}", y=0.995)
+    _place_legend(axis, figure)
+    figure.tight_layout(rect=(0, 0, 1, 0.72))
     _save_jpeg(figure, path, quality)
     plt.close(figure)
 
@@ -346,7 +487,7 @@ def _plot_coverage_variance(
     target_order = _ordered_present(
         variance["target_model"], TARGET_MODEL_ORDER
     )
-    figure, axis = plt.subplots(figsize=(12.5, 6.5))
+    figure, axis = plt.subplots(figsize=(11.5, 5.8))
     sns.barplot(
         data=variance,
         x="target_model",
@@ -359,8 +500,10 @@ def _plot_coverage_variance(
         ax=axis,
     )
     _style_axis(axis, "Coverage variance (squared pp)")
-    _place_legend(axis)
-    figure.tight_layout(rect=(0, 0, 1, 0.90))
+    dataset_name = str(variance["dataset_display"].iloc[0])
+    figure.suptitle(f"{dataset_name}: coverage variance", y=0.995)
+    _place_legend(axis, figure)
+    figure.tight_layout(rect=(0, 0, 1, 0.72))
     _save_jpeg(figure, path, quality)
     plt.close(figure)
     return variance
@@ -375,14 +518,14 @@ def generate_all_figures(
         raise ValueError("quality must be 'high' or 'low'.")
     sns.set_theme(style="whitegrid", context="paper", font_scale=1.25)
     generated = []
+    manifest_rows = []
     variance_frames = []
     for dataset_key, dataset_frame in frame.groupby(
             "dataset_key", sort=False, observed=True
     ):
         for metric, specification in BOX_METRICS.items():
-            path = output_dir / (
-                f"{dataset_key}_{specification['filename']}"
-            )
+            group = specification["group"]
+            path = output_dir / dataset_key / group / specification["filename"]
             _plot_box_metric(
                 dataset_frame,
                 metric,
@@ -391,29 +534,82 @@ def generate_all_figures(
                 quality,
             )
             generated.append(path)
-        variance_path = output_dir / (
-            f"{dataset_key}_coverage_variance_barplot.jpg"
-        )
+            manifest_rows.append({
+                "dataset": dataset_key,
+                "group": group,
+                "metric": metric,
+                "label": specification["ylabel"].replace("$", ""),
+                "path": path.relative_to(output_dir).as_posix(),
+            })
+        variance_path = output_dir / dataset_key / "core" / "coverage-variance.jpg"
         variance_frames.append(_plot_coverage_variance(
             dataset_frame,
             variance_path,
             quality,
         ))
         generated.append(variance_path)
+        manifest_rows.append({
+            "dataset": dataset_key,
+            "group": "core",
+            "metric": "coverage_variance_pp2",
+            "label": "Coverage variance",
+            "path": variance_path.relative_to(output_dir).as_posix(),
+        })
 
-    output_dir.mkdir(parents=True, exist_ok=True)
-    frame.to_csv(output_dir / "full_bounds_plot_data.csv", index=False)
+    data_dir = output_dir / "data"
+    data_dir.mkdir(parents=True, exist_ok=True)
+    frame.to_csv(data_dir / "plot-data.csv", index=False)
     pd.concat(variance_frames, ignore_index=True).to_csv(
-        output_dir / "full_bounds_coverage_variances.csv", index=False
+        data_dir / "coverage-variances.csv", index=False
     )
+    manifest = pd.DataFrame(manifest_rows)
+    manifest["size_kib"] = [
+        round((output_dir / relative).stat().st_size / 1024, 1)
+        for relative in manifest["path"]
+    ]
+    manifest.to_csv(output_dir / "figure-index.csv", index=False)
+    _write_figure_readme(output_dir, manifest)
     return generated
+
+
+def _write_figure_readme(output_dir: Path, manifest: pd.DataFrame) -> None:
+    lines = [
+        "# Predictive-bound figures",
+        "",
+        "Figures are grouped first by dataset and then as core comparisons or diagnostics.",
+        "Method labels are shared across every plot; the oracle has infinite budget.",
+        "",
+    ]
+    for dataset, dataset_rows in manifest.groupby("dataset", sort=False):
+        lines.extend([f"## {dataset}", ""])
+        for group, group_rows in dataset_rows.groupby("group", sort=False):
+            lines.extend([f"### {group.title()}", ""])
+            for row in group_rows.itertuples(index=False):
+                lines.append(
+                    f"- [{row.label}]({row.path}) ({row.size_kib:.1f} KiB)"
+                )
+            lines.append("")
+    lines.extend([
+        "## Data",
+        "",
+        "- [Seed-level plot data](data/plot-data.csv)",
+        "- [Coverage variances](data/coverage-variances.csv)",
+        "- [Machine-readable figure index](figure-index.csv)",
+        "",
+    ])
+    (output_dir / "README.md").write_text(
+        "\n".join(lines), encoding="utf-8"
+    )
 
 
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--suffix", default="full_bounds_v1")
     parser.add_argument(
-        "--quality", choices=["high", "low"], default="high"
+        "--quality", choices=["high", "low"], default="low"
+    )
+    parser.add_argument(
+        "--input-dir", type=Path, default=DEFAULT_INPUT_DIR,
+        help="Directory recursively containing merged all_df.csv files.",
     )
     parser.add_argument(
         "--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR
@@ -424,25 +620,20 @@ def _parse_args() -> argparse.Namespace:
         action="append",
         choices=[model.key for model in TARGET_MODELS],
     )
-    parser.add_argument("--available-only", action="store_true")
-    parser.add_argument("--allow-missing", action="store_true")
     return parser.parse_args()
 
 
 def main() -> None:
     args = _parse_args()
-    configs = select_configs(
-        ROOT,
-        keys=set(args.configs or []),
+    frame = load_merged_directory(
+        args.input_dir,
+        configuration_keys=set(args.configs or []),
         target_models=set(args.target_model or []),
-        available_only=args.available_only,
     )
-    if not configs:
-        raise SystemExit("No configurations matched the requested filters.")
-    frame = load_comparison_data(
-        configs,
-        args.suffix,
-        allow_missing=args.allow_missing,
+    print(
+        f"Loaded {len(frame):,} rows from "
+        f"{frame['source_file'].nunique()} merged files; "
+        f"{frame['method'].nunique()} methods."
     )
     paths = generate_all_figures(frame, args.output_dir, args.quality)
     for path in paths:

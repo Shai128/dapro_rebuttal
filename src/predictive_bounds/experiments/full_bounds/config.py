@@ -142,9 +142,31 @@ UNCALIBRATED = "uncalibrated"
 LPB_ORACLE = "oracle_survival_calibration"
 UPB_ORACLE = "oracle_survival_upb_calibration"
 STATIC = "calibration_optimized_allocation"
-LOCALLY_ADAPTIVE = "calibration_adaptive_optimized_allocation"
-CONSTANT = "calibration_random_adaptive_optimized_allocation"
+LOCALLY_ADAPTIVE = "calibration_adaptive_optimized_crc_allocation"
+CONSTANT = (
+    "calibration_random_adaptive_optimized_no_terminal_floor_crc_allocation"
+)
 POWER_REACH = "calibration_random_schedule_power_reach_alpha_2_crc_allocation"
+LEGACY_DAPRO = (
+    "calibration_projected_optimization_direct_bins_2_prob_n1_200_allocation"
+)
+TARGET_A_DAPRO = (
+    "calibration_projected_optimization_direct_bins_2_prob_a_target_raw_"
+    "alpha_0p10_n1_200_allocation"
+)
+PROJECTION_DAPRO = (
+    "calibration_dapro_variance_aligned_bins_2_alpha_0p10_global_0p001_"
+    "projection_margin_1p00_n1_200_allocation"
+)
+LEGACY_CRC_DAPRO = (
+    "calibration_projected_optimization_direct_bins_2_prob_budget_crc_"
+    "control_100_row_cap_2p00x_budget_n1_200_allocation"
+)
+TARGET_A_CRC_DAPRO = (
+    "calibration_projected_optimization_direct_bins_2_prob_a_target_raw_"
+    "alpha_0p10_budget_crc_control_100_row_cap_2p00x_budget_n1_200_"
+    "allocation"
+)
 LPB_DAPRO = (
     "calibration_dapro_variance_aligned_bins_2_alpha_0p10_global_0p001_"
     "budget_crc_control_100_row_cap_2p00x_budget_n1_200_allocation"
@@ -153,37 +175,71 @@ UPB_DAPRO = (
     "calibration_dapro_upb_variance_aligned_bins_2_alpha_0p70_global_0p001_"
     "budget_crc_control_100_row_cap_2p00x_budget_n1_200_allocation"
 )
+SPLIT_DAPRO_ORACLE = (
+    "calibration_oracle_target_a_dapro_alpha_0p10_n1_200_allocation"
+)
+CRC_DAPRO_ORACLE = (
+    "calibration_oracle_target_a_dapro_alpha_0p10_crc_control_100_"
+    "n1_200_allocation"
+)
+GLOBAL_DAPRO_ORACLE = (
+    "calibration_oracle_target_a_dapro_no_split_alpha_0p10_allocation"
+)
 
 METHOD_ORDER = (
-    "Uncalibrated",
-    "Static Optimized",
-    "Constant",
-    "Power-Reach Constant",
-    "Locally Adaptive",
-    "DAPRO (CRC)",
-    "Infinite-Budget Oracle",
+    "Raw",
+    "Static",
+    "Constant + CRC",
+    "Power schedule + CRC",
+    "Local + CRC",
+    "Legacy DAPRO",
+    "Target-A DAPRO",
+    "DAPRO (projection)",
+    "Legacy DAPRO + CRC",
+    "Target-A DAPRO + CRC",
+    "DAPRO + CRC",
+    "DAPRO Oracle (split)",
+    "DAPRO Oracle + CRC",
+    "DAPRO Oracle (global)",
+    "Oracle",
 )
 
 METHOD_DISPLAY = {
-    UNCALIBRATED: "Uncalibrated",
-    LPB_ORACLE: "Infinite-Budget Oracle",
-    UPB_ORACLE: "Infinite-Budget Oracle",
-    STATIC: "Static Optimized",
-    CONSTANT: "Constant",
-    POWER_REACH: "Power-Reach Constant",
-    LOCALLY_ADAPTIVE: "Locally Adaptive",
-    LPB_DAPRO: "DAPRO (CRC)",
-    UPB_DAPRO: "DAPRO (CRC)",
+    UNCALIBRATED: "Raw",
+    LPB_ORACLE: "Oracle",
+    UPB_ORACLE: "Oracle",
+    STATIC: "Static",
+    CONSTANT: "Constant + CRC",
+    POWER_REACH: "Power schedule + CRC",
+    LOCALLY_ADAPTIVE: "Local + CRC",
+    LEGACY_DAPRO: "Legacy DAPRO",
+    TARGET_A_DAPRO: "Target-A DAPRO",
+    PROJECTION_DAPRO: "DAPRO (projection)",
+    LEGACY_CRC_DAPRO: "Legacy DAPRO + CRC",
+    TARGET_A_CRC_DAPRO: "Target-A DAPRO + CRC",
+    LPB_DAPRO: "DAPRO + CRC",
+    UPB_DAPRO: "DAPRO + CRC",
+    SPLIT_DAPRO_ORACLE: "DAPRO Oracle (split)",
+    CRC_DAPRO_ORACLE: "DAPRO Oracle + CRC",
+    GLOBAL_DAPRO_ORACLE: "DAPRO Oracle (global)",
 }
 
 METHOD_COLORS = {
-    "Uncalibrated": "#d62728",
-    "Static Optimized": "#1f77b4",
-    "Constant": "#9467bd",
-    "Power-Reach Constant": "#8c564b",
-    "Locally Adaptive": "#bcbd22",
-    "DAPRO (CRC)": "#2ca02c",
-    "Infinite-Budget Oracle": "#4d4d4d",
+    "Raw": "#d62728",
+    "Static": "#1f77b4",
+    "Constant + CRC": "#9467bd",
+    "Power schedule + CRC": "#8c564b",
+    "Local + CRC": "#bcbd22",
+    "Legacy DAPRO": "#ff9f40",
+    "Target-A DAPRO": "#17a2b8",
+    "DAPRO (projection)": "#2ca02c",
+    "Legacy DAPRO + CRC": "#c45a00",
+    "Target-A DAPRO + CRC": "#007f8b",
+    "DAPRO + CRC": "#006d2c",
+    "DAPRO Oracle (split)": "#e377c2",
+    "DAPRO Oracle + CRC": "#7f3c8d",
+    "DAPRO Oracle (global)": "#11a579",
+    "Oracle": "#4d4d4d",
 }
 
 
@@ -192,7 +248,7 @@ def calibration_names(bound_type: str) -> tuple[str, ...]:
         raise ValueError(f"Unknown bound type: {bound_type!r}.")
     dapro = LPB_DAPRO if bound_type == "lpb" else UPB_DAPRO
     oracle = LPB_ORACLE if bound_type == "lpb" else UPB_ORACLE
-    return (
+    methods = [
         UNCALIBRATED,
         STATIC,
         CONSTANT,
@@ -200,7 +256,14 @@ def calibration_names(bound_type: str) -> tuple[str, ...]:
         LOCALLY_ADAPTIVE,
         dapro,
         oracle,
-    )
+    ]
+    if bound_type == "lpb":
+        methods[-1:-1] = [
+            SPLIT_DAPRO_ORACLE,
+            CRC_DAPRO_ORACLE,
+            GLOBAL_DAPRO_ORACLE,
+        ]
+    return tuple(methods)
 
 
 def all_experiment_configs() -> tuple[ExperimentConfig, ...]:

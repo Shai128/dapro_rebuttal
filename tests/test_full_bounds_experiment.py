@@ -5,11 +5,14 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 
 from src.predictive_bounds.experiments.full_bounds.config import (
+    CRC_DAPRO_ORACLE,
+    GLOBAL_DAPRO_ORACLE,
     LPB_ORACLE,
     LPB_DAPRO,
     POWER_REACH,
     UPB_DAPRO,
     UPB_ORACLE,
+    SPLIT_DAPRO_ORACLE,
     all_experiment_configs,
     calibration_names,
 )
@@ -40,12 +43,19 @@ def test_full_bounds_matrix_covers_every_dataset_model_and_bound():
 def test_full_bounds_method_profiles_are_exact_and_bound_specific():
     lpb = calibration_names("lpb")
     upb = calibration_names("upb")
-    assert len(lpb) == len(upb) == 7
+    assert len(lpb) == 10
+    assert len(upb) == 7
     assert LPB_DAPRO in lpb and LPB_DAPRO not in upb
     assert UPB_DAPRO in upb and UPB_DAPRO not in lpb
     assert POWER_REACH in lpb and POWER_REACH in upb
     assert LPB_ORACLE in lpb and LPB_ORACLE not in upb
     assert UPB_ORACLE in upb and UPB_ORACLE not in lpb
+    for oracle in [
+        SPLIT_DAPRO_ORACLE,
+        CRC_DAPRO_ORACLE,
+        GLOBAL_DAPRO_ORACLE,
+    ]:
+        assert oracle in lpb and oracle not in upb
 
 
 def test_low_quality_jpeg_respects_the_hard_size_limit(tmp_path: Path):

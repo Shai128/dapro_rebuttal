@@ -59,7 +59,15 @@ def _best_method(
     candidates = summary[np.isfinite(summary[metric])].copy()
     candidates = candidates[
         ~candidates["method"].isin(
-            ["Uncalibrated", "Infinite-Budget Oracle"]
+            [
+                "Raw",
+                "Oracle",
+                "Uncalibrated",
+                "Infinite-Budget Oracle",
+                "DAPRO Oracle (split)",
+                "DAPRO Oracle + CRC",
+                "DAPRO Oracle (global)",
+            ]
         )
     ]
     if candidates.empty:
@@ -91,7 +99,11 @@ def _configuration_summary(frame: pd.DataFrame) -> pd.DataFrame:
         .agg(["mean", "std"])
     )
     rows = []
-    for method in METHOD_ORDER:
+    ordered_methods = list(METHOD_ORDER)
+    ordered_methods.extend(
+        method for method in ordinary.index if method not in ordered_methods
+    )
+    for method in ordered_methods:
         if method not in ordinary.index:
             continue
         row = {"method": method}

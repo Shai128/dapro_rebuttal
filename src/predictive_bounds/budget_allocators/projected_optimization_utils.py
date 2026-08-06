@@ -983,7 +983,9 @@ def adaptive_budget_allocation(
             if uniforms is None
             else uniforms[:, t_curr]
         )
-        keep = (rand <= pi) & sim_active
+        # Exact Bernoulli(pi), including the pi == 0 boundary for supplied
+        # common random numbers in [0, 1).
+        keep = (rand < pi) & sim_active
 
         # Count actual advancements (transitions)
         step_cost = keep.sum().item()
