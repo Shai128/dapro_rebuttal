@@ -430,7 +430,7 @@ def set_m_upper_bound(gamma: float, budget_per_sample: float):
 def get_baseline_calibrations(conditional_grid, budget_per_sample, taus_range, tau_prior, m_upper_bound,
                               cal_model_prediction, t_tilde_cal, bound_type,
                               evaluate_dapro_projection=False,
-                              dapro_n1_values=(200,100),
+                              dapro_n1_values=(200,100, 50),
                               definitive_dapro_margins=(1.0,)):
     # Construction and merging must enumerate methods from the same registry.
     # Keeping this compatibility wrapper avoids exact-name drift while older
