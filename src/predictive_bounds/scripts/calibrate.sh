@@ -363,6 +363,7 @@ run_configuration() {
     local seed_end
     local seed_jobs=()
     local seed_count=$((SEED_END - SEED_START))
+    local construction_failed=0
     echo "Submitting $seed_count independent srun jobs"
     echo "Maximum concurrently active srun commands: $MAX_CONCURRENT_SRUNS"
     for (( seed = SEED_START; seed < SEED_END; seed++ )); do
@@ -378,32 +379,45 @@ run_configuration() {
 
       if (( ${#seed_jobs[@]} == MAX_CONCURRENT_SRUNS )); then
         if ! wait_for_job_batch "${seed_jobs[@]}"; then
-          return 1
+          construction_failed=1
         fi
         seed_jobs=()
       fi
     done
     if (( ${#seed_jobs[@]} > 0 )); then
       if ! wait_for_job_batch "${seed_jobs[@]}"; then
-        return 1
+        construction_failed=1
       fi
     fi
+
+    if (( construction_failed == 1 )); then
+      echo "ERROR: one or more construction jobs failed for $job_key; skipping merge and continuing." >&2
+      return 1
+    fi
   else
-    run_python_module \
+    if ! run_python_module \
       src.predictive_bounds.construct_calibrated_bound \
       "${job_key}_construct" \
       "${common_args[@]}" \
       --seed-start "$SEED_START" \
-      --seed-end "$SEED_END"
+      --seed-end "$SEED_END"; then
+      echo "ERROR: construction failed for $job_key; skipping merge and continuing." >&2
+      return 1
+    fi
   fi
 
   echo "[$dataset_key / $target_model | N1=$dapro_n1 | CRC=$crc_control_size | budget=$budget_per_sample] merge LPBs"
-  run_python_module \
+  if ! run_python_module \
     src.predictive_bounds.merge_bounds_results \
     "${job_key}_merge" \
     "${common_args[@]}" \
     --seed-start "$SEED_START" \
-    --seed-end "$SEED_END"
+    --seed-end "$SEED_END"; then
+    echo "ERROR: merge failed for $job_key; continuing with the next configuration." >&2
+    return 1
+  fi
+
+  return 0
 }
 
 echo "Mode: $RUN_MODE | device: $DEVICE | seeds: [$SEED_START, $SEED_END)"
@@ -417,6 +431,7 @@ fi
 # Keep the exact suffixes used in this invocation so archiving only collects
 # outputs from the requested experiment matrix.
 EXPERIMENT_SUFFIXES=()
+FAILED_CONFIGURATIONS=()
 
 for dapro_config in "${DAPRO_CONFIGS[@]}"; do
   IFS=: read -r dapro_n1 crc_control_size <<< "$dapro_config"
@@ -426,13 +441,17 @@ for dapro_config in "${DAPRO_CONFIGS[@]}"; do
 
     for dataset_key in "${DATASETS[@]}"; do
       for target_model in "${TARGET_MODELS[@]}"; do
-        run_configuration \
+        if ! run_configuration \
           "$dataset_key" \
           "$target_model" \
           "$dapro_n1" \
           "$crc_control_size" \
           "$budget_per_sample" \
-          "$experiment_suffix"
+          "$experiment_suffix"; then
+          failed_key="${dataset_key}/${target_model}/n1=${dapro_n1}/crc=${crc_control_size}/budget=${budget_per_sample}"
+          FAILED_CONFIGURATIONS+=("$failed_key")
+          echo "WARNING: $failed_key failed; continuing with the remaining experiments." >&2
+        fi
       done
     done
   done
@@ -465,3 +484,13 @@ mkdir -p "$(dirname "$ARCHIVE_PATH")"
 tar -czf "$ARCHIVE_PATH" "${MERGED_FILES[@]}"
 echo
 echo "Archived ${#MERGED_FILES[@]} merged CSV files at $ARCHIVE_PATH"
+
+if (( ${#FAILED_CONFIGURATIONS[@]} > 0 )); then
+  echo
+  echo "Completed with ${#FAILED_CONFIGURATIONS[@]} failed configuration(s):" >&2
+  for failed_key in "${FAILED_CONFIGURATIONS[@]}"; do
+    echo "  - $failed_key" >&2
+  done
+else
+  echo "All configurations completed successfully."
+fi

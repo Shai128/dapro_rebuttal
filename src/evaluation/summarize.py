@@ -6,17 +6,16 @@ tables are written below ``figures/metric_estimation`` by default.
 """
 
 from __future__ import annotations
-import seaborn as sns
-import pandas as pd
-import numpy as np
-import matplotlib.pyplot as plt
 
 import argparse
 from pathlib import Path
 
 import matplotlib
-
 matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+import seaborn as sns
 
 
 ROOT = Path(__file__).resolve().parents[2]

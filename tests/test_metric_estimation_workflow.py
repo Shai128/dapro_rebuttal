@@ -35,12 +35,6 @@ def test_metric_registry_contains_exact_requested_comparison():
             crc_control_size=100,
         )
     ]
-
-
-def test_metric_experiment_name_normalizes_integer_budget():
-    assert metric_experiment_name("data", "setup", 5.0, 200, 100, "v1") == (
-        "data_setup_5_metric_estimation_n1_200_crc_100__v1"
-    )
     assert names == [
         "UniformBudgetAllocator",
         "UnweightedUniformBudgetAllocator",
@@ -72,6 +66,12 @@ def test_metric_experiment_name_normalizes_integer_budget():
         "oracle_target_a_dapro_alpha_0p10_crc_control_100_n1_200",
         "oracle_target_a_dapro_no_split_alpha_0p10",
     ]
+
+
+def test_metric_experiment_name_normalizes_integer_budget():
+    assert metric_experiment_name("data", "setup", 5.0, 200, 100, "v1") == (
+        "data_setup_5_metric_estimation_n1_200_crc_100__v1"
+    )
 
 
 def test_target_a_uses_metric_event_instead_of_lpb_anchor():

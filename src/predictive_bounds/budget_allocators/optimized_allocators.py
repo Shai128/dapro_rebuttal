@@ -73,11 +73,6 @@ class OptimizedBudgetAllocator(BudgetAllocator):
                 - solver_expected_assigned_horizons.sum().item()
             ),
         }
-        print()
-        print(f"optimized mean weights: {(1/(C_probs.squeeze())).mean()} total_budget_used: {total_budget_used} total_budget: {self.cal_size * self.budget_per_sample} # observed: {(C.squeeze() >= t).float().sum().item()}"
-              f" achieved prior: {(C.squeeze() >= prior_quantile_est).float().sum().item()}")
-        print(C_probs)
-
         # store(t, C_probs, prior_quantile_est, C)
         return BudgetAllocationResult(
             trimmed_quantile_est,
