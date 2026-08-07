@@ -9,8 +9,8 @@
 #   bash src/predictive_bounds/scripts/calibrate.sh --local
 #   bash src/predictive_bounds/scripts/calibrate.sh --local --cpu --available-only
 #   bash src/predictive_bounds/scripts/calibrate.sh --slurm
-#   bash src/predictive_bounds/scripts/calibrate.sh --slurm --cpu --parallel-jobs 50
-#   bash src/predictive_bounds/scripts/calibrate.sh --slurm --dry-run
+#  bash src/predictive_bounds/scripts/calibrate.sh --slurm --parallel-jobs 20
+# #   bash src/predictive_bounds/scripts/calibrate.sh --slurm --dry-run
 #
 # Edit only the configuration block below to change the experiment matrix.
 set -euo pipefail
@@ -67,7 +67,7 @@ SLURM_PARTITION="galileo"
 SLURM_CPUS=4
 SLURM_GRES="gpu:1"                 # One GPU; Python addresses it as cuda:0.
 SLURM_JOB_NAME="plsNoKil"
-MAX_CONCURRENT_SRUNS=50             # 1 runs the full seed range in one srun.
+MAX_CONCURRENT_EXPERIMENTS=20       # Parallel full-seed experiment configurations (e.g. 10, 20, 50).
 EXCLUDE_LIST=""                    # Leave empty to use the automatic GPU filter.
 AUTO_EXCLUDE_INCOMPATIBLE_GPUS=1
 # ====================== END EDITABLE CONFIGURATION ======================
@@ -112,7 +112,7 @@ while (( $# > 0 )); do
         echo "--parallel-jobs requires a positive integer." >&2
         exit 2
       fi
-      MAX_CONCURRENT_SRUNS="$2"
+      MAX_CONCURRENT_EXPERIMENTS="$2"
       shift
       ;;
     --seed-end)
@@ -149,8 +149,8 @@ if (( SEED_END <= SEED_START )); then
   echo "SEED_END must be larger than SEED_START." >&2
   exit 2
 fi
-if ! [[ "$MAX_CONCURRENT_SRUNS" =~ ^[1-9][0-9]*$ ]]; then
-  echo "MAX_CONCURRENT_SRUNS must be a positive integer." >&2
+if ! [[ "$MAX_CONCURRENT_EXPERIMENTS" =~ ^[1-9][0-9]*$ ]]; then
+  echo "MAX_CONCURRENT_EXPERIMENTS must be a positive integer." >&2
   exit 2
 fi
 
@@ -242,16 +242,24 @@ run_python_module() {
   fi
 }
 
-wait_for_job_batch() {
-  local failed=0
-  local pid
-  for pid in "$@"; do
-    if ! wait "$pid"; then
-      echo "Parallel construction job $pid failed." >&2
-      failed=1
+
+
+wait_for_configuration_batch() {
+  local -n pids_ref="$1"
+  local -n labels_ref="$2"
+  local i
+  local failed_label
+
+  for i in "${!pids_ref[@]}"; do
+    if ! wait "${pids_ref[$i]}"; then
+      failed_label="${labels_ref[$i]}"
+      FAILED_CONFIGURATIONS+=("$failed_label")
+      echo "WARNING: $failed_label failed; continuing with the remaining experiments." >&2
     fi
   done
-  return "$failed"
+
+  pids_ref=()
+  labels_ref=()
 }
 
 configure_dataset() {
@@ -359,52 +367,16 @@ run_configuration() {
     --calibration-names "$METHOD_CSV"
   )
 
-  if [[ "$RUN_MODE" == "slurm" && "$MAX_CONCURRENT_SRUNS" -gt 1 ]]; then
-    local seed
-    local seed_end
-    local seed_jobs=()
-    local seed_count=$((SEED_END - SEED_START))
-    local construction_failed=0
-    echo "Submitting $seed_count independent srun jobs"
-    echo "Maximum concurrently active srun commands: $MAX_CONCURRENT_SRUNS"
-    for (( seed = SEED_START; seed < SEED_END; seed++ )); do
-      seed_end=$((seed + 1))
-      run_python_module \
-        src.predictive_bounds.construct_calibrated_bound \
-        "${job_key}_seed_${seed}_construct" \
-        "${common_args[@]}" \
-        --seed-start "$seed" \
-        --seed-end "$seed_end" &
-      seed_jobs+=("$!")
-      echo "Submitted seed $seed (launcher PID $!)"
-
-      if (( ${#seed_jobs[@]} == MAX_CONCURRENT_SRUNS )); then
-        if ! wait_for_job_batch "${seed_jobs[@]}"; then
-          construction_failed=1
-        fi
-        seed_jobs=()
-      fi
-    done
-    if (( ${#seed_jobs[@]} > 0 )); then
-      if ! wait_for_job_batch "${seed_jobs[@]}"; then
-        construction_failed=1
-      fi
-    fi
-
-    if (( construction_failed == 1 )); then
-      echo "ERROR: one or more construction jobs failed for $job_key; skipping merge and continuing." >&2
-      return 1
-    fi
-  else
-    if ! run_python_module \
-      src.predictive_bounds.construct_calibrated_bound \
-      "${job_key}_construct" \
-      "${common_args[@]}" \
-      --seed-start "$SEED_START" \
-      --seed-end "$SEED_END"; then
-      echo "ERROR: construction failed for $job_key; skipping merge and continuing." >&2
-      return 1
-    fi
+  # Run the complete seed range in one Python process / one srun.
+  # With SEED_START=0 and SEED_END=50, the Python script handles seeds 0,...,49.
+  if ! run_python_module \
+    src.predictive_bounds.construct_calibrated_bound \
+    "${job_key}_construct" \
+    "${common_args[@]}" \
+    --seed-start "$SEED_START" \
+    --seed-end "$SEED_END"; then
+    echo "ERROR: construction failed for $job_key; skipping merge and continuing." >&2
+    return 1
   fi
 
   echo "[$dataset_key / $target_model | N1=$dapro_n1 | CRC=$crc_control_size | budget=$budget_per_sample] merge LPBs"
@@ -425,14 +397,15 @@ echo "Mode: $RUN_MODE | device: $DEVICE | seeds: [$SEED_START, $SEED_END)"
 echo "DAPRO/CRC configurations: ${DAPRO_CONFIGS[*]}"
 echo "Budgets per sample: ${BUDGET_PER_SAMPLE_VALUES[*]}"
 echo "Base experiment suffix: $BASE_EXPERIMENT_SUFFIX"
-if [[ "$RUN_MODE" == "slurm" ]]; then
-  echo "Maximum concurrent srun commands: $MAX_CONCURRENT_SRUNS"
-fi
 
 # Keep the exact suffixes used in this invocation so archiving only collects
 # outputs from the requested experiment matrix.
 EXPERIMENT_SUFFIXES=()
 FAILED_CONFIGURATIONS=()
+CONFIG_PIDS=()
+CONFIG_LABELS=()
+
+echo "Maximum parallel full-seed experiment configurations: $MAX_CONCURRENT_EXPERIMENTS"
 
 for dapro_config in "${DAPRO_CONFIGS[@]}"; do
   IFS=: read -r dapro_n1 crc_control_size <<< "$dapro_config"
@@ -442,21 +415,37 @@ for dapro_config in "${DAPRO_CONFIGS[@]}"; do
 
     for dataset_key in "${DATASETS[@]}"; do
       for target_model in "${TARGET_MODELS[@]}"; do
-        if ! run_configuration \
+        config_label="${dataset_key}/${target_model}/n1=${dapro_n1}/crc=${crc_control_size}/budget=${budget_per_sample}"
+
+        # Parallelism is across complete experiment configurations.  Each
+        # background configuration invokes Python once with the complete
+        # [SEED_START, SEED_END) range, e.g. 0..49 for 0/50.
+        run_configuration \
           "$dataset_key" \
           "$target_model" \
           "$dapro_n1" \
           "$crc_control_size" \
           "$budget_per_sample" \
-          "$experiment_suffix"; then
-          failed_key="${dataset_key}/${target_model}/n1=${dapro_n1}/crc=${crc_control_size}/budget=${budget_per_sample}"
-          FAILED_CONFIGURATIONS+=("$failed_key")
-          echo "WARNING: $failed_key failed; continuing with the remaining experiments." >&2
+          "$experiment_suffix" &
+
+        CONFIG_PIDS+=("$!")
+        CONFIG_LABELS+=("$config_label")
+        echo "Submitted full-seed experiment: $config_label (launcher PID $!)"
+
+        # Run experiments in batches of at most MAX_CONCURRENT_EXPERIMENTS.
+        # Every individual experiment still processes the complete seed range.
+        if (( ${#CONFIG_PIDS[@]} >= MAX_CONCURRENT_EXPERIMENTS )); then
+          wait_for_configuration_batch CONFIG_PIDS CONFIG_LABELS
         fi
       done
     done
   done
 done
+
+# Wait for the final partial batch.
+if (( ${#CONFIG_PIDS[@]} > 0 )); then
+  wait_for_configuration_batch CONFIG_PIDS CONFIG_LABELS
+fi
 
 if (( DRY_RUN == 1 )); then
   echo
