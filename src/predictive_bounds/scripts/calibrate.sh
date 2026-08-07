@@ -22,9 +22,9 @@ AVAILABLE_ONLY=0                    # 1 skips configurations without cached pred
 DRY_RUN=0                           # 1 prints commands without executing them.
 
 DATASETS=(
-#  toxicity
-#  red_team_qwen
-#  red_team_llama_guard
+  toxicity
+  red_team_qwen
+  red_team_llama_guard
   hallucination3
   autoif
 )
@@ -33,7 +33,7 @@ TARGET_MODELS=(
   qwen25_14b_instruct
   llama_31_8B_instruct
   mini_phi_4_instruct
-#  gemma3_4b_it
+  gemma3_4b_it
 )
 
 ATTACKER_MODEL="qwen25_14b_instruct"
