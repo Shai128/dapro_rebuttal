@@ -45,8 +45,8 @@ M_UPPER_BOUND=200
 
 # Each entry is DAPRO_N1:CRC_CONTROL_SIZE.
 DAPRO_CONFIGS=(
-#  "200:100"
-#  "100:50"
+  "200:100"
+  "100:50"
   "50:25"
 )
 

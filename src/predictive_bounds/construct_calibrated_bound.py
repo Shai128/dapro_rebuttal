@@ -1198,7 +1198,7 @@ def main():
 
     run_experiments(cal_size, is_real, device, dataset_name, data_setup, experiments_name, seeds,
                     taus_range, budget_per_sample, tau_prior, m_upper_bound, target_taus_list,
-                    skip_existing=False, allocations=allocations, bound_type=bound_type,
+                    skip_existing=True, allocations=allocations, bound_type=bound_type,
                     calibration_names=calibration_names,
                     evaluate_dapro_projection=args.evaluate_dapro_projection,
                     fixed_data_seed=args.fixed_data_seed,
