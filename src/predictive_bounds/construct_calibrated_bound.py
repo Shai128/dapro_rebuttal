@@ -26,7 +26,8 @@ from src.predictive_bounds.budget_allocators.DAPRO import (
     DefinitiveCRCUPBDAPRO,
     DefinitiveDAPRO,
     LegacyMeanWeightDAPRO,
-    TargetAWeightedDAPRO,
+    TargetAWeightedDAPRO, BandRegularizedTargetAWeightedDAPRO, RegularizedTargetAWeightedDAPRO,
+    RobustTargetAWeightedDAPRO, RandomAnchoredTargetAWeightedDAPRO, AWeightedDAPRO,
 )
 from src.predictive_bounds.budget_allocators.random_adaptive_optimized_allocator import (
     ConstantCRCBudgetAllocator,
@@ -56,7 +57,7 @@ from src.predictive_bounds.calibration.survival_upb_calibration_with_known_weigh
 from src.train_model.models.utils import SurvivalModelPrediction
 
 from src.predictive_bounds.utils.get_calibration_methods_utils import (
-    get_baseline_calibrations as get_registered_baseline_calibrations,
+    get_baseline_calibrations as get_registered_baseline_calibrations, is_budget_sufficient_for_split,
 )
 from src.predictive_bounds.utils.utils import (
     split_data,
@@ -429,7 +430,7 @@ def set_m_upper_bound(gamma: float, budget_per_sample: float):
 def get_baseline_calibrations(conditional_grid, budget_per_sample, taus_range, tau_prior, m_upper_bound,
                               cal_model_prediction, t_tilde_cal, bound_type,
                               evaluate_dapro_projection=False,
-                              dapro_n1_values=(200,),
+                              dapro_n1_values=(200,100),
                               definitive_dapro_margins=(1.0,)):
     # Construction and merging must enumerate methods from the same registry.
     # Keeping this compatibility wrapper avoids exact-name drift while older
@@ -728,9 +729,9 @@ def get_baseline_calibrations(conditional_grid, budget_per_sample, taus_range, t
     #                 budget_control_size=min(100, n1 // 2),
     #                 row_cost_cap_multiplier=2.0,
     #             ))
-    #
-    # # for projection in ['platt', 'beta']:
-    # #     for score in ['prob', 'quantile']:
+
+    # for projection in ['platt', 'beta']:
+    #     for score in ['prob', 'quantile']:
     # for projection in [
     #     'platt',
     #     'cumulative_platt',

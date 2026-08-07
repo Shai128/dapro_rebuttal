@@ -265,6 +265,7 @@ class OracleTargetADAPRO(BudgetAllocator):
             n1: int = 200,
             budget_control_size: int = 100,
             target_alpha: float = 0.10,
+            metric_estimation_horizon: int | None = None,
             minimum_terminal_probability: float = 1e-12,
             budget_candidate_count: int = 2001,
             reach_t_max_is_success: bool = False,
@@ -289,6 +290,13 @@ class OracleTargetADAPRO(BudgetAllocator):
         self.n1 = int(n1)
         self.budget_control_size = int(budget_control_size)
         self.target_alpha = float(target_alpha)
+        if metric_estimation_horizon is not None and metric_estimation_horizon <= 0:
+            raise ValueError("`metric_estimation_horizon` must be positive.")
+        self.metric_estimation_horizon = (
+            None
+            if metric_estimation_horizon is None
+            else int(metric_estimation_horizon)
+        )
         self.minimum_terminal_probability = float(
             minimum_terminal_probability
         )
@@ -316,6 +324,14 @@ class OracleTargetADAPRO(BudgetAllocator):
             quantile_est: torch.Tensor,
             prior_q: torch.Tensor,
     ) -> tuple[torch.Tensor, int]:
+        if self.metric_estimation_horizon is not None:
+            return (
+                (
+                    event_times.reshape(-1)
+                    <= self.metric_estimation_horizon
+                ).to(torch.float64),
+                -1,
+            )
         prior_index = int(
             torch.abs(self.taus_range - self.tau_prior).argmin().item()
         )
@@ -572,7 +588,11 @@ class OracleTargetADAPRO(BudgetAllocator):
         inverse = 1 / final_propensity
         objective_contributions = target_a * (inverse - 1)
         additional_metrics = {
-            "objective_kind": "mean_target_a_weighted_inverse_probability_minus_one",
+            "objective_kind": (
+                "mean_metric_event_weighted_inverse_probability_minus_one"
+                if self.metric_estimation_horizon is not None
+                else "mean_target_a_weighted_inverse_probability_minus_one"
+            ),
             "oracle_dapro": 1,
             "oracle_uses_full_trajectories": 1,
             "oracle_split_mode": self.split_mode,
@@ -580,7 +600,26 @@ class OracleTargetADAPRO(BudgetAllocator):
             "oracle_score_monotonicity_constraint": 0,
             "target_anchor_alpha": self.target_alpha,
             "target_anchor_index": anchor_index,
-            "target_anchor_tau": float(self.taus_range[anchor_index].item()),
+            "target_anchor_tau": (
+                np.nan
+                if anchor_index < 0
+                else float(self.taus_range[anchor_index].item())
+            ),
+            "target_event_kind": (
+                "metric_event_by_fixed_horizon"
+                if self.metric_estimation_horizon is not None
+                else "lpb_anchor_event"
+            ),
+            "target_metric": (
+                "unsafe_event_rate"
+                if self.metric_estimation_horizon is not None
+                else "lpb_miscoverage"
+            ),
+            "target_metric_horizon": (
+                self.metric_estimation_horizon
+                if self.metric_estimation_horizon is not None
+                else np.nan
+            ),
             "target_a_rate": float(target_a.mean().item()),
             "oracle_mean_target_a_weighted_inverse_probability_minus_one": (
                 float(objective_contributions.mean().item())

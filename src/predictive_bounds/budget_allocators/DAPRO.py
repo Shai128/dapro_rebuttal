@@ -1760,6 +1760,7 @@ class TargetAWeightedDAPRO(AWeightedDAPRO):
             *args,
             anchor_kind: str,
             target_alpha: float = 0.10,
+            metric_estimation_horizon: int | None = None,
             **kwargs,
     ):
         super().__init__(*args, **kwargs)
@@ -1780,6 +1781,13 @@ class TargetAWeightedDAPRO(AWeightedDAPRO):
             )
         self.anchor_kind = anchor_kind
         self.target_alpha = float(target_alpha)
+        if metric_estimation_horizon is not None and metric_estimation_horizon <= 0:
+            raise ValueError("`metric_estimation_horizon` must be positive.")
+        self.metric_estimation_horizon = (
+            None
+            if metric_estimation_horizon is None
+            else int(metric_estimation_horizon)
+        )
         self._target_anchor_index = None
         self._target_anchor_selection_miscoverage = np.nan
         self._target_anchor_phase1_rate = np.nan
@@ -1806,6 +1814,8 @@ class TargetAWeightedDAPRO(AWeightedDAPRO):
 
     @property
     def objective_kind(self) -> str:
+        if self.metric_estimation_horizon is not None:
+            return "mean_metric_event_weighted_inverse_probability_minus_one"
         return (
             "mean_target_a_weighted_inverse_probability_minus_one"
             f"_{self.anchor_kind}_alpha_{self.target_alpha:.2f}"
@@ -1816,6 +1826,8 @@ class TargetAWeightedDAPRO(AWeightedDAPRO):
             event_times: torch.Tensor,
             quantile_est: torch.Tensor,
     ) -> None:
+        if self.metric_estimation_horizon is not None:
+            return
         prior_index = int(
             torch.abs(self.taus_range - self.tau_prior).argmin().item()
         )
@@ -1846,6 +1858,16 @@ class TargetAWeightedDAPRO(AWeightedDAPRO):
             prior_q: torch.Tensor,
             quantile_est: torch.Tensor | None,
     ) -> tuple[torch.Tensor, int]:
+        if self.metric_estimation_horizon is not None:
+            return (
+                (
+                    event_times.reshape(-1)
+                    <= self.metric_estimation_horizon
+                ).to(torch.float64),
+                int(bool(torch.all(
+                    prior_q.reshape(-1) >= self.metric_estimation_horizon
+                ).item())),
+            )
         if quantile_est is None:
             raise ValueError(
                 "Target-A-weighted DAPRO requires candidate quantile estimates."
@@ -1921,6 +1943,21 @@ class TargetAWeightedDAPRO(AWeightedDAPRO):
         return weights
 
     def objective_metadata(self) -> dict:
+        if self.metric_estimation_horizon is not None:
+            return {
+                "target_event_kind": "metric_event_by_fixed_horizon",
+                "target_event_side": "lower_or_equal",
+                "target_metric": "unsafe_event_rate",
+                "target_metric_horizon": self.metric_estimation_horizon,
+                "target_anchor_phase1_a_rate": self._target_anchor_phase1_rate,
+                "target_anchor_phase2_a_rate": self._target_anchor_phase2_rate,
+                "target_anchor_phase1_within_prior": (
+                    self._target_anchor_phase1_within_prior
+                ),
+                "target_anchor_phase2_within_prior": (
+                    self._target_anchor_phase2_within_prior
+                ),
+            }
         if self._target_anchor_index is None:
             return {}
         prior_index = int(
@@ -2308,6 +2345,7 @@ class DefinitiveDAPRO(RegularizedTargetAWeightedDAPRO):
             *,
             n1: int = DEFAULT_N1,
             target_alpha: float = DEFAULT_TARGET_ALPHA,
+            metric_estimation_horizon: int | None = None,
             global_regularization: float = DEFAULT_GLOBAL_REGULARIZATION,
             projection_budget_margin: float = (
                 DEFAULT_PROJECTION_BUDGET_MARGIN
@@ -2339,6 +2377,7 @@ class DefinitiveDAPRO(RegularizedTargetAWeightedDAPRO):
             risk_candidate_row_cost_cap=risk_candidate_row_cost_cap,
             anchor_kind="raw_alpha",
             target_alpha=target_alpha,
+            metric_estimation_horizon=metric_estimation_horizon,
             global_regularization=global_regularization,
         )
 
@@ -2364,6 +2403,8 @@ class DefinitiveDAPRO(RegularizedTargetAWeightedDAPRO):
 
     @property
     def objective_kind(self) -> str:
+        if self.metric_estimation_horizon is not None:
+            return "definitive_regularized_metric_event_variance"
         return "definitive_regularized_target_a_variance"
 
     def objective_metadata(self) -> dict:
@@ -2410,6 +2451,7 @@ class DefinitiveCRCDAPRO(DefinitiveDAPRO):
             n1: int = DEFAULT_N1,
             budget_control_size: int = DEFAULT_BUDGET_CONTROL_SIZE,
             target_alpha: float = DefinitiveDAPRO.DEFAULT_TARGET_ALPHA,
+            metric_estimation_horizon: int | None = None,
             global_regularization: float = (
                 DefinitiveDAPRO.DEFAULT_GLOBAL_REGULARIZATION
             ),
@@ -2444,6 +2486,7 @@ class DefinitiveCRCDAPRO(DefinitiveDAPRO):
             m_upper_bound,
             n1=n1,
             target_alpha=target_alpha,
+            metric_estimation_horizon=metric_estimation_horizon,
             global_regularization=global_regularization,
             projection_budget_margin=0.0,
             terminal_pi_min=terminal_pi_min,
@@ -2483,6 +2526,8 @@ class DefinitiveCRCDAPRO(DefinitiveDAPRO):
 
     @property
     def objective_kind(self) -> str:
+        if self.metric_estimation_horizon is not None:
+            return "definitive_regularized_metric_event_variance_crc"
         return "definitive_regularized_target_a_variance_crc"
 
 

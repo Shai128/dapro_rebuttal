@@ -11,7 +11,6 @@ import numpy as np
 import pandas as pd
 import torch
 import tqdm
-from concurrent.futures import as_completed, ThreadPoolExecutor
 
 from src.predictive_bounds.budget_allocators.budget_allocator import BudgetAllocator
 from src.predictive_bounds.utils.get_calibration_methods_utils import get_metric_allocators
@@ -40,6 +39,7 @@ class TrajectoryData:
     Delta_i: torch.Tensor  # Event indicator I(T_i <= C_i)
     W_i: torch.Tensor  # IPCW weights (1 / prod P_i(k))
     device: torch.device
+    allocation_metrics: Dict[str, Any]
 
 
 # ==========================================
@@ -54,7 +54,8 @@ class IPCWTrajectorySimulator:
                  t_tilde: torch.Tensor, max_time: int) -> TrajectoryData:
         N = len(t_tilde)
         device = t_tilde.device
-        result = allocator.allocate_budget(model_prediction.probability_est, x, t_tilde, model_prediction.quantile_est)
+        result = allocator.allocate_budget(
+            model_prediction.probability_est, x, t_tilde, model_prediction.quantile_est)
         C_i = result.C.squeeze()
         Y_i = torch.minimum(t_tilde.long(), C_i.long())
         # C_i is a number of acquired turns.  An event on the final acquired
@@ -67,7 +68,8 @@ class IPCWTrajectorySimulator:
         return TrajectoryData(
             N=N, max_time=max_time, t_tilde=t_tilde,
             C_i=C_i, Y_i=Y_i, Delta_i=Delta_i, W_i=W_i, device=device,
-            total_budget_utilized=total_budget_used
+            total_budget_utilized=total_budget_used,
+            allocation_metrics=result.additional_metrics or {},
         )
 
 
@@ -88,7 +90,8 @@ def _observed_event_ipcw(data: TrajectoryData) -> torch.Tensor:
     propensities = data.W_i.reshape(-1).to(torch.float64)
     observed = data.Delta_i.reshape(-1).bool()
     if bool((propensities[observed] <= 0).any()):
-        raise ValueError("observed events must have strictly positive inclusion propensities")
+        raise ValueError(
+            "observed events must have strictly positive inclusion propensities")
     return torch.where(
         observed,
         propensities.reciprocal(),
@@ -132,8 +135,63 @@ class ObservedJailbreaks(SafetyMetric):
         true_event = data.t_tilde <= data.max_time
         observed = true_event & data.Delta_i
         return {
-            'observed_jailbreaks': observed.float().sum().item()
+            'observed_jailbreaks': observed.float().sum().item(),
+            'num_events_observed': observed.float().sum().item(),
         }
+
+
+class AllocationEstimationDiagnostics(SafetyMetric):
+    """Diagnostics for the Horvitz-Thompson unsafe-event-rate estimator."""
+
+    def compute(self, data: TrajectoryData) -> Dict[str, Any]:
+        propensities = data.W_i.reshape(-1).to(torch.float64)
+        if bool((propensities <= 0).any()):
+            raise ValueError("all inclusion propensities must be positive")
+        inverse = propensities.reciprocal()
+        target_a = (data.t_tilde.reshape(-1) <= data.max_time).to(
+            torch.float64
+        )
+        a_weight = target_a * inverse
+        sum_a_weight = a_weight.sum()
+        ess = (
+            (sum_a_weight.square() / a_weight.square().sum()).item()
+            if bool((a_weight != 0).any())
+            else 0.0
+        )
+        resolved = data.Delta_i.reshape(-1) | (
+            data.C_i.reshape(-1) >= data.max_time
+        )
+        results = {
+            "mean_weight": inverse.mean().item(),
+            "mean_inverse_probability": inverse.mean().item(),
+            "mean_inverse_probability_minus_one": (inverse - 1).mean().item(),
+            "variance_weight": inverse.var(unbiased=False).item(),
+            "max_weight": inverse.max().item(),
+            "mean_a_weighted_weight": a_weight.mean().item(),
+            "mean_metric_a_weighted_inverse_probability": (
+                a_weight.mean().item()
+            ),
+            "mean_metric_a_weighted_inverse_probability_minus_one": (
+                (target_a * (inverse - 1)).mean().item()
+            ),
+            "metric_a_weighted_effective_sample_size": ess,
+            "metric_target_a_rate": target_a.mean().item(),
+            "metric_target_a_count": target_a.sum().item(),
+            "num_trajectories_fully_resolved": resolved.sum().item(),
+            "fraction_trajectories_fully_resolved": resolved.float().mean().item(),
+            # Conditional allocation variance of the rate estimator, given
+            # the fixed benchmark rows.  Percent-scale plots can multiply by
+            # 100^2 if desired.
+            "conditional_variance_unsafe_event_rate_estimator": (
+                (target_a * (inverse - 1)).sum().item() / data.N ** 2
+            ),
+        }
+        for key, value in data.allocation_metrics.items():
+            if isinstance(value, (str, int, float, bool, np.number)):
+                results[key] = value
+            elif torch.is_tensor(value) and value.numel() == 1:
+                results[key] = value.item()
+        return results
 
 
 class RestrictedMeanTimeToUnsafeMetric(SafetyMetric):
@@ -145,7 +203,8 @@ class RestrictedMeanTimeToUnsafeMetric(SafetyMetric):
         event_ipcw = _observed_event_ipcw(data) * valid_observed_event
 
         # Weighted sum of times for observed failures
-        estimated_sum_times = (event_ipcw * data.Y_i.to(torch.float64)).sum().item()
+        estimated_sum_times = (
+            event_ipcw * data.Y_i.to(torch.float64)).sum().item()
 
         # Weighted count MUST also use the exact same filter
         estimated_count_failures = event_ipcw.sum().item()
@@ -161,6 +220,7 @@ class RestrictedMeanTimeToUnsafeMetric(SafetyMetric):
             'abs_diff_rmttu': abs(est_rmttu - self.oracle_rmttu) if not np.isnan(est_rmttu) else float('nan')
         }
 
+
 class CostPerJailbreakMetric(SafetyMetric):
     def compute(self, data: TrajectoryData) -> Dict[str, Any]:
         total_compute = data.Y_i.float().sum().item()
@@ -171,7 +231,9 @@ class CostPerJailbreakMetric(SafetyMetric):
         ).mean().item()
         estimated_total_jailbreaks = data.N * est_cjr
 
-        cpj = total_compute / estimated_total_jailbreaks if estimated_total_jailbreaks > 0 else float('nan')
+        cpj = total_compute / \
+            estimated_total_jailbreaks if estimated_total_jailbreaks > 0 else float(
+                'nan')
         return {
             'total_compute_iterations': total_compute,
             'cost_per_jailbreak': cpj
@@ -205,7 +267,8 @@ class SurvivalQuantilesMetric(SafetyMetric):
         self.oracle_quantiles = oracle_quantiles
 
     def compute(self, data: TrajectoryData) -> Dict[str, Any]:
-        time_range = torch.arange(1, data.max_time + 1, device=data.device).unsqueeze(0)
+        time_range = torch.arange(
+            1, data.max_time + 1, device=data.device).unsqueeze(0)
         y_expanded = data.Y_i.unsqueeze(1)
         delta_expanded = data.Delta_i.unsqueeze(1)
 
@@ -238,8 +301,6 @@ class SurvivalQuantilesMetric(SafetyMetric):
 # ==========================================
 
 
-
-
 # ==========================================
 # 5. ENGINE & FACTORIES
 # ==========================================
@@ -257,9 +318,6 @@ class MetricsEngine:
         return results
 
 
-
-
-
 # ==========================================
 # 6. EXPERIMENT RUNNER
 # ==========================================
@@ -269,7 +327,8 @@ def run_one_experiment(experiments_name, seed, allocator: BudgetAllocator, x, t_
                        skip_existing=True):
     try:
         allocator_name = allocator.name
-        dir_path = get_tmp_metric_calibration_result_path(experiments_name, allocator_name)
+        dir_path = get_tmp_metric_calibration_result_path(
+            experiments_name, allocator_name)
         save_path = os.path.join(f"{dir_path}", f"seed={seed}.csv")
 
         if os.path.exists(save_path) and skip_existing:
@@ -285,13 +344,17 @@ def run_one_experiment(experiments_name, seed, allocator: BudgetAllocator, x, t_
 
             # 2. Setup and Run Metrics Engine
             engine = MetricsEngine([
-                CumulativeJailbreakRateMetric(oracle_cjr=oracle_metrics['cjr']),
-                RestrictedMeanTimeToUnsafeMetric(oracle_rmttu=oracle_metrics['rmttu']),
+                CumulativeJailbreakRateMetric(
+                    oracle_cjr=oracle_metrics['cjr']),
+                RestrictedMeanTimeToUnsafeMetric(
+                    oracle_rmttu=oracle_metrics['rmttu']),
                 TotalBudgetUsed(),
                 ObservedJailbreaks(),
+                AllocationEstimationDiagnostics(),
                 CostPerJailbreakMetric(),
                 # IPCWHazardFunctionMetric(),
-                SurvivalQuantilesMetric(oracle_quantiles=oracle_metrics['quantiles'], quantiles=[0.25, 0.50, 0.75])
+                SurvivalQuantilesMetric(
+                    oracle_quantiles=oracle_metrics['quantiles'], quantiles=[0.25, 0.50, 0.75])
             ])
 
             metrics_results = engine.evaluate(traj_data)
@@ -300,6 +363,12 @@ def run_one_experiment(experiments_name, seed, allocator: BudgetAllocator, x, t_
         all_metrics = {
             'seed': seed,
             'allocator_name': allocator_name,
+            'calibration_name': (
+                allocator_name
+                if allocator_name == 'oracle_full_budget'
+                else f'calibration_{allocator_name}_allocation'
+            ),
+            'evaluation_sample_size': traj_data.N,
             **metrics_results
         }
 
@@ -323,10 +392,12 @@ def compute_oracle_metric(t_tilde_cal_test, max_time):
     # --- SINGLE ORACLE COMPUTATION ACROSS CAL+TEST ---
     true_event_all = (t_tilde_cal_test <= max_time).float()
     global_oracle_cjr = true_event_all.mean().item()
-    global_oracle_rmttu = t_tilde_cal_test[t_tilde_cal_test <= max_time].float().mean().item()
+    global_oracle_rmttu = t_tilde_cal_test[t_tilde_cal_test <= max_time].float(
+    ).mean().item()
     global_oracle_quantiles = {}
     for q in [0.25, 0.50, 0.75]:
-        global_oracle_quantiles[f'oracle_quantile_{int(q * 100)}'] = torch.quantile(t_tilde_cal_test.float(), q).item()
+        global_oracle_quantiles[f'oracle_quantile_{int(q * 100)}'] = torch.quantile(
+            t_tilde_cal_test.float(), q).item()
 
     oracle_metrics = {
         'cjr': global_oracle_cjr,
@@ -336,54 +407,144 @@ def compute_oracle_metric(t_tilde_cal_test, max_time):
     return oracle_metrics
 
 
+def metric_experiment_name(
+        dataset_name,
+        data_setup,
+        budget_per_sample,
+        dapro_n1,
+        crc_control_size,
+        experiment_suffix="",
+):
+    budget_label = f"{float(budget_per_sample):g}"
+    name = (
+        f"{dataset_name}_{data_setup}_{budget_label}_metric_estimation_"
+        f"n1_{dapro_n1}_crc_{crc_control_size}"
+    )
+    return f"{name}__{experiment_suffix}" if experiment_suffix else name
 
 
+REQUIRED_RESULT_COLUMNS = {
+    "seed",
+    "allocator_name",
+    "calibration_name",
+    "total_budget_utilized",
+    "budget_per_sample",
+    "estimated_cjr",
+    "abs_diff_cjr",
+    "mean_weight",
+    "mean_a_weighted_weight",
+    "num_events_observed",
+}
 
-def run_experiments(cal_size, is_real, device, dataset_name, data_setup, experiments_name, seeds, budget_per_sample,
-                 skip_existing):
+
+def _completed_result_exists(path):
+    if not os.path.exists(path):
+        return False
+    try:
+        return REQUIRED_RESULT_COLUMNS.issubset(pd.read_csv(path, nrows=1).columns)
+    except Exception:
+        return False
+
+
+def run_experiments(
+        cal_size,
+        is_real,
+        device,
+        dataset_name,
+        data_setup,
+        experiments_name,
+        seeds,
+        budget_per_sample,
+        skip_existing,
+        dapro_n1=200,
+        crc_control_size=100,
+        tau_prior=0.56,
+):
     taus_range = torch.tensor(np.arange(0.01, 1.0, 0.01)).to(device)
-    tau_prior = 0.56
     m_upper_bound = 200 if is_real else 20
 
     max_time, t_tilde_cal_test, quantile_est_cal_test, probability_est, conditional_grid, test_size = setup_experiment_data(
         cal_size, is_real, device, dataset_name, data_setup, taus_range, m_upper_bound
     )
 
-    num_cpus = os.cpu_count()
-
     oracle_metrics = compute_oracle_metric(t_tilde_cal_test, max_time)
 
-    # 1. Open the executor ONCE before the loop
-    with ThreadPoolExecutor(max_workers=num_cpus) as executor:
-        for seed in tqdm.tqdm(range(seeds[0], seeds[1]), desc="running calibration algorithms"):
-            x_cal, x_test, t_tilde_cal, probability_est_cal, quantile_est_cal, t_tilde_test, quantile_est_test, \
-                probability_est_test, cal_idx, test_idx = split_data(seed, cal_size, test_size, None, t_tilde_cal_test,
-                                                                     probability_est,
-                                                                     quantile_est_cal_test)
+    for seed in tqdm.tqdm(
+            range(seeds[0], seeds[1]),
+            desc="running metric-estimation algorithms",
+    ):
+        x_cal, x_test, t_tilde_cal, probability_est_cal, quantile_est_cal, t_tilde_test, quantile_est_test, \
+            probability_est_test, cal_idx, test_idx = split_data(seed, cal_size, test_size, None, t_tilde_cal_test,
+                                                                 probability_est,
+                                                                 quantile_est_cal_test)
 
-            curr_conditional_grid = conditional_grid[cal_idx]
-            quantile_est_cal = quantile_est_cal.clip(max=max_time)
-            quantile_est_cal[:] = max_time
+        curr_conditional_grid = conditional_grid[cal_idx]
+        quantile_est_cal = quantile_est_cal.clip(max=max_time)
+        quantile_est_cal[:] = max_time
 
-            cal_model_prediction = SurvivalModelPrediction(quantile_est_cal, probability_est_cal)
-            allocators = get_metric_allocators(curr_conditional_grid, budget_per_sample, m_upper_bound, taus_range, tau_prior, device, t_tilde_cal, cal_model_prediction)
+        cal_model_prediction = SurvivalModelPrediction(
+            quantile_est_cal, probability_est_cal)
+        allocators = get_metric_allocators(
+            curr_conditional_grid,
+            budget_per_sample,
+            m_upper_bound,
+            taus_range,
+            tau_prior,
+            device,
+            t_tilde_cal,
+            cal_model_prediction,
+            dapro_n1=dapro_n1,
+            crc_control_size=crc_control_size,
+        )
+        common_uniforms = np.random.default_rng(seed).random(
+            (cal_size, curr_conditional_grid.shape[1])
+        )
+        full_model_prediction = SurvivalModelPrediction(
+            quantile_est_cal_test.clip(max=max_time),
+            probability_est,
+        )
 
-            futures = [
-                executor.submit(run_one_experiment, experiments_name, seed, allocator,
-                                x_cal, t_tilde_cal, cal_model_prediction, oracle_metrics, max_time, skip_existing)
-                for allocator in allocators
-            ]
-
-            for future in as_completed(futures):
-                try:
-                    future.result()
-                except Exception as e:
-                    print(f"Calibration failed with error: {e}")
+        # Allocators use NumPy for their Phase-I splits.  Running them in
+        # sequence and resetting the same seed gives every method the
+        # same split without process-global RNG races between threads.
+        for allocator in allocators:
+            result_path = os.path.join(
+                get_tmp_metric_calibration_result_path(
+                    experiments_name, allocator.name
+                ),
+                f"seed={seed}.csv",
+            )
+            if skip_existing and _completed_result_exists(result_path):
+                continue
+            if not getattr(allocator, "uses_full_benchmark", False):
+                allocator.set_acquisition_randomness(
+                    seed=seed,
+                    uniforms=common_uniforms,
+                )
+                run_x = x_cal
+                run_t = t_tilde_cal
+                run_prediction = cal_model_prediction
+            else:
+                run_x = None
+                run_t = t_tilde_cal_test
+                run_prediction = full_model_prediction
+            run_one_experiment(
+                experiments_name,
+                seed,
+                allocator,
+                run_x,
+                run_t,
+                run_prediction,
+                oracle_metrics,
+                max_time,
+                skip_existing=False,
+            )
 
 
 def main():
     import argparse
-    parser = argparse.ArgumentParser(description="Run advanced safety evaluation metrics.")
+    parser = argparse.ArgumentParser(
+        description="Run advanced safety evaluation metrics.")
     parser.add_argument('--seed-start', type=int, default=0)
     parser.add_argument('--seed-end', type=int, default=50)
     parser.add_argument('--data-type', type=str)
@@ -392,12 +553,23 @@ def main():
     parser.add_argument('--budget-per-sample', type=float, default=40)
     parser.add_argument('--cal-size', type=int, default=4000)
     parser.add_argument('--device', type=str, default='cuda:0')
+    parser.add_argument('--tau-prior', type=float, default=0.56)
+    parser.add_argument('--dapro-n1', type=int, default=200)
+    parser.add_argument('--crc-control-size', type=int, default=100)
+    parser.add_argument('--experiment-suffix', type=str, default='')
+    parser.add_argument('--overwrite', action='store_true')
     args = parser.parse_args()
 
     args.is_real = True if args.data_type.lower() == 'real' else False
 
-
-    experiments_name = f"{args.dataset_name}_{args.dataset_setup}_{args.budget_per_sample}_safety_metrics"
+    experiments_name = metric_experiment_name(
+        args.dataset_name,
+        args.dataset_setup,
+        args.budget_per_sample,
+        args.dapro_n1,
+        args.crc_control_size,
+        args.experiment_suffix,
+    )
 
     run_experiments(cal_size=args.cal_size,
                     is_real=args.is_real,
@@ -407,7 +579,10 @@ def main():
                     experiments_name=experiments_name,
                     seeds=(args.seed_start, args.seed_end),
                     budget_per_sample=args.budget_per_sample,
-                    skip_existing=True)
+                    skip_existing=not args.overwrite,
+                    dapro_n1=args.dapro_n1,
+                    crc_control_size=args.crc_control_size,
+                    tau_prior=args.tau_prior)
     print("Finished Metrics Evaluation Suite.")
 
 
