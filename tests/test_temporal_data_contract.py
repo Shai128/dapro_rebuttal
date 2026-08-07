@@ -33,10 +33,9 @@ from src.predictive_bounds.budget_allocators.vectorized_adaptive_allocator_patch
     expected_acquisition_cost as locally_adaptive_expected_acquisition_cost,
 )
 from src.predictive_bounds.budget_allocators.budget_allocator import BudgetAllocationResult
-from src.predictive_bounds.experiments.metrics.estimate import (
+from evaluation.estimate import (
     CumulativeJailbreakRateMetric,
     IPCWTrajectorySimulator,
-    TrajectoryData,
     compute_oracle_metric,
 )
 from src.predictive_bounds.ablations.phase1_optimization import _dapro_scores
