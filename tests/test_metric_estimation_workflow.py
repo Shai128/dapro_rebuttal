@@ -40,7 +40,7 @@ def test_metric_registry_contains_exact_requested_comparison():
         "UnweightedUniformBudgetAllocator",
         "oracle_full_budget",
         "optimized",
-        "random_adaptive_optimized_no_terminal_floor_crc",
+        "random_adaptive_optimized_mixture_terminal_floor_0p005_crc",
         "projected_optimization_direct_bins_2_prob_n1_200",
         (
             "projected_optimization_direct_bins_2_prob_a_target_raw_"

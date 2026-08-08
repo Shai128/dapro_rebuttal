@@ -696,18 +696,27 @@ class RandomAdaptiveOptimizedBudgetAllocator(BudgetAllocator):
 
 
 class ConstantCRCBudgetAllocator(RandomAdaptiveOptimizedBudgetAllocator):
-    """Canonical constant-probability allocation with CRC budget control.
+    """Stable constant-probability allocation with CRC budget control.
 
     Phase I is fully observed and is the only part of the calibration sample
     used to choose the scalar continuation probability.  Every eligible
-    Phase-II interaction then uses that same probability, independently of
-    the sample, time, model output, and latent event time.  No terminal floor
-    is applied because a binding floor would make the executed conditional
-    probabilities nonconstant.
+    Phase-II interaction uses that same core probability, independently of the
+    sample, time, model output, and latent event time.
+
+    A row-level always-follow mixture of probability ``1 / m_upper_bound`` is
+    applied to the core policy.  Without it, an event at time ``t`` has reach
+    probability ``p ** t``; at the real-data horizon of 200 this produced
+    inverse-propensity weights as large as 1e29.  The Horvitz--Thompson
+    estimator remained unbiased in theory, but its expectation was carried by
+    events far too rare to appear in 50 experiment seeds.  The mixture keeps
+    the exact executed propensities in ``C_probs``, preserves unbiasedness, and
+    bounds every inverse-propensity weight by ``m_upper_bound``.  CRC tuning
+    accounts for the mixture's acquisition cost.
 
     The parent class remains configurable for named ablations.  This narrow
     wrapper prevents the paper baseline from accidentally being constructed
-    with empirical budget tuning, a time-varying schedule, or a floor.
+    with empirical budget tuning, a time-varying core schedule, or an
+    unbounded terminal propensity.
     """
 
     def __init__(
@@ -726,8 +735,8 @@ class ConstantCRCBudgetAllocator(RandomAdaptiveOptimizedBudgetAllocator):
             tau_prior=tau_prior,
             m_upper_bound=m_upper_bound,
             reach_t_max_is_success=reach_t_max_is_success,
-            terminal_pi_min=None,
-            terminal_floor_mode="none",
+            terminal_pi_min=1.0 / float(m_upper_bound),
+            terminal_floor_mode="mixture",
             budget_control_mode="crc",
             schedule_family="constant",
             schedule_alpha=1.0,

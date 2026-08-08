@@ -144,7 +144,8 @@ UPB_ORACLE = "oracle_survival_upb_calibration"
 STATIC = "calibration_optimized_allocation"
 LOCALLY_ADAPTIVE = "calibration_adaptive_optimized_crc_allocation"
 CONSTANT = (
-    "calibration_random_adaptive_optimized_no_terminal_floor_crc_allocation"
+    "calibration_random_adaptive_optimized_mixture_terminal_floor_0p005_crc_"
+    "allocation"
 )
 POWER_REACH = "calibration_random_schedule_power_reach_alpha_2_crc_allocation"
 LEGACY_DAPRO = (

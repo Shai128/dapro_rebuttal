@@ -307,9 +307,9 @@ build_methods() {
     oracle_survival_calibration
     # Static baselines.
     calibration_optimized_allocation
-    # Exact constant continuation (no propensity floor) and local adaptation.
-    # CRC controls budget; the no-floor constant can still produce large IPW.
-    calibration_random_adaptive_optimized_no_terminal_floor_crc_allocation
+    # Constant continuation with an always-follow mixture that bounds IPW;
+    # CRC accounts for the mixture while controlling the expected budget.
+    calibration_random_adaptive_optimized_mixture_terminal_floor_0p005_crc_allocation
     calibration_adaptive_optimized_crc_allocation
     # DAPRO without a CRC budget wrapper: legacy, target-A, definitive best.
     "calibration_projected_optimization_direct_bins_2_prob_n1_${dapro_n1}_allocation"

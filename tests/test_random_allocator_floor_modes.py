@@ -99,12 +99,15 @@ def test_canonical_constant_allocator_cannot_drift_from_crc_policy():
         m_upper_bound=200,
     )
 
-    assert allocator.name == "random_adaptive_optimized_no_terminal_floor_crc"
+    assert (
+        allocator.name
+        == "random_adaptive_optimized_mixture_terminal_floor_0p005_crc"
+    )
     assert allocator.schedule_family == "constant"
     assert allocator.schedule_alpha == 1.0
     assert allocator.budget_control_mode == "crc"
-    assert allocator.terminal_floor_mode == "none"
-    assert allocator.min_pi is None
+    assert allocator.terminal_floor_mode == "mixture"
+    assert allocator.min_pi == 0.005
 
 
 def test_nondefault_phase1_size_is_encoded_in_random_method_name():
@@ -425,7 +428,7 @@ def test_constant_crc_probability_does_not_use_phase2_event_times():
     )
 
 
-def test_constant_crc_returns_exact_constant_path_propensities():
+def test_constant_crc_returns_exact_mixture_path_propensities():
     n, width = 220, 8
     allocator = ConstantCRCBudgetAllocator(
         conditional_grid=torch.ones(n, width, width),
@@ -457,10 +460,10 @@ def test_constant_crc_returns_exact_constant_path_propensities():
         event_times[phase2_indices],
         quantiles[phase2_indices, 0].to(torch.long),
     )
-    expected_propensities = torch.pow(
-        torch.tensor(p, dtype=torch.float64),
-        active_lengths,
+    raw_propensities = torch.pow(
+        torch.tensor(p, dtype=torch.float64), active_lengths
     )
+    expected_propensities = 0.005 + 0.995 * raw_propensities
     torch.testing.assert_close(
         result.C_probs[phase2_indices],
         expected_propensities,
@@ -469,6 +472,7 @@ def test_constant_crc_returns_exact_constant_path_propensities():
         result.C_probs[phase1_indices],
         torch.ones(100, dtype=result.C_probs.dtype),
     )
+    assert result.max_weight <= 200 + 1e-7
 
 
 def test_stochastic_simulator_probability_zero_never_advances():

@@ -573,7 +573,7 @@ def get_baseline_calibrations(conditional_grid, budget_per_sample, taus_range, t
                     **alloc_kwargs,
                 ),
             ])
-            if n1 >= 100:
+            if n1 >= 50:
                 control_size = min(100, n1 // 2)
                 crc_kwargs = {
                     "budget_control_mode": "crc",

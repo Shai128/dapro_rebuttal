@@ -143,7 +143,11 @@ def method_display_name(name: str) -> str:
         return "Uniform + reweighting"
     if name == "calibration_optimized_allocation" or name == "optimized":
         return "Static"
-    if "random_adaptive_optimized_no_terminal_floor_crc" in name:
+    if (
+        "random_adaptive_optimized" in name
+        and "crc" in name
+        and "random_schedule" not in name
+    ):
         return "Constant + CRC"
     if "adaptive_optimized_crc" in name:
         return "Local + CRC"
