@@ -31,15 +31,16 @@ from src.predictive_bounds.experiments.full_bounds.config import (
     all_experiment_configs,
     calibration_names,
 )
-from src.predictive_bounds.utils.utils import (
-    get_calibration_experiment_name,
-    get_merged_calibration_result_path,
-    get_merged_upb_calibration_result_path,
+from src.evaluation.result_matrix import (
+    DAPRO_ORACLE_METHODS,
+    method_display_name as matrix_method_display_name,
+    numeric_label,
+    parse_lpb_result,
 )
 
 
 ROOT = Path(__file__).resolve().parents[4]
-DEFAULT_INPUT_DIR = ROOT / "results" / "merged"
+DEFAULT_INPUT_DIR = ROOT / "results" / "merged_calibration_dfs"
 DEFAULT_OUTPUT_DIR = ROOT / "figures" / "full" / "merged"
 LOW_QUALITY_MAX_BYTES = 100 * 1024
 
@@ -116,6 +117,8 @@ def _long_io_path(path: Path) -> str:
 
 
 def experiment_name(config: ExperimentConfig, suffix: str) -> str:
+    from src.predictive_bounds.utils.utils import get_calibration_experiment_name
+
     return get_calibration_experiment_name(
         config.dataset_name,
         config.dataset_setup,
@@ -128,6 +131,11 @@ def experiment_name(config: ExperimentConfig, suffix: str) -> str:
 
 
 def merged_result_path(config: ExperimentConfig, suffix: str) -> Path:
+    from src.predictive_bounds.utils.utils import (
+        get_merged_calibration_result_path,
+        get_merged_upb_calibration_result_path,
+    )
+
     name = experiment_name(config, suffix)
     resolver = (
         get_merged_calibration_result_path
@@ -321,6 +329,94 @@ def load_merged_directory(
     return pd.concat(frames, ignore_index=True)
 
 
+def load_lpb_matrix(input_dir: Path) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Load every suffixed all-method LPB result for every budget and N1."""
+    frames = []
+    inventory_rows = []
+    skipped = []
+    for path in sorted(input_dir.rglob("all_df.csv")):
+        metadata = parse_lpb_result(path)
+        if metadata is None:
+            skipped.append(path)
+            continue
+        frame = _read_plot_columns(path)
+        for column in PLOT_COLUMNS:
+            if column not in frame:
+                frame[column] = np.nan
+        for column in PLOT_COLUMNS - {"calibration_name"}:
+            frame[column] = pd.to_numeric(frame[column], errors="coerce")
+        frame = frame[np.isclose(
+            frame["target_coverage"], 0.90, atol=5e-7
+        )].copy()
+        if frame.empty:
+            skipped.append(path)
+            continue
+
+        frame["method"] = frame["calibration_name"].map(
+            matrix_method_display_name
+        )
+        frame = frame[~frame["method"].isin(DAPRO_ORACLE_METHODS)].copy()
+        frame["target_model"] = metadata.target_model_display
+        frame["target_model_key"] = metadata.target_model
+        frame["configuration"] = metadata.dataset_key
+        frame["dataset_key"] = metadata.dataset_key
+        frame["dataset_display"] = metadata.dataset_display
+        frame["bound_type"] = "LPB"
+        frame["source_file"] = str(path)
+        frame["target_coverage_pct"] = 90.0
+        frame["target_budget"] = metadata.budget_per_sample
+        frame["dapro_n1"] = metadata.dapro_n1
+        frame["crc_control_size"] = metadata.crc_control_size
+        frame["plot_context"] = (
+            f"budget={metadata.budget_per_sample:g}, "
+            f"DAPRO N1={metadata.dapro_n1}"
+        )
+        frame["coverage_pct"] = 100 * frame["coverage"]
+        frame["coverage_diff_pct"] = (
+            frame["coverage_pct"] - frame["target_coverage_pct"]
+        ).abs()
+        frame["mean_a_weight"] = frame[
+            "mean_a_weighted_inverse_probability"
+        ]
+        calibration_size = frame["configured_cal_size"].fillna(3000)
+        frame["budget_used_per_sample"] = (
+            frame["budget_used"] / calibration_size
+        )
+        raw = frame["calibration_name"] == UNCALIBRATED
+        frame.loc[raw, [
+            "mean_weight",
+            "mean_a_weight",
+            "budget_used_per_sample",
+            "max_weight",
+            "total_expected_budget_per_sample",
+            "a_weighted_effective_sample_size",
+        ]] = np.nan
+        frames.append(frame)
+        inventory_rows.append({
+            "dataset": metadata.dataset_key,
+            "target_model": metadata.target_model,
+            "budget_per_sample": metadata.budget_per_sample,
+            "dapro_n1": metadata.dapro_n1,
+            "crc_control_size": metadata.crc_control_size,
+            "seed_count": frame["seed"].nunique(),
+            "method_count": frame["calibration_name"].nunique(),
+            "source_file": str(path),
+        })
+    if skipped:
+        print(
+            f"Ignored {len(skipped)} LPB result files that are not suffixed "
+            "all-method N1/budget experiments."
+        )
+    if not frames:
+        raise FileNotFoundError(
+            f"No suffixed LPB matrix results found below {input_dir}."
+        )
+    return (
+        pd.concat(frames, ignore_index=True),
+        pd.DataFrame(inventory_rows),
+    )
+
+
 def coverage_variance_frame(frame: pd.DataFrame) -> pd.DataFrame:
     return (
         frame.groupby(
@@ -401,7 +497,7 @@ def _save_jpeg(figure, path: Path, quality: str) -> None:
                         max(640, int(image.width * 0.86)),
                         max(360, int(image.height * 0.86)),
                     ),
-                    Image.Resampling.LANCZOS,
+                    getattr(Image, "Resampling", Image).LANCZOS,
                 )
             image.save(
                 path,
@@ -426,6 +522,9 @@ def _plot_box_metric(
         quality: str,
 ) -> None:
     plot_frame = frame.dropna(subset=[metric, "method"]).copy()
+    plot_frame = plot_frame[
+        ~plot_frame["method"].isin(DAPRO_ORACLE_METHODS)
+    ]
     if specification.get("allocation_only"):
         plot_frame = plot_frame[plot_frame["method"] != "Raw"]
     if specification.get("exclude_oracle"):
@@ -468,7 +567,14 @@ def _plot_box_metric(
             )
     _style_axis(axis, specification["ylabel"])
     dataset_name = str(plot_frame["dataset_display"].iloc[0])
-    figure.suptitle(f"{dataset_name}: {specification['ylabel']}", y=0.995)
+    context = ""
+    if "plot_context" in plot_frame:
+        values = plot_frame["plot_context"].dropna().unique()
+        if len(values) == 1:
+            context = f" ({values[0]})"
+    figure.suptitle(
+        f"{dataset_name}: {specification['ylabel']}{context}", y=0.995
+    )
     _place_legend(axis, figure)
     figure.tight_layout(rect=(0, 0, 1, 0.72))
     _save_jpeg(figure, path, quality)
@@ -480,7 +586,9 @@ def _plot_coverage_variance(
         path: Path,
         quality: str,
 ) -> pd.DataFrame:
-    variance = coverage_variance_frame(frame).dropna(
+    variance = coverage_variance_frame(
+        frame[~frame["method"].isin(DAPRO_ORACLE_METHODS)]
+    ).dropna(
         subset=["coverage_variance_pp2", "method"]
     )
     hue_order = _ordered_present(variance["method"], METHOD_ORDER)
@@ -496,12 +604,19 @@ def _plot_coverage_variance(
         order=target_order,
         hue_order=hue_order,
         palette=METHOD_COLORS,
-        errorbar=None,
+        ci=None,
         ax=axis,
     )
     _style_axis(axis, "Coverage variance (squared pp)")
     dataset_name = str(variance["dataset_display"].iloc[0])
-    figure.suptitle(f"{dataset_name}: coverage variance", y=0.995)
+    context = ""
+    if "plot_context" in frame:
+        values = frame["plot_context"].dropna().unique()
+        if len(values) == 1:
+            context = f" ({values[0]})"
+    figure.suptitle(
+        f"{dataset_name}: coverage variance{context}", y=0.995
+    )
     _place_legend(axis, figure)
     figure.tight_layout(rect=(0, 0, 1, 0.72))
     _save_jpeg(figure, path, quality)
@@ -572,6 +687,45 @@ def generate_all_figures(
     return generated
 
 
+def generate_lpb_matrix_figures(
+        frame: pd.DataFrame,
+        inventory: pd.DataFrame,
+        output_dir: Path,
+        quality: str,
+) -> list[Path]:
+    """Generate one complete figure tree per budget/N1/CRC combination."""
+    generated = []
+    combination_rows = []
+    group_columns = ["target_budget", "dapro_n1", "crc_control_size"]
+    for (budget, n1, crc), combination in frame.groupby(
+            group_columns, sort=True, observed=True
+    ):
+        combination_dir = (
+            output_dir
+            / f"budget_{numeric_label(budget)}"
+            / f"n1_{int(n1)}"
+            / f"crc_{int(crc)}"
+        )
+        paths = generate_all_figures(combination, combination_dir, quality)
+        generated.extend(paths)
+        combination_rows.append({
+            "budget_per_sample": budget,
+            "dapro_n1": int(n1),
+            "crc_control_size": int(crc),
+            "dataset_count": combination["dataset_key"].nunique(),
+            "target_model_count": combination["target_model_key"].nunique(),
+            "source_file_count": combination["source_file"].nunique(),
+            "figure_count": len(paths),
+            "directory": str(combination_dir.relative_to(output_dir)),
+        })
+    output_dir.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame(combination_rows).to_csv(
+        output_dir / "matrix-index.csv", index=False
+    )
+    inventory.to_csv(output_dir / "result-inventory.csv", index=False)
+    return generated
+
+
 def _write_figure_readme(output_dir: Path, manifest: pd.DataFrame) -> None:
     lines = [
         "# Predictive-bound figures",
@@ -620,11 +774,30 @@ def _parse_args() -> argparse.Namespace:
         action="append",
         choices=[model.key for model in TARGET_MODELS],
     )
+    parser.add_argument(
+        "--legacy-config-mode",
+        action="store_true",
+        help="Use the original manuscript-config discovery instead of the "
+        "budget/N1 result matrix.",
+    )
     return parser.parse_args()
 
 
 def main() -> None:
     args = _parse_args()
+    if not args.legacy_config_mode:
+        frame, inventory = load_lpb_matrix(args.input_dir)
+        print(
+            f"Loaded {len(frame):,} LPB rows from "
+            f"{frame['source_file'].nunique()} files, covering "
+            f"{frame['target_budget'].nunique()} budgets and "
+            f"{frame['dapro_n1'].nunique()} N1 values."
+        )
+        paths = generate_lpb_matrix_figures(
+            frame, inventory, args.output_dir, args.quality
+        )
+        print(f"Generated {len(paths)} LPB figures below {args.output_dir}.")
+        return
     frame = load_merged_directory(
         args.input_dir,
         configuration_keys=set(args.configs or []),

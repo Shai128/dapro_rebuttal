@@ -17,11 +17,21 @@ import numpy as np
 import pandas as pd
 import seaborn as sns
 
+from src.evaluation.result_matrix import (
+    DAPRO_ORACLE_METHODS,
+    METHOD_COLORS,
+    METHOD_ORDER,
+    method_display_name,
+    numeric_label,
+    parse_metric_result,
+)
+
 
 ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_INPUT_DIR = ROOT / "results" / "merged_metric_calibration_dfs"
 DEFAULT_OUTPUT_DIR = ROOT / "figures" / "metric_estimation"
 ORACLE_NAME = "oracle_full_budget"
+LOG_SCALE_METRICS = {"mean_weight", "mean_a_weighted_weight"}
 
 METRICS = {
     "estimated_cjr": "Estimated unsafe-event rate (%)",
@@ -48,35 +58,7 @@ METRICS = {
 
 
 def _display_name(name: str) -> str:
-    if name == "UniformBudgetAllocator":
-        return "Uniform + reweighting"
-    if name == "UnweightedUniformBudgetAllocator":
-        return "Uniform (unweighted)"
-    if name == "optimized":
-        return "Static"
-    if name == "random_adaptive_optimized_no_terminal_floor_crc":
-        return "Constant + CRC"
-    if name == ORACLE_NAME:
-        return "Full-budget oracle"
-    if name.startswith("oracle_target_a_dapro_no_split"):
-        return "Target-A oracle (global)"
-    if "oracle_target_a_dapro" in name and "crc_control" in name:
-        return "Target-A oracle + CRC"
-    if name.startswith("oracle_target_a_dapro"):
-        return "Target-A oracle (split)"
-    if name.startswith("dapro_variance_aligned") and "budget_crc" in name:
-        return "DAPRO definitive + CRC"
-    if name.startswith("dapro_variance_aligned"):
-        return "DAPRO definitive"
-    if "a_target_raw" in name and "budget_crc" in name:
-        return "DAPRO Target-A + CRC"
-    if "a_target_raw" in name:
-        return "DAPRO Target-A"
-    if name.startswith("projected_optimization") and "budget_crc" in name:
-        return "DAPRO legacy + CRC"
-    if name.startswith("projected_optimization"):
-        return "DAPRO legacy"
-    return name.replace("_", " ").title()
+    return method_display_name(name)
 
 
 def _safe_filename(metric: str) -> str:
@@ -106,6 +88,9 @@ def _plot_metric(
 ) -> None:
     reference = _oracle_reference(frame, metric)
     plot_frame = frame[frame["allocator_name"] != ORACLE_NAME].copy()
+    plot_frame = plot_frame[
+        ~plot_frame["method_display"].isin(DAPRO_ORACLE_METHODS)
+    ]
     plot_frame[metric] = pd.to_numeric(plot_frame[metric], errors="coerce")
     plot_frame = plot_frame.dropna(subset=[metric])
     if plot_frame.empty:
@@ -167,6 +152,9 @@ def summarize_experiment(csv_path: Path, output_dir: Path) -> list[Path]:
     if ORACLE_NAME not in set(frame["allocator_name"]):
         raise ValueError(f"{csv_path} has no {ORACLE_NAME} rows.")
     frame["method_display"] = frame["allocator_name"].map(_display_name)
+    frame = frame[
+        ~frame["method_display"].isin(DAPRO_ORACLE_METHODS)
+    ].copy()
 
     experiment_dir = output_dir / csv_path.parent.name
     generated = []
@@ -197,6 +185,225 @@ def summarize_experiment(csv_path: Path, output_dir: Path) -> list[Path]:
     return generated
 
 
+def load_metric_matrix(input_dir: Path) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Load every metric result and attach budget/N1/dataset metadata."""
+    frames = []
+    inventory_rows = []
+    skipped = []
+    for path in sorted(input_dir.rglob("all_df.csv")):
+        metadata = parse_metric_result(path)
+        if metadata is None:
+            skipped.append(path)
+            continue
+        frame = pd.read_csv(path)
+        required = {"seed", "allocator_name", "calibration_name"}
+        missing = required - set(frame.columns)
+        if missing:
+            raise ValueError(f"{path} is missing columns {sorted(missing)}")
+        if ORACLE_NAME not in set(frame["allocator_name"]):
+            raise ValueError(f"{path} has no {ORACLE_NAME} rows.")
+        frame["method_display"] = frame["calibration_name"].map(
+            method_display_name
+        )
+        frame = frame[
+            ~frame["method_display"].isin(DAPRO_ORACLE_METHODS)
+        ].copy()
+        frame["target_model"] = metadata.target_model_display
+        frame["target_model_key"] = metadata.target_model
+        frame["dataset_key"] = metadata.dataset_key
+        frame["dataset_display"] = metadata.dataset_display
+        frame["target_budget"] = metadata.budget_per_sample
+        frame["dapro_n1"] = metadata.dapro_n1
+        frame["crc_control_size"] = metadata.crc_control_size
+        frame["source_file"] = str(path)
+        frame["plot_context"] = (
+            f"budget={metadata.budget_per_sample:g}, "
+            f"DAPRO N1={metadata.dapro_n1}"
+        )
+        frames.append(frame)
+        inventory_rows.append({
+            "dataset": metadata.dataset_key,
+            "target_model": metadata.target_model,
+            "budget_per_sample": metadata.budget_per_sample,
+            "dapro_n1": metadata.dapro_n1,
+            "crc_control_size": metadata.crc_control_size,
+            "seed_count": frame["seed"].nunique(),
+            "method_count": frame["allocator_name"].nunique(),
+            "source_file": str(path),
+        })
+    if skipped:
+        print(f"Ignored {len(skipped)} unrecognized metric result files.")
+    if not frames:
+        raise FileNotFoundError(
+            f"No metric-estimation matrix results below {input_dir}."
+        )
+    return pd.concat(frames, ignore_index=True), pd.DataFrame(inventory_rows)
+
+
+def _ordered_present(values: pd.Series, order: tuple[str, ...]) -> list[str]:
+    present = set(values.dropna().unique())
+    return [value for value in order if value in present] + sorted(
+        present - set(order)
+    )
+
+
+def _plot_grouped_metric(
+        frame: pd.DataFrame,
+        metric: str,
+        ylabel: str,
+        output_path: Path,
+) -> None:
+    plot_frame = frame[frame["allocator_name"] != ORACLE_NAME].copy()
+    plot_frame = plot_frame[
+        ~plot_frame["method_display"].isin(DAPRO_ORACLE_METHODS)
+    ]
+    plot_frame[metric] = pd.to_numeric(plot_frame[metric], errors="coerce")
+    plot_frame = plot_frame.dropna(subset=[metric, "method_display"])
+    if plot_frame.empty:
+        raise ValueError(f"No finite non-oracle values for {metric}.")
+
+    target_order = list(dict.fromkeys(plot_frame["target_model"]))
+    method_order = _ordered_present(plot_frame["method_display"], METHOD_ORDER)
+    palette = {
+        method: METHOD_COLORS.get(method, "#777777")
+        for method in method_order
+    }
+    figure, axis = plt.subplots(figsize=(13.5, 6.8))
+    sns.boxplot(
+        data=plot_frame,
+        x="target_model",
+        y=metric,
+        hue="method_display",
+        order=target_order,
+        hue_order=method_order,
+        palette=palette,
+        showmeans=True,
+        meanprops={
+            "marker": "o",
+            "markerfacecolor": "white",
+            "markeredgecolor": "black",
+            "markersize": 3.5,
+        },
+        linewidth=1.0,
+        fliersize=2.0,
+        ax=axis,
+    )
+
+    oracle = frame[frame["allocator_name"] == ORACLE_NAME].copy()
+    oracle[metric] = pd.to_numeric(oracle[metric], errors="coerce")
+    for target_index, target in enumerate(target_order):
+        values = oracle.loc[oracle["target_model"] == target, metric].dropna()
+        if values.empty:
+            raise ValueError(f"Missing oracle {metric} for {target}.")
+        if not np.allclose(values, values.iloc[0], rtol=1e-10, atol=1e-10):
+            raise ValueError(f"Oracle {metric} varies across seeds for {target}.")
+        axis.hlines(
+            float(values.iloc[0]),
+            target_index - 0.42,
+            target_index + 0.42,
+            color="#c62828",
+            linestyle="--",
+            linewidth=1.8,
+            zorder=5,
+            label="Full-budget oracle" if target_index == 0 else None,
+        )
+
+    if metric in LOG_SCALE_METRICS:
+        positive = plot_frame.loc[plot_frame[metric] > 0, metric]
+        if not positive.empty:
+            axis.set_yscale("log")
+
+    axis.set_xlabel("Target model")
+    axis.set_ylabel(ylabel)
+    axis.grid(axis="y", linestyle=":", linewidth=0.8, alpha=0.55)
+    axis.set_axisbelow(True)
+    axis.spines["top"].set_visible(False)
+    axis.spines["right"].set_visible(False)
+    dataset = str(frame["dataset_display"].iloc[0])
+    context = str(frame["plot_context"].iloc[0])
+    figure.suptitle(f"{dataset}: {ylabel} ({context})", y=0.995)
+    handles, labels = axis.get_legend_handles_labels()
+    if axis.legend_ is not None:
+        axis.legend_.remove()
+    figure.legend(
+        handles,
+        labels,
+        title="Method",
+        loc="upper center",
+        bbox_to_anchor=(0.5, 0.94),
+        ncol=4,
+        frameon=False,
+    )
+    figure.tight_layout(rect=(0, 0, 1, 0.73))
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    figure.savefig(output_path, dpi=220, bbox_inches="tight")
+    plt.close(figure)
+
+
+def generate_metric_matrix_figures(
+        frame: pd.DataFrame,
+        inventory: pd.DataFrame,
+        output_dir: Path,
+) -> list[Path]:
+    """Generate grouped boxplots for every available budget/N1 combination."""
+    generated = []
+    index_rows = []
+    group_columns = ["target_budget", "dapro_n1", "crc_control_size"]
+    for (budget, n1, crc), combination in frame.groupby(
+            group_columns, sort=True, observed=True
+    ):
+        combination_dir = (
+            output_dir
+            / f"budget_{numeric_label(budget)}"
+            / f"n1_{int(n1)}"
+            / f"crc_{int(crc)}"
+        )
+        for dataset_key, dataset_frame in combination.groupby(
+                "dataset_key", sort=True, observed=True
+        ):
+            dataset_dir = combination_dir / dataset_key
+            available_metrics = []
+            for metric, ylabel in METRICS.items():
+                if metric not in dataset_frame:
+                    continue
+                path = dataset_dir / _safe_filename(metric)
+                _plot_grouped_metric(dataset_frame, metric, ylabel, path)
+                generated.append(path)
+                available_metrics.append(metric)
+            summary = (
+                dataset_frame.groupby(
+                    ["target_model", "allocator_name", "method_display"],
+                    as_index=False,
+                )[available_metrics]
+                .agg(["count", "mean", "std", "var", "median"])
+            )
+            summary.columns = [
+                "__".join(str(part) for part in column if part)
+                if isinstance(column, tuple)
+                else str(column)
+                for column in summary.columns
+            ]
+            dataset_dir.mkdir(parents=True, exist_ok=True)
+            summary.to_csv(dataset_dir / "across-seed-summary.csv", index=False)
+            dataset_frame.to_csv(
+                dataset_dir / "seed-level-plot-data.csv", index=False
+            )
+            index_rows.append({
+                "budget_per_sample": budget,
+                "dapro_n1": int(n1),
+                "crc_control_size": int(crc),
+                "dataset": dataset_key,
+                "target_model_count": dataset_frame["target_model"].nunique(),
+                "source_file_count": dataset_frame["source_file"].nunique(),
+                "figure_count": len(available_metrics),
+                "directory": str(dataset_dir.relative_to(output_dir)),
+            })
+    output_dir.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame(index_rows).to_csv(output_dir / "matrix-index.csv", index=False)
+    inventory.to_csv(output_dir / "result-inventory.csv", index=False)
+    return generated
+
+
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--input-dir", type=Path, default=DEFAULT_INPUT_DIR)
@@ -206,11 +413,32 @@ def _parse_args() -> argparse.Namespace:
         action="append",
         help="Merged experiment directory name; repeat to select several.",
     )
+    parser.add_argument(
+        "--legacy-per-experiment",
+        action="store_true",
+        help="Generate the original one-target-model-per-directory figures.",
+    )
     return parser.parse_args()
 
 
 def main() -> None:
     args = _parse_args()
+    if not args.legacy_per_experiment:
+        frame, inventory = load_metric_matrix(args.input_dir)
+        print(
+            f"Loaded {len(frame):,} metric rows from "
+            f"{frame['source_file'].nunique()} files, covering "
+            f"{frame['target_budget'].nunique()} budgets and "
+            f"{frame['dapro_n1'].nunique()} N1 values."
+        )
+        generated = generate_metric_matrix_figures(
+            frame, inventory, args.output_dir
+        )
+        print(
+            f"Generated {len(generated)} metric figures below "
+            f"{args.output_dir}."
+        )
+        return
     paths = sorted(args.input_dir.rglob("all_df.csv"))
     if args.experiment:
         requested = set(args.experiment)

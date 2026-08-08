@@ -5,7 +5,7 @@ import traceback
 import json
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Union
 
 import numpy as np
 import pandas as pd
@@ -262,7 +262,7 @@ class IPCWHazardFunctionMetric(SafetyMetric):
 
 
 class SurvivalQuantilesMetric(SafetyMetric):
-    def __init__(self, oracle_quantiles: Dict[str, float], quantiles: List[float] | None = None):
+    def __init__(self, oracle_quantiles: Dict[str, float], quantiles: Union[List[float],None ]= None):
         self.quantiles = [0.25, 0.50, 0.75] if quantiles is None else quantiles
         self.oracle_quantiles = oracle_quantiles
 

@@ -299,7 +299,7 @@ def run_experiments(cal_size, is_real, device, dataset_name, data_setup, experim
                     allocations, bound_type, calibration_names=None,
                     evaluate_dapro_projection=False, fixed_data_seed=None,
                     fixed_policy_seed=None, fixed_acquisition_seed=None,
-                    dapro_n1_values=(200,),
+                    dapro_n1_values=(200,100, 50),
                     definitive_dapro_margins=(1.0,)):
     max_time, t_tilde_cal_test, quantile_est_cal_test, probability_est, conditional_grid, test_size = setup_experiment_data(
         cal_size, is_real, device, dataset_name, data_setup, taus_range, m_upper_bound
@@ -988,7 +988,7 @@ def get_baseline_calibrations(conditional_grid, budget_per_sample, taus_range, t
 def get_calibration_methods(conditional_grid, budget_per_sample, taus_range, tau_prior, m_upper_bound, allocations,
                             cal_model_prediction, t_tilde_cal, device, bound_type,
                             evaluate_dapro_projection=False,
-                            dapro_n1_values=(200,),
+                            dapro_n1_values=(200,100, 50),
                             definitive_dapro_margins=(1.0,)):
     baseline_calibrations = get_baseline_calibrations(
         conditional_grid, budget_per_sample, taus_range, tau_prior,
