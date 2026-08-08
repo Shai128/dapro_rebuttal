@@ -64,6 +64,7 @@ from src.predictive_bounds.utils.utils import (
     get_tmp_calibration_result_path,
     get_tmp_upb_calibration_result_path,
     get_calibration_experiment_name,
+    make_lpb_tau_grid,
     resolve_m_upper_bound,
     setup_experiment_data
 )
@@ -1139,8 +1140,6 @@ def main():
     if bound_type == 'lpb':
         tau_prior = args.tau_prior if args.tau_prior is not None else 0.56
         target_taus_list = np.arange(0.01, 0.5, 0.01)
-        num_taus = 1000
-        min_tau_exp, max_tau_exp = -3, -0.01
     else:
         tau_prior = args.tau_prior if args.tau_prior is not None else 0.98
         target_taus_list = 1 - np.arange(0.01, 0.5, 0.01)
@@ -1156,7 +1155,7 @@ def main():
     seeds = (seed_start, seed_end)
 
     if bound_type == 'lpb':
-        taus_range = torch.tensor(np.logspace(min_tau_exp, max_tau_exp, num_taus)).to(device)
+        taus_range = make_lpb_tau_grid(device=device)
     else:
         taus_range = torch.tensor(np.linspace(0.5, 0.95, num_taus)).to(device)
 

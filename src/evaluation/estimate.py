@@ -462,6 +462,8 @@ def run_experiments(
         dapro_n1=200,
         crc_control_size=100,
         tau_prior=0.56,
+        exclude_legacy_dapro=False,
+        exclude_locally_adaptive=False,
 ):
     taus_range = torch.tensor(np.arange(0.01, 1.0, 0.01)).to(device)
     m_upper_bound = 200 if is_real else 20
@@ -498,6 +500,8 @@ def run_experiments(
             cal_model_prediction,
             dapro_n1=dapro_n1,
             crc_control_size=crc_control_size,
+            include_legacy_dapro=not exclude_legacy_dapro,
+            include_locally_adaptive=not exclude_locally_adaptive,
         )
         common_uniforms = np.random.default_rng(seed).random(
             (cal_size, curr_conditional_grid.shape[1])
@@ -559,6 +563,8 @@ def main():
     parser.add_argument('--dapro-n1', type=int, default=200)
     parser.add_argument('--crc-control-size', type=int, default=100)
     parser.add_argument('--experiment-suffix', type=str, default='')
+    parser.add_argument('--exclude-legacy-dapro', action='store_true')
+    parser.add_argument('--exclude-locally-adaptive', action='store_true')
     parser.add_argument('--overwrite', action='store_true')
     args = parser.parse_args()
 
@@ -584,7 +590,9 @@ def main():
                     skip_existing=not args.overwrite,
                     dapro_n1=args.dapro_n1,
                     crc_control_size=args.crc_control_size,
-                    tau_prior=args.tau_prior)
+                    tau_prior=args.tau_prior,
+                    exclude_legacy_dapro=args.exclude_legacy_dapro,
+                    exclude_locally_adaptive=args.exclude_locally_adaptive)
     print("Finished Metrics Evaluation Suite.")
 
 

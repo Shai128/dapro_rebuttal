@@ -305,25 +305,22 @@ build_methods() {
     # Constant continuation with an always-follow mixture that bounds IPW;
     # CRC accounts for the mixture while controlling the expected budget.
     calibration_random_adaptive_optimized_mixture_terminal_floor_0p005_crc_allocation
-    calibration_adaptive_optimized_crc_allocation
   )
 
   DAPRO_N1_ARGS=()
-  local dapro_config dapro_n1 crc_control_size legacy_n1_suffix
+  local dapro_config dapro_n1 crc_control_size historical_n1_suffix
   for dapro_config in "${DAPRO_CONFIGS[@]}"; do
     IFS=: read -r dapro_n1 crc_control_size <<< "$dapro_config"
     DAPRO_N1_ARGS+=("$dapro_n1")
-    legacy_n1_suffix="_n1_${dapro_n1}"
-    # Legacy allocator names retain their historical omission for N1=100.
+    historical_n1_suffix="_n1_${dapro_n1}"
+    # Historical Target-A names omit the N1 suffix when N1=100.
     if (( dapro_n1 == 100 )); then
-      legacy_n1_suffix=""
+      historical_n1_suffix=""
     fi
     METHODS+=(
-      "calibration_projected_optimization_direct_bins_2_prob${legacy_n1_suffix}_allocation"
-      "calibration_projected_optimization_direct_bins_2_prob_a_target_raw_alpha_0p10${legacy_n1_suffix}_allocation"
+      "calibration_projected_optimization_direct_bins_2_prob_a_target_raw_alpha_0p10${historical_n1_suffix}_allocation"
       "calibration_dapro_variance_aligned_bins_2_alpha_0p10_global_0p001_projection_margin_1p00_n1_${dapro_n1}_allocation"
-      "calibration_projected_optimization_direct_bins_2_prob_budget_crc_control_${crc_control_size}_row_cap_2p00x_budget${legacy_n1_suffix}_allocation"
-      "calibration_projected_optimization_direct_bins_2_prob_a_target_raw_alpha_0p10_budget_crc_control_${crc_control_size}_row_cap_2p00x_budget${legacy_n1_suffix}_allocation"
+      "calibration_projected_optimization_direct_bins_2_prob_a_target_raw_alpha_0p10_budget_crc_control_${crc_control_size}_row_cap_2p00x_budget${historical_n1_suffix}_allocation"
       "calibration_dapro_variance_aligned_bins_2_alpha_0p10_global_0p001_budget_crc_control_${crc_control_size}_row_cap_2p00x_budget_n1_${dapro_n1}_allocation"
     )
   done

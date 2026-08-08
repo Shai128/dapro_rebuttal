@@ -279,6 +279,8 @@ run_configuration() {
     --tau-prior "$TAU_PRIOR"
     --device "$DEVICE"
     --experiment-suffix "$EXPERIMENT_SUFFIX"
+    --exclude-legacy-dapro
+    --exclude-locally-adaptive
   )
 
   key="${dataset}_${target}_b_${budget}"

@@ -254,7 +254,6 @@ def calibration_names(bound_type: str) -> tuple[str, ...]:
         STATIC,
         CONSTANT,
         POWER_REACH,
-        LOCALLY_ADAPTIVE,
         dapro,
         oracle,
     ]

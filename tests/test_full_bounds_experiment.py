@@ -3,12 +3,14 @@
 from pathlib import Path
 
 import matplotlib.pyplot as plt
+import pandas as pd
 
 from src.predictive_bounds.experiments.full_bounds.config import (
     CRC_DAPRO_ORACLE,
     GLOBAL_DAPRO_ORACLE,
     LPB_ORACLE,
     LPB_DAPRO,
+    LOCALLY_ADAPTIVE,
     POWER_REACH,
     UPB_DAPRO,
     UPB_ORACLE,
@@ -18,6 +20,8 @@ from src.predictive_bounds.experiments.full_bounds.config import (
 )
 from src.predictive_bounds.experiments.full_bounds.summarize import (
     LOW_QUALITY_MAX_BYTES,
+    _compact_result_configurations,
+    _method_n1,
     _save_jpeg,
 )
 
@@ -43,8 +47,9 @@ def test_full_bounds_matrix_covers_every_dataset_model_and_bound():
 def test_full_bounds_method_profiles_are_exact_and_bound_specific():
     lpb = calibration_names("lpb")
     upb = calibration_names("upb")
-    assert len(lpb) == 10
-    assert len(upb) == 7
+    assert len(lpb) == 9
+    assert len(upb) == 6
+    assert LOCALLY_ADAPTIVE not in lpb and LOCALLY_ADAPTIVE not in upb
     assert LPB_DAPRO in lpb and LPB_DAPRO not in upb
     assert UPB_DAPRO in upb and UPB_DAPRO not in lpb
     assert POWER_REACH in lpb and POWER_REACH in upb
@@ -71,3 +76,20 @@ def test_low_quality_jpeg_respects_the_hard_size_limit(tmp_path: Path):
 
     assert path.exists()
     assert path.stat().st_size <= LOW_QUALITY_MAX_BYTES
+
+
+def test_compact_result_configurations_are_inferred_from_method_names():
+    names = pd.Series([
+        "uncalibrated_lpb",
+        "calibration_projected_optimization_direct_bins_2_prob_n1_200_allocation",
+        "calibration_projected_optimization_direct_bins_2_prob_allocation",
+        "calibration_budget_crc_control_25_n1_50_allocation",
+    ])
+
+    assert _method_n1(names.iloc[0]) is None
+    assert _method_n1(names.iloc[2]) == 100
+    assert _compact_result_configurations(names) == [
+        (200, 100),
+        (100, 50),
+        (50, 25),
+    ]

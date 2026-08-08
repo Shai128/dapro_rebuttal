@@ -1537,6 +1537,21 @@ def get_calibration_experiment_name(
     return f"{base}_{suffix}"
 
 
+def make_lpb_tau_grid(device=None) -> torch.Tensor:
+    """Build an LPB candidate grid with guaranteed low-tail feasibility.
+
+    Some survival models assign less than 0.001 probability to their earliest
+    event bins.  A grid beginning at 0.001 then has no candidate capable of
+    attaining small target miscoverage, even for oracle calibration.  Preserve
+    the original grid while adding a logarithmic low tail and the exact
+    zero-quantile candidate, whose one-based interaction bound is always 1.
+    """
+    low_tail = np.logspace(-12, -3, 256, endpoint=False)
+    original = np.logspace(-3, -0.01, 1000)
+    values = np.concatenate(([0.0], low_tail, original))
+    return torch.tensor(values, device=device)
+
+
 def resolve_m_upper_bound(
         is_real: bool,
         budget_per_sample: float,

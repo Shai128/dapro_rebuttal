@@ -567,6 +567,8 @@ def get_metric_allocators(
         *,
         dapro_n1=200,
         crc_control_size=100,
+        include_legacy_dapro=True,
+        include_locally_adaptive=True,
 ) -> List[BudgetAllocator]:
     """Return the fixed-benchmark metric-estimation comparison.
 
@@ -596,7 +598,7 @@ def get_metric_allocators(
     )
     target = dict(metric_estimation_horizon=m_upper_bound)
 
-    return [
+    allocators = [
         # Uniform sampling, with and without inverse-probability correction.
         UniformBudgetAllocator(
             budget_per_sample, taus_range, tau_prior, m_upper_bound
@@ -673,3 +675,16 @@ def get_metric_allocators(
             **target,
         ),
     ]
+    if not include_legacy_dapro:
+        allocators = [
+            allocator
+            for allocator in allocators
+            if type(allocator) is not LegacyMeanWeightDAPRO
+        ]
+    if not include_locally_adaptive:
+        allocators = [
+            allocator
+            for allocator in allocators
+            if type(allocator) is not AdaptiveOptimizedBudgetAllocator
+        ]
+    return allocators

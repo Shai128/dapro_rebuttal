@@ -21,6 +21,7 @@ from src.predictive_bounds.budget_allocators.projected_optimization_utils import
     expected_acquisition_cost,
 )
 from src.predictive_bounds.calibration.calibration_utils import (
+    quantiles_to_interaction_counts,
     select_calibration_positions,
 )
 from src.predictive_bounds.construct_calibrated_bound import (
@@ -29,7 +30,13 @@ from src.predictive_bounds.construct_calibrated_bound import (
 from src.predictive_bounds.merge_bounds_results import (
     get_calibration_methods as get_merge_calibration_methods,
 )
-from src.predictive_bounds.utils.utils import resolve_m_upper_bound
+from src.predictive_bounds.survival_utils.compute_mean_time_given_pmf import (
+    compute_quantiles_survival_time,
+)
+from src.predictive_bounds.utils.utils import (
+    make_lpb_tau_grid,
+    resolve_m_upper_bound,
+)
 
 
 def terminal_probabilities(probabilities, lengths):
@@ -47,6 +54,33 @@ def test_common_calibration_selector_uses_strict_initial_prefix():
     # The 0.10 candidate itself is infeasible because selection is strict.
     # Once that candidate fails, a later finite-sample dip cannot re-enter.
     assert selected.tolist() == [1, 3]
+
+
+def test_lpb_tau_grid_has_safe_zero_candidate_and_preserves_original_grid():
+    taus = make_lpb_tau_grid()
+
+    assert taus[0].item() == 0.0
+    assert torch.all(taus[1:] > taus[:-1])
+    assert torch.isclose(
+        taus,
+        torch.tensor(0.001, dtype=taus.dtype),
+    ).any()
+    assert len(taus) == 1257
+
+    probabilities = torch.tensor([
+        [[[0.0, 0.1, 0.2, 0.7]]],
+        [[[0.00001, 0.2, 0.3, 0.49999]]],
+    ]).squeeze(1)
+    quantiles = compute_quantiles_survival_time(
+        probabilities,
+        taus[:2],
+        tail_distribution="geometric",
+    ).squeeze(1)
+    interaction_counts = quantiles_to_interaction_counts(
+        quantiles,
+        width=probabilities.shape[-1] - 1,
+    )
+    assert interaction_counts[:, 0].tolist() == [1.0, 1.0]
 
 
 def _make_target_allocator(anchor_kind, target_alpha):

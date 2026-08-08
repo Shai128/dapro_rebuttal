@@ -69,6 +69,8 @@ def merge_results(
         dapro_n1=200,
         crc_control_size=100,
         dapro_configs=None,
+        exclude_legacy_dapro=False,
+        exclude_locally_adaptive=False,
 ):
     all_dfs = []
     num_cpus = os.cpu_count()
@@ -91,6 +93,8 @@ def merge_results(
             device=device,
             dapro_n1=config_n1,
             crc_control_size=config_crc,
+            include_legacy_dapro=not exclude_legacy_dapro,
+            include_locally_adaptive=not exclude_locally_adaptive,
         )
         for calibration in calibrations:
             entry = calibrations_by_name.setdefault(
@@ -187,6 +191,8 @@ def main():
         ),
     )
     parser.add_argument('--experiment-suffix', type=str, default='')
+    parser.add_argument('--exclude-legacy-dapro', action='store_true')
+    parser.add_argument('--exclude-locally-adaptive', action='store_true')
     args = parser.parse_args()
 
     dapro_configs = []
@@ -228,6 +234,8 @@ def main():
         dapro_n1=args.dapro_n1,
         crc_control_size=args.crc_control_size,
         dapro_configs=dapro_configs or None,
+        exclude_legacy_dapro=args.exclude_legacy_dapro,
+        exclude_locally_adaptive=args.exclude_locally_adaptive,
     )
 
 

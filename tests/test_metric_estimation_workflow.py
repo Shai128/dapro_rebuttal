@@ -71,6 +71,29 @@ def test_metric_registry_contains_exact_requested_comparison():
     ]
 
 
+def test_metric_registry_can_exclude_legacy_and_local_methods():
+    taus = torch.arange(0.01, 1.0, 0.01)
+    allocators = get_metric_allocators(
+        None,
+        20,
+        200,
+        taus,
+        0.56,
+        "cpu",
+        dapro_n1=200,
+        crc_control_size=100,
+        include_legacy_dapro=False,
+        include_locally_adaptive=False,
+    )
+
+    assert all(type(allocator).__name__ != "LegacyMeanWeightDAPRO"
+               for allocator in allocators)
+    assert all(type(allocator).__name__ != "AdaptiveOptimizedBudgetAllocator"
+               for allocator in allocators)
+    assert any(isinstance(allocator, TargetAWeightedDAPRO)
+               for allocator in allocators)
+
+
 def test_metric_experiment_name_normalizes_integer_budget():
     assert metric_experiment_name("data", "setup", 5.0, 200, 100, "v1") == (
         "data_setup_5_metric_estimation_v1"

@@ -18,6 +18,7 @@ from src.predictive_bounds.utils.utils import (
     get_tmp_upb_calibration_result_path,
     get_merged_upb_calibration_result_path,
     get_calibration_experiment_name,
+    make_lpb_tau_grid,
     resolve_m_upper_bound,
 )
 from src.utils.utils import set_seeds
@@ -278,10 +279,7 @@ def main():
     if bound_type == 'lpb':
         tau_prior = args.tau_prior if args.tau_prior is not None else 0.56
         target_taus_list = np.arange(0.01, 0.5, 0.01)
-        num_taus = 1000
-        min_tau_exp = -3
-        max_tau_exp = -0.01
-        taus_range = torch.tensor(np.logspace(min_tau_exp, max_tau_exp, num_taus)).to(device)
+        taus_range = make_lpb_tau_grid(device=device)
     else:
         tau_prior = args.tau_prior if args.tau_prior is not None else 0.98
         target_taus_list = 1 - np.arange(0.01, 0.5, 0.01)

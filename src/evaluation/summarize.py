@@ -35,6 +35,11 @@ ORACLE_NAME = "oracle_full_budget"
 LOG_SCALE_METRICS = {"mean_weight", "mean_a_weighted_weight"}
 ORACLE_REFERENCE_METRICS = {"estimated_cjr", "estimated_rmttu"}
 TARGET_BUDGET_REFERENCE_METRICS = {"budget_per_sample"}
+EXCLUDED_DISPLAY_METHODS = DAPRO_ORACLE_METHODS | frozenset({
+    "Legacy DAPRO",
+    "Legacy DAPRO + CRC",
+    "Local + CRC",
+})
 
 METRICS = {
     "estimated_cjr": "Estimated unsafe-event rate (%)",
@@ -102,7 +107,7 @@ def _plot_metric(
 ) -> None:
     plot_frame = frame[frame["allocator_name"] != ORACLE_NAME].copy()
     plot_frame = plot_frame[
-        ~plot_frame["method_display"].isin(DAPRO_ORACLE_METHODS)
+        ~plot_frame["method_display"].isin(EXCLUDED_DISPLAY_METHODS)
     ]
     plot_frame[metric] = pd.to_numeric(plot_frame[metric], errors="coerce")
     plot_frame = plot_frame.dropna(subset=[metric])
@@ -180,7 +185,7 @@ def summarize_experiment(
         raise ValueError(f"{csv_path} has no {ORACLE_NAME} rows.")
     frame["method_display"] = frame["allocator_name"].map(_display_name)
     frame = frame[
-        ~frame["method_display"].isin(DAPRO_ORACLE_METHODS)
+        ~frame["method_display"].isin(EXCLUDED_DISPLAY_METHODS)
     ].copy()
     metadata = parse_metric_result(csv_path)
     if metadata is not None:
@@ -236,7 +241,7 @@ def load_metric_matrix(input_dir: Path) -> tuple[pd.DataFrame, pd.DataFrame]:
             method_display_name
         )
         frame = frame[
-            ~frame["method_display"].isin(DAPRO_ORACLE_METHODS)
+            ~frame["method_display"].isin(EXCLUDED_DISPLAY_METHODS)
         ].copy()
         frame["target_model"] = metadata.target_model_display
         frame["target_model_key"] = metadata.target_model
@@ -305,7 +310,7 @@ def _plot_grouped_metric(
 ) -> None:
     plot_frame = frame[frame["allocator_name"] != ORACLE_NAME].copy()
     plot_frame = plot_frame[
-        ~plot_frame["method_display"].isin(DAPRO_ORACLE_METHODS)
+        ~plot_frame["method_display"].isin(EXCLUDED_DISPLAY_METHODS)
     ]
     plot_frame[metric] = pd.to_numeric(plot_frame[metric], errors="coerce")
     plot_frame = plot_frame.dropna(subset=[metric, "method_display"])
@@ -419,7 +424,7 @@ def _plot_grouped_variance(
     """Plot sample variance across calibration/test splits for each method."""
     plot_frame = frame[frame["allocator_name"] != ORACLE_NAME].copy()
     plot_frame = plot_frame[
-        ~plot_frame["method_display"].isin(DAPRO_ORACLE_METHODS)
+        ~plot_frame["method_display"].isin(EXCLUDED_DISPLAY_METHODS)
     ]
     plot_frame[metric] = pd.to_numeric(plot_frame[metric], errors="coerce")
     plot_frame = plot_frame.dropna(

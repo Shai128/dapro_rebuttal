@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 from pathlib import Path
 
 import matplotlib
@@ -160,6 +161,49 @@ PLOT_COLUMNS = {
     "configured_cal_size",
 }
 
+_METHOD_N1_RE = re.compile(r"(?:^|_)n1_(?P<n1>\d+)(?:_|$)")
+_METHOD_CRC_RE = re.compile(r"(?:^|_)control_(?P<crc>\d+)(?:_|$)")
+EXCLUDED_DISPLAY_METHODS = DAPRO_ORACLE_METHODS | frozenset({
+    "Legacy DAPRO",
+    "Legacy DAPRO + CRC",
+    "Local + CRC",
+})
+
+
+def _method_n1(calibration_name: str) -> int | None:
+    """Extract N1, including historical method names that omit N1=100."""
+    match = _METHOD_N1_RE.search(str(calibration_name))
+    if match is not None:
+        return int(match.group("n1"))
+    if "projected_optimization" in str(calibration_name):
+        return 100
+    return None
+
+
+def _compact_result_configurations(
+        calibration_names: pd.Series,
+) -> list[tuple[int, int]]:
+    """Discover the N1/CRC pairs stored in one compact merged result."""
+    pairs = set()
+    for name in calibration_names.dropna().astype(str).unique():
+        n1 = _method_n1(name)
+        if n1 is None:
+            continue
+        match = _METHOD_CRC_RE.search(name)
+        if match is not None:
+            pairs.add((n1, int(match.group("crc"))))
+    # A compact file can contain only non-CRC DAPRO rows after a partial run.
+    # Retain those N1 values using the registry's configured half-split rule.
+    discovered_n1 = {
+        n1
+        for name in calibration_names.dropna().astype(str).unique()
+        if (n1 := _method_n1(name)) is not None
+    }
+    paired_n1 = {n1 for n1, _ in pairs}
+    for n1 in discovered_n1 - paired_n1:
+        pairs.add((n1, min(100, n1 // 2)))
+    return sorted(pairs, reverse=True)
+
 
 def _read_plot_columns(path: Path) -> pd.DataFrame:
     """Read only plotting columns; merged files contain hundreds of metrics."""
@@ -202,6 +246,9 @@ def _prepare_frame(
     frame.loc[unknown, "method"] = frame.loc[
         unknown, "calibration_name"
     ].map(_fallback_method_name)
+    frame = frame[
+        ~frame["method"].isin(EXCLUDED_DISPLAY_METHODS)
+    ].copy()
     frame["target_model"] = config.target_model.display_name
     frame["target_model_key"] = config.target_model.key
     frame["configuration"] = config.key
@@ -355,7 +402,19 @@ def load_lpb_matrix(input_dir: Path) -> tuple[pd.DataFrame, pd.DataFrame]:
         frame["method"] = frame["calibration_name"].map(
             matrix_method_display_name
         )
-        frame = frame[~frame["method"].isin(DAPRO_ORACLE_METHODS)].copy()
+        frame = frame[
+            ~frame["method"].isin(EXCLUDED_DISPLAY_METHODS)
+        ].copy()
+        method_n1 = frame["calibration_name"].map(_method_n1)
+        configurations = (
+            [(metadata.dapro_n1, metadata.crc_control_size)]
+            if metadata.dapro_n1 is not None
+            else _compact_result_configurations(frame["calibration_name"])
+        )
+        if not configurations:
+            skipped.append(path)
+            continue
+        common_rows = method_n1.isna()
         frame["target_model"] = metadata.target_model_display
         frame["target_model_key"] = metadata.target_model
         frame["configuration"] = metadata.dataset_key
@@ -365,12 +424,6 @@ def load_lpb_matrix(input_dir: Path) -> tuple[pd.DataFrame, pd.DataFrame]:
         frame["source_file"] = str(path)
         frame["target_coverage_pct"] = 90.0
         frame["target_budget"] = metadata.budget_per_sample
-        frame["dapro_n1"] = metadata.dapro_n1
-        frame["crc_control_size"] = metadata.crc_control_size
-        frame["plot_context"] = (
-            f"budget={metadata.budget_per_sample:g}, "
-            f"DAPRO N1={metadata.dapro_n1}"
-        )
         frame["coverage_pct"] = 100 * frame["coverage"]
         frame["coverage_diff_pct"] = (
             frame["coverage_pct"] - frame["target_coverage_pct"]
@@ -391,17 +444,24 @@ def load_lpb_matrix(input_dir: Path) -> tuple[pd.DataFrame, pd.DataFrame]:
             "total_expected_budget_per_sample",
             "a_weighted_effective_sample_size",
         ]] = np.nan
-        frames.append(frame)
-        inventory_rows.append({
-            "dataset": metadata.dataset_key,
-            "target_model": metadata.target_model,
-            "budget_per_sample": metadata.budget_per_sample,
-            "dapro_n1": metadata.dapro_n1,
-            "crc_control_size": metadata.crc_control_size,
-            "seed_count": frame["seed"].nunique(),
-            "method_count": frame["calibration_name"].nunique(),
-            "source_file": str(path),
-        })
+        for n1, crc in configurations:
+            config_frame = frame[common_rows | (method_n1 == n1)].copy()
+            config_frame["dapro_n1"] = n1
+            config_frame["crc_control_size"] = crc
+            config_frame["plot_context"] = (
+                f"budget={metadata.budget_per_sample:g}, DAPRO N1={n1}"
+            )
+            frames.append(config_frame)
+            inventory_rows.append({
+                "dataset": metadata.dataset_key,
+                "target_model": metadata.target_model,
+                "budget_per_sample": metadata.budget_per_sample,
+                "dapro_n1": n1,
+                "crc_control_size": crc,
+                "seed_count": config_frame["seed"].nunique(),
+                "method_count": config_frame["calibration_name"].nunique(),
+                "source_file": str(path),
+            })
     if skipped:
         print(
             f"Ignored {len(skipped)} LPB result files that are not suffixed "
@@ -523,7 +583,7 @@ def _plot_box_metric(
 ) -> None:
     plot_frame = frame.dropna(subset=[metric, "method"]).copy()
     plot_frame = plot_frame[
-        ~plot_frame["method"].isin(DAPRO_ORACLE_METHODS)
+        ~plot_frame["method"].isin(EXCLUDED_DISPLAY_METHODS)
     ]
     if specification.get("allocation_only"):
         plot_frame = plot_frame[plot_frame["method"] != "Raw"]
@@ -587,7 +647,7 @@ def _plot_coverage_variance(
         quality: str,
 ) -> pd.DataFrame:
     variance = coverage_variance_frame(
-        frame[~frame["method"].isin(DAPRO_ORACLE_METHODS)]
+        frame[~frame["method"].isin(EXCLUDED_DISPLAY_METHODS)]
     ).dropna(
         subset=["coverage_variance_pp2", "method"]
     )
