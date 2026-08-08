@@ -68,41 +68,62 @@ def merge_results(
         device,
         dapro_n1=200,
         crc_control_size=100,
+        dapro_configs=None,
 ):
     all_dfs = []
     num_cpus = os.cpu_count()
 
-    # Pass None for conditional_grid to avoid loading data just for names
-    all_calibrations = get_metric_allocators(
-        conditional_grid=None,
-        budget_per_sample=budget_per_sample,
-        taus_range=taus_range,
-        tau_prior=tau_prior,
-        m_upper_bound=m_upper_bound,
-        device=device,
-        dapro_n1=dapro_n1,
-        crc_control_size=crc_control_size,
+    configurations = (
+        [(dapro_n1, crc_control_size)]
+        if dapro_configs is None
+        else list(dapro_configs)
     )
+    # Baselines are repeated by each registry call. Deduplicate by canonical
+    # allocator name while retaining every N1/CRC-specific method.
+    calibrations_by_name = {}
+    for config_n1, config_crc in configurations:
+        calibrations = get_metric_allocators(
+            conditional_grid=None,
+            budget_per_sample=budget_per_sample,
+            taus_range=taus_range,
+            tau_prior=tau_prior,
+            m_upper_bound=m_upper_bound,
+            device=device,
+            dapro_n1=config_n1,
+            crc_control_size=config_crc,
+        )
+        for calibration in calibrations:
+            entry = calibrations_by_name.setdefault(
+                calibration.name,
+                {"calibration": calibration, "configs": []},
+            )
+            entry["configs"].append((config_n1, config_crc))
+    calibration_entries = list(calibrations_by_name.values())
 
     print(f"Starting merge for experiment: {experiments_name}")
-    print(f"Discovered {len(all_calibrations)} unique calibration methods.")
+    print(f"Discovered {len(calibration_entries)} unique calibration methods.")
 
     with ThreadPoolExecutor(max_workers=num_cpus) as executor:
-        futures = []
+        futures = {}
 
         for seed in range(seeds[0], seeds[1]):
-            for calibration in all_calibrations:
-                futures.append(
-                    executor.submit(process_calibration,
-                                    calibration, seed, experiments_name)
+            for entry in calibration_entries:
+                future = executor.submit(
+                    process_calibration,
+                    entry["calibration"], seed, experiments_name,
                 )
+                futures[future] = entry["configs"]
 
         # Process with tqdm progress bar
         for future in tqdm.tqdm(as_completed(futures), total=len(futures), desc="Merging CSVs"):
             try:
                 result_df = future.result()
                 if result_df is not None and not result_df.empty:
-                    all_dfs.append(result_df)
+                    for config_n1, config_crc in futures[future]:
+                        configured = result_df.copy()
+                        configured["configured_dapro_n1"] = config_n1
+                        configured["configured_crc_control_size"] = config_crc
+                        all_dfs.append(configured)
             except Exception as e:
                 print(f"Error resolving future: {e}")
 
@@ -111,17 +132,26 @@ def merge_results(
             "No calibrations found. Check your file paths and seed ranges.")
 
     all_df = pd.concat(all_dfs, ignore_index=True)
-    expected_rows = (seeds[1] - seeds[0]) * len(all_calibrations)
+    methods_per_configuration = sum(
+        len(entry["configs"]) for entry in calibration_entries
+    )
+    expected_rows = (seeds[1] - seeds[0]) * methods_per_configuration
     if len(all_df) != expected_rows:
         raise RuntimeError(
             f"Incomplete merge: expected {expected_rows} rows but loaded "
             f"{len(all_df)}. Re-run estimation for the missing methods/seeds."
         )
-    duplicates = all_df.duplicated(["seed", "allocator_name"], keep=False)
+    identity_columns = [
+        "seed",
+        "allocator_name",
+        "configured_dapro_n1",
+        "configured_crc_control_size",
+    ]
+    duplicates = all_df.duplicated(identity_columns, keep=False)
     if duplicates.any():
         raise RuntimeError("Duplicate seed/allocator rows found during merge.")
     all_df = all_df.sort_values(
-        ["seed", "allocator_name"]).reset_index(drop=True)
+        identity_columns).reset_index(drop=True)
 
     results_dir = get_merged_metric_calibration_result_path(experiments_name)
     os.makedirs(results_dir, exist_ok=True)
@@ -146,8 +176,29 @@ def main():
     parser.add_argument('--device', type=str, default='cuda:0')
     parser.add_argument('--dapro-n1', type=int, default=200)
     parser.add_argument('--crc-control-size', type=int, default=100)
+    parser.add_argument(
+        '--dapro-config',
+        action='append',
+        default=[],
+        metavar='N1:CRC',
+        help=(
+            "N1/CRC pair to include in a consolidated merge. Repeat the "
+            "option for multiple configurations."
+        ),
+    )
     parser.add_argument('--experiment-suffix', type=str, default='')
     args = parser.parse_args()
+
+    dapro_configs = []
+    for value in args.dapro_config:
+        try:
+            n1_text, crc_text = value.split(':', 1)
+            config = (int(n1_text), int(crc_text))
+        except (TypeError, ValueError):
+            parser.error(f"Invalid --dapro-config {value!r}; expected N1:CRC.")
+        if not 0 < config[1] < config[0]:
+            parser.error(f"Invalid --dapro-config {value!r}; require 0 < CRC < N1.")
+        dapro_configs.append(config)
 
     # Reconstruct variables required for allocator initialization
     device = 'cuda:0' if torch.cuda.is_available() and 'cuda' in args.device else 'cpu'
@@ -176,6 +227,7 @@ def main():
         device=device,
         dapro_n1=args.dapro_n1,
         crc_control_size=args.crc_control_size,
+        dapro_configs=dapro_configs or None,
     )
 
 

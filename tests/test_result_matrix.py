@@ -43,6 +43,29 @@ def test_parse_metric_budget_n1_matrix_path():
     assert result.crc_control_size == 25
 
 
+def test_parse_compact_metric_result_path():
+    path = Path("results/merged_metric_calibration_dfs") / (
+        f"{SETUP}_20_metric_estimation_metric_v1"
+    ) / "all_df.csv"
+    result = parse_metric_result(path)
+
+    assert result is not None
+    assert result.budget_per_sample == 20
+    assert result.dapro_n1 is None
+    assert result.crc_control_size is None
+
+
+def test_parse_compact_lpb_result_path():
+    path = Path("results/merged_calibration_dfs") / (
+        f"{SETUP}_10_calibration_lpb_v1"
+    ) / "all_df.csv"
+    result = parse_lpb_result(path)
+
+    assert result is not None
+    assert result.budget_per_sample == 10
+    assert result.dapro_n1 is None
+
+
 def test_unsuffixed_lpb_result_is_not_part_of_matrix():
     path = Path("results/merged_calibration_dfs") / (
         f"{SETUP}_20.0_3000_0.56_10.0"

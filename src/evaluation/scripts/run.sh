@@ -40,7 +40,7 @@ CAL_SIZE=3000
 SEED_START=0
 SEED_END=50
 TAU_PRIOR=0.56
-EXPERIMENT_SUFFIX="metric_estimation_v1"
+EXPERIMENT_SUFFIX="metric_v1"
 
 # Each entry is DAPRO_N1:CRC_CONTROL_SIZE.
 DAPRO_CONFIGS=(
@@ -257,9 +257,7 @@ configure_dataset() {
 run_configuration() {
   local dataset="$1"
   local target="$2"
-  local dapro_n1="$3"
-  local crc_control_size="$4"
-  local budget="$5"
+  local budget="$3"
 
   configure_dataset "$dataset" "$target" || return 1
 
@@ -272,7 +270,7 @@ run_configuration() {
     return 3
   fi
 
-  local common=(
+  local shared_args=(
     --data-type real
     --dataset-name "$DATASET_NAME"
     --dataset-setup "$DATASET_SETUP"
@@ -280,34 +278,43 @@ run_configuration() {
     --cal-size "$CAL_SIZE"
     --tau-prior "$TAU_PRIOR"
     --device "$DEVICE"
-    --dapro-n1 "$dapro_n1"
-    --crc-control-size "$crc_control_size"
     --experiment-suffix "$EXPERIMENT_SUFFIX"
   )
 
-  key="${dataset}_${target}_n1_${dapro_n1}_crc_${crc_control_size}_b_${budget}"
+  key="${dataset}_${target}_b_${budget}"
+  local config
+  local dapro_n1
+  local crc_control_size
+  local merge_config_args=()
 
-  echo
-  echo "[$key] estimate full seed range [$SEED_START, $SEED_END)"
-
-  # One Python process / one srun handles the COMPLETE seed range.
-  # With SEED_START=0 and SEED_END=50, this passes --seed-start 0 --seed-end 50.
-  if ! run_module \
-    src.evaluation.estimate \
-    "${key}_estimate" \
-    "${common[@]}" \
-    --seed-start "$SEED_START" \
-    --seed-end "$SEED_END"; then
-    echo "ERROR: estimate failed for $key; skipping merge and continuing." >&2
-    return 1
-  fi
+  # All N1/CRC methods share one compact experiment directory. Run the
+  # configurations sequentially inside this job so common baseline files are
+  # never written concurrently, then merge the complete method set once.
+  for config in "${DAPRO_CONFIGS[@]}"; do
+    IFS=: read -r dapro_n1 crc_control_size <<< "$config"
+    merge_config_args+=(--dapro-config "$config")
+    echo
+    echo "[$key | N1=$dapro_n1 | CRC=$crc_control_size] estimate seeds [$SEED_START, $SEED_END)"
+    if ! run_module \
+      src.evaluation.estimate \
+      "${key}_n1_${dapro_n1}_estimate" \
+      "${shared_args[@]}" \
+      --dapro-n1 "$dapro_n1" \
+      --crc-control-size "$crc_control_size" \
+      --seed-start "$SEED_START" \
+      --seed-end "$SEED_END"; then
+      echo "ERROR: estimate failed for $key / N1=$dapro_n1 / CRC=$crc_control_size." >&2
+      return 1
+    fi
+  done
 
   echo "[$key] merge"
 
   if ! run_module \
     src.evaluation.merge_results \
     "${key}_merge" \
-    "${common[@]}" \
+    "${shared_args[@]}" \
+    "${merge_config_args[@]}" \
     --seed-start "$SEED_START" \
     --seed-end "$SEED_END"; then
     echo "ERROR: merge failed for $key; continuing with the remaining experiments." >&2
@@ -372,59 +379,50 @@ SUCCESSFUL_EXPERIMENT_NAMES=()
 FAILED_CONFIGURATIONS=()
 SKIPPED_CONFIGURATIONS=()
 
-for config in "${DAPRO_CONFIGS[@]}"; do
-  IFS=: read -r dapro_n1 crc_control_size <<< "$config"
+for budget in "${BUDGET_PER_SAMPLE_VALUES[@]}"; do
+  for dataset in "${DATASETS[@]}"; do
+    for target in "${TARGET_MODELS[@]}"; do
+      configure_dataset "$dataset" "$target"
 
-  for budget in "${BUDGET_PER_SAMPLE_VALUES[@]}"; do
-    for dataset in "${DATASETS[@]}"; do
-      for target in "${TARGET_MODELS[@]}"; do
-        configure_dataset "$dataset" "$target"
+      experiment_name="${DATASET_NAME}_${DATASET_SETUP}_${budget}_metric_estimation_${EXPERIMENT_SUFFIX}"
+      config_label="${dataset}/${target}/budget=${budget}/all-dapro-configs"
 
-        experiment_name="${DATASET_NAME}_${DATASET_SETUP}_${budget}_metric_estimation_n1_${dapro_n1}_crc_${crc_control_size}__${EXPERIMENT_SUFFIX}"
-        config_label="${dataset}/${target}/n1=${dapro_n1}/crc=${crc_control_size}/budget=${budget}"
+      # Parallelism is across complete dataset/model/budget experiments.
+      # Each job runs every N1/CRC configuration, then performs one merge.
+      if [[ "$RUN_MODE" == "slurm" && "$MAX_CONCURRENT_EXPERIMENTS" -gt 1 ]]; then
+        run_configuration \
+          "$dataset" \
+          "$target" \
+          "$budget" &
 
-        # Parallelism is across COMPLETE experiment configurations.
-        # Every background configuration runs estimate over the full seed range,
-        # then runs its merge. No per-seed jobs are created.
-        if [[ "$RUN_MODE" == "slurm" && "$MAX_CONCURRENT_EXPERIMENTS" -gt 1 ]]; then
-          run_configuration \
-            "$dataset" \
-            "$target" \
-            "$dapro_n1" \
-            "$crc_control_size" \
-            "$budget" &
+        CONFIG_PIDS+=("$!")
+        CONFIG_LABELS+=("$config_label")
+        CONFIG_EXPERIMENT_NAMES+=("$experiment_name")
 
-          CONFIG_PIDS+=("$!")
-          CONFIG_LABELS+=("$config_label")
-          CONFIG_EXPERIMENT_NAMES+=("$experiment_name")
+        echo "Submitted full-seed experiment: $config_label (launcher PID $!)"
 
-          echo "Submitted full-seed experiment: $config_label (launcher PID $!)"
-
-          if (( ${#CONFIG_PIDS[@]} >= MAX_CONCURRENT_EXPERIMENTS )); then
-            wait_configuration_batch \
-              CONFIG_PIDS \
-              CONFIG_LABELS \
-              CONFIG_EXPERIMENT_NAMES
-          fi
+        if (( ${#CONFIG_PIDS[@]} >= MAX_CONCURRENT_EXPERIMENTS )); then
+          wait_configuration_batch \
+            CONFIG_PIDS \
+            CONFIG_LABELS \
+            CONFIG_EXPERIMENT_NAMES
+        fi
+      else
+        if run_configuration \
+          "$dataset" \
+          "$target" \
+          "$budget"; then
+          SUCCESSFUL_EXPERIMENT_NAMES+=("$experiment_name")
         else
-          if run_configuration \
-            "$dataset" \
-            "$target" \
-            "$dapro_n1" \
-            "$crc_control_size" \
-            "$budget"; then
-            SUCCESSFUL_EXPERIMENT_NAMES+=("$experiment_name")
+          status=$?
+          if (( status == 3 )); then
+            SKIPPED_CONFIGURATIONS+=("$config_label")
           else
-            status=$?
-            if (( status == 3 )); then
-              SKIPPED_CONFIGURATIONS+=("$config_label")
-            else
-              FAILED_CONFIGURATIONS+=("$config_label")
-              echo "WARNING: $config_label failed; continuing." >&2
-            fi
+            FAILED_CONFIGURATIONS+=("$config_label")
+            echo "WARNING: $config_label failed; continuing." >&2
           fi
         fi
-      done
+      fi
     done
   done
 done

@@ -20,6 +20,14 @@ _METRIC_RE = re.compile(
     r"(?P<budget>\d+(?:\.\d+)?)_metric_estimation_"
     r"n1_(?P<n1>\d+)_crc_(?P<crc>\d+)(?:__.+)?$"
 )
+_COMPACT_METRIC_RE = re.compile(
+    r"^(?P<setup>dataset_.+)_(?P<budget>\d+(?:\.\d+)?)_"
+    r"metric_estimation(?:_.+)?$"
+)
+_COMPACT_LPB_RE = re.compile(
+    r"^(?P<setup>dataset_.+)_(?P<budget>\d+(?:\.\d+)?)_"
+    r"calibration_lpb(?:_.+)?$"
+)
 
 
 @dataclass(frozen=True)
@@ -29,8 +37,8 @@ class MatrixResult:
     judge: str
     target_model: str
     budget_per_sample: float
-    dapro_n1: int
-    crc_control_size: int
+    dapro_n1: int | None
+    crc_control_size: int | None
 
     @property
     def dataset_key(self) -> str:
@@ -75,6 +83,21 @@ def _parse_setup(setup: str) -> tuple[str, str, str] | None:
 def parse_lpb_result(path: Path) -> MatrixResult | None:
     """Parse a suffixed all-method LPB result path."""
     name = path.parent.name
+    compact_match = _COMPACT_LPB_RE.match(name)
+    if compact_match is not None:
+        parsed_setup = _parse_setup(compact_match.group("setup"))
+        if parsed_setup is None:
+            return None
+        dataset, target, judge = parsed_setup
+        return MatrixResult(
+            path=path,
+            dataset=dataset,
+            judge=judge,
+            target_model=target,
+            budget_per_sample=float(compact_match.group("budget")),
+            dapro_n1=None,
+            crc_control_size=None,
+        )
     if "__" not in name:
         return None
     base, suffix = name.rsplit("__", 1)
@@ -109,7 +132,22 @@ def parse_metric_result(path: Path) -> MatrixResult | None:
     """Parse a metric-estimation result path."""
     match = _METRIC_RE.match(path.parent.name)
     if match is None:
-        return None
+        compact_match = _COMPACT_METRIC_RE.match(path.parent.name)
+        if compact_match is None:
+            return None
+        parsed_setup = _parse_setup(compact_match.group("setup"))
+        if parsed_setup is None:
+            return None
+        dataset, target, judge = parsed_setup
+        return MatrixResult(
+            path=path,
+            dataset=dataset,
+            judge=judge,
+            target_model=target,
+            budget_per_sample=float(compact_match.group("budget")),
+            dapro_n1=None,
+            crc_control_size=None,
+        )
     parsed_setup = _parse_setup(match.group("setup"))
     if parsed_setup is None:
         return None

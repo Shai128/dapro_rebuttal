@@ -4,6 +4,7 @@
 # Experiment matrix:
 #   (DAPRO_N1=200, CRC_CONTROL_SIZE=100) x BUDGET_PER_SAMPLE={5,10,20}
 #   (DAPRO_N1=100, CRC_CONTROL_SIZE=50)  x BUDGET_PER_SAMPLE={5,10,20}
+#   (DAPRO_N1=50,  CRC_CONTROL_SIZE=25)  x BUDGET_PER_SAMPLE={5,10,20}
 #
 # Typical invocations:
 #   bash src/predictive_bounds/scripts/calibrate.sh --local
@@ -57,9 +58,9 @@ BUDGET_PER_SAMPLE_VALUES=(
   20
 )
 
-# Each N1/CRC/budget combination receives its own suffix to prevent merge
-# outputs from overwriting one another.
-BASE_EXPERIMENT_SUFFIX="lpb_all_methods_v1"
+# All N1/CRC methods for one dataset/model/budget share one compact directory
+# and are constructed and merged together.
+BASE_EXPERIMENT_SUFFIX="lpb_v1"
 ARCHIVE_PATH="results/lpb_merged_${BASE_EXPERIMENT_SUFFIX}.tar.gz"
 
 SLURM_ACCOUNT="galileo"
@@ -295,12 +296,6 @@ configure_dataset() {
 }
 
 build_methods() {
-  local dapro_n1="$1"
-  local crc_control_size="$2"
-
-  # These are the exact calibration names emitted by the Python allocators.
-  # The three DAPRO rows are repeated without and with independent CRC budget
-  # control. The oracle observes every trajectory and therefore has no budget.
   METHODS=(
     # Raw prediction and infinite-observation reference.
     uncalibrated
@@ -311,35 +306,40 @@ build_methods() {
     # CRC accounts for the mixture while controlling the expected budget.
     calibration_random_adaptive_optimized_mixture_terminal_floor_0p005_crc_allocation
     calibration_adaptive_optimized_crc_allocation
-    # DAPRO without a CRC budget wrapper: legacy, target-A, definitive best.
-    "calibration_projected_optimization_direct_bins_2_prob_n1_${dapro_n1}_allocation"
-    "calibration_projected_optimization_direct_bins_2_prob_a_target_raw_alpha_0p10_n1_${dapro_n1}_allocation"
-    "calibration_dapro_variance_aligned_bins_2_alpha_0p10_global_0p001_projection_margin_1p00_n1_${dapro_n1}_allocation"
-    # The same three DAPRO objectives with independent CRC budget control.
-    "calibration_projected_optimization_direct_bins_2_prob_budget_crc_control_${crc_control_size}_row_cap_2p00x_budget_n1_${dapro_n1}_allocation"
-    "calibration_projected_optimization_direct_bins_2_prob_a_target_raw_alpha_0p10_budget_crc_control_${crc_control_size}_row_cap_2p00x_budget_n1_${dapro_n1}_allocation"
-    "calibration_dapro_variance_aligned_bins_2_alpha_0p10_global_0p001_budget_crc_control_${crc_control_size}_row_cap_2p00x_budget_n1_${dapro_n1}_allocation"
-    # Full-trajectory Target-A oracle diagnostics. The split variants retain
-    # DAPRO's pilot accounting; the global variant optimizes every row.
-    "calibration_oracle_target_a_dapro_alpha_0p10_n1_${dapro_n1}_allocation"
-    "calibration_oracle_target_a_dapro_alpha_0p10_crc_control_${crc_control_size}_n1_${dapro_n1}_allocation"
-    calibration_oracle_target_a_dapro_no_split_alpha_0p10_allocation
   )
+
+  DAPRO_N1_ARGS=()
+  local dapro_config dapro_n1 crc_control_size legacy_n1_suffix
+  for dapro_config in "${DAPRO_CONFIGS[@]}"; do
+    IFS=: read -r dapro_n1 crc_control_size <<< "$dapro_config"
+    DAPRO_N1_ARGS+=("$dapro_n1")
+    legacy_n1_suffix="_n1_${dapro_n1}"
+    # Legacy allocator names retain their historical omission for N1=100.
+    if (( dapro_n1 == 100 )); then
+      legacy_n1_suffix=""
+    fi
+    METHODS+=(
+      "calibration_projected_optimization_direct_bins_2_prob${legacy_n1_suffix}_allocation"
+      "calibration_projected_optimization_direct_bins_2_prob_a_target_raw_alpha_0p10${legacy_n1_suffix}_allocation"
+      "calibration_dapro_variance_aligned_bins_2_alpha_0p10_global_0p001_projection_margin_1p00_n1_${dapro_n1}_allocation"
+      "calibration_projected_optimization_direct_bins_2_prob_budget_crc_control_${crc_control_size}_row_cap_2p00x_budget${legacy_n1_suffix}_allocation"
+      "calibration_projected_optimization_direct_bins_2_prob_a_target_raw_alpha_0p10_budget_crc_control_${crc_control_size}_row_cap_2p00x_budget${legacy_n1_suffix}_allocation"
+      "calibration_dapro_variance_aligned_bins_2_alpha_0p10_global_0p001_budget_crc_control_${crc_control_size}_row_cap_2p00x_budget_n1_${dapro_n1}_allocation"
+    )
+  done
   METHOD_CSV="$(IFS=,; echo "${METHODS[*]}")"
 }
 
 run_configuration() {
   local dataset_key="$1"
   local target_model="$2"
-  local dapro_n1="$3"
-  local crc_control_size="$4"
-  local budget_per_sample="$5"
-  local experiment_suffix="$6"
+  local budget_per_sample="$3"
+  local experiment_suffix="$4"
   local cache_file
   local job_key
 
   configure_dataset "$dataset_key" "$target_model"
-  build_methods "$dapro_n1" "$crc_control_size"
+  build_methods
 
   cache_file="alg_playground_model/is_real_True_dataset_${DATASET_NAME}_dataset_${DATASET_SETUP}/probability_est_cal_test.pt"
   if (( AVAILABLE_ONLY == 1 )) && [[ ! -f "$cache_file" ]]; then
@@ -347,9 +347,9 @@ run_configuration() {
     return
   fi
 
-  job_key="${dataset_key}_${target_model}_n1_${dapro_n1}_crc_${crc_control_size}_b_${budget_per_sample}"
+  job_key="${dataset_key}_${target_model}_b_${budget_per_sample}"
   echo
-  echo "[$dataset_key / $target_model | N1=$dapro_n1 | CRC=$crc_control_size | budget=$budget_per_sample] construct LPBs"
+  echo "[$dataset_key / $target_model | all DAPRO configs | budget=$budget_per_sample] construct LPBs"
   local common_args=(
     --bound-type lpb
     --data-type real
@@ -362,7 +362,7 @@ run_configuration() {
     --device "$DEVICE"
     --allocations none
     --experiment-suffix "$experiment_suffix"
-    --dapro-n1-values "$dapro_n1"
+    --dapro-n1-values "${DAPRO_N1_ARGS[@]}"
     --definitive-dapro-margins 1.0
     --calibration-names "$METHOD_CSV"
   )
@@ -379,7 +379,7 @@ run_configuration() {
     return 1
   fi
 
-  echo "[$dataset_key / $target_model | N1=$dapro_n1 | CRC=$crc_control_size | budget=$budget_per_sample] merge LPBs"
+  echo "[$dataset_key / $target_model | all DAPRO configs | budget=$budget_per_sample] merge LPBs"
   if ! run_python_module \
     src.predictive_bounds.merge_bounds_results \
     "${job_key}_merge" \
@@ -398,46 +398,34 @@ echo "DAPRO/CRC configurations: ${DAPRO_CONFIGS[*]}"
 echo "Budgets per sample: ${BUDGET_PER_SAMPLE_VALUES[*]}"
 echo "Base experiment suffix: $BASE_EXPERIMENT_SUFFIX"
 
-# Keep the exact suffixes used in this invocation so archiving only collects
-# outputs from the requested experiment matrix.
-EXPERIMENT_SUFFIXES=()
 FAILED_CONFIGURATIONS=()
 CONFIG_PIDS=()
 CONFIG_LABELS=()
 
 echo "Maximum parallel full-seed experiment configurations: $MAX_CONCURRENT_EXPERIMENTS"
 
-for dapro_config in "${DAPRO_CONFIGS[@]}"; do
-  IFS=: read -r dapro_n1 crc_control_size <<< "$dapro_config"
-  for budget_per_sample in "${BUDGET_PER_SAMPLE_VALUES[@]}"; do
-    experiment_suffix="${BASE_EXPERIMENT_SUFFIX}_n1_${dapro_n1}_crc_${crc_control_size}_budget_${budget_per_sample}"
-    EXPERIMENT_SUFFIXES+=("$experiment_suffix")
+for budget_per_sample in "${BUDGET_PER_SAMPLE_VALUES[@]}"; do
+  experiment_suffix="${BASE_EXPERIMENT_SUFFIX}"
+  for dataset_key in "${DATASETS[@]}"; do
+    for target_model in "${TARGET_MODELS[@]}"; do
+      config_label="${dataset_key}/${target_model}/budget=${budget_per_sample}/all-dapro-configs"
 
-    for dataset_key in "${DATASETS[@]}"; do
-      for target_model in "${TARGET_MODELS[@]}"; do
-        config_label="${dataset_key}/${target_model}/n1=${dapro_n1}/crc=${crc_control_size}/budget=${budget_per_sample}"
+      # Each background job constructs and merges all N1/CRC methods for one
+      # dataset/model/budget and the complete seed range.
+      run_configuration \
+        "$dataset_key" \
+        "$target_model" \
+        "$budget_per_sample" \
+        "$experiment_suffix" &
 
-        # Parallelism is across complete experiment configurations.  Each
-        # background configuration invokes Python once with the complete
-        # [SEED_START, SEED_END) range, e.g. 0..49 for 0/50.
-        run_configuration \
-          "$dataset_key" \
-          "$target_model" \
-          "$dapro_n1" \
-          "$crc_control_size" \
-          "$budget_per_sample" \
-          "$experiment_suffix" &
+      CONFIG_PIDS+=("$!")
+      CONFIG_LABELS+=("$config_label")
+      echo "Submitted full-seed experiment: $config_label (launcher PID $!)"
 
-        CONFIG_PIDS+=("$!")
-        CONFIG_LABELS+=("$config_label")
-        echo "Submitted full-seed experiment: $config_label (launcher PID $!)"
-
-        # Run experiments in batches of at most MAX_CONCURRENT_EXPERIMENTS.
-        # Every individual experiment still processes the complete seed range.
-        if (( ${#CONFIG_PIDS[@]} >= MAX_CONCURRENT_EXPERIMENTS )); then
-          wait_for_configuration_batch CONFIG_PIDS CONFIG_LABELS
-        fi
-      done
+      # Run experiments in batches of at most MAX_CONCURRENT_EXPERIMENTS.
+      if (( ${#CONFIG_PIDS[@]} >= MAX_CONCURRENT_EXPERIMENTS )); then
+        wait_for_configuration_batch CONFIG_PIDS CONFIG_LABELS
+      fi
     done
   done
 done
@@ -454,16 +442,14 @@ if (( DRY_RUN == 1 )); then
 fi
 
 MERGED_FILES=()
-for experiment_suffix in "${EXPERIMENT_SUFFIXES[@]}"; do
-  while IFS= read -r merged_file; do
-    MERGED_FILES+=("$merged_file")
-  done < <(
-    find results/merged_calibration_dfs \
-      -type f \
-      -path "*__${experiment_suffix}/all_df.csv" \
-      -print 2>/dev/null | sort
-  )
-done
+while IFS= read -r merged_file; do
+  MERGED_FILES+=("$merged_file")
+done < <(
+  find results/merged_calibration_dfs \
+    -type f \
+    -path "*_${BASE_EXPERIMENT_SUFFIX}/all_df.csv" \
+    -print 2>/dev/null | sort
+)
 
 if (( ${#MERGED_FILES[@]} == 0 )); then
   echo "No merged CSV files were found for the requested experiment matrix." >&2

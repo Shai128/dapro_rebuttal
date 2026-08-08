@@ -243,24 +243,43 @@ def load_metric_matrix(input_dir: Path) -> tuple[pd.DataFrame, pd.DataFrame]:
         frame["dataset_key"] = metadata.dataset_key
         frame["dataset_display"] = metadata.dataset_display
         frame["target_budget"] = metadata.budget_per_sample
-        frame["dapro_n1"] = metadata.dapro_n1
-        frame["crc_control_size"] = metadata.crc_control_size
+        if {
+            "configured_dapro_n1",
+            "configured_crc_control_size",
+        }.issubset(frame.columns):
+            frame["dapro_n1"] = pd.to_numeric(
+                frame["configured_dapro_n1"], errors="raise"
+            ).astype(int)
+            frame["crc_control_size"] = pd.to_numeric(
+                frame["configured_crc_control_size"], errors="raise"
+            ).astype(int)
+        elif metadata.dapro_n1 is not None:
+            frame["dapro_n1"] = metadata.dapro_n1
+            frame["crc_control_size"] = metadata.crc_control_size
+        else:
+            raise ValueError(
+                f"{path} uses a compact name but lacks configured N1/CRC columns."
+            )
         frame["source_file"] = str(path)
-        frame["plot_context"] = (
-            f"budget={metadata.budget_per_sample:g}, "
-            f"DAPRO N1={metadata.dapro_n1}"
+        frame["plot_context"] = frame["dapro_n1"].map(
+            lambda n1: (
+                f"budget={metadata.budget_per_sample:g}, DAPRO N1={int(n1)}"
+            )
         )
         frames.append(frame)
-        inventory_rows.append({
-            "dataset": metadata.dataset_key,
-            "target_model": metadata.target_model,
-            "budget_per_sample": metadata.budget_per_sample,
-            "dapro_n1": metadata.dapro_n1,
-            "crc_control_size": metadata.crc_control_size,
-            "seed_count": frame["seed"].nunique(),
-            "method_count": frame["allocator_name"].nunique(),
-            "source_file": str(path),
-        })
+        for (n1, crc), config_frame in frame.groupby(
+            ["dapro_n1", "crc_control_size"], sort=True
+        ):
+            inventory_rows.append({
+                "dataset": metadata.dataset_key,
+                "target_model": metadata.target_model,
+                "budget_per_sample": metadata.budget_per_sample,
+                "dapro_n1": int(n1),
+                "crc_control_size": int(crc),
+                "seed_count": config_frame["seed"].nunique(),
+                "method_count": config_frame["allocator_name"].nunique(),
+                "source_file": str(path),
+            })
     if skipped:
         print(f"Ignored {len(skipped)} unrecognized metric result files.")
     if not frames:

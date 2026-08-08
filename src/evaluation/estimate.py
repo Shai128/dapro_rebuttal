@@ -411,16 +411,19 @@ def metric_experiment_name(
         dataset_name,
         data_setup,
         budget_per_sample,
-        dapro_n1,
-        crc_control_size,
+        dapro_n1=None,
+        crc_control_size=None,
         experiment_suffix="",
 ):
+    """Return the shared, compact directory name for metric experiments.
+
+    N1 and CRC identify allocator methods inside the experiment and therefore
+    do not belong in the experiment directory name.  The parameters remain in
+    the signature for compatibility with existing callers.
+    """
     budget_label = f"{float(budget_per_sample):g}"
-    name = (
-        f"{dataset_name}_{data_setup}_{budget_label}_metric_estimation_"
-        f"n1_{dapro_n1}_crc_{crc_control_size}"
-    )
-    return f"{name}__{experiment_suffix}" if experiment_suffix else name
+    name = f"{dataset_name}_{data_setup}_{budget_label}_metric_estimation"
+    return f"{name}_{experiment_suffix}" if experiment_suffix else name
 
 
 REQUIRED_RESULT_COLUMNS = {
@@ -539,7 +542,6 @@ def run_experiments(
                 max_time,
                 skip_existing=False,
             )
-
 
 def main():
     import argparse

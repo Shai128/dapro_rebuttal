@@ -1516,11 +1516,14 @@ def get_calibration_experiment_name(
         gamma,
         suffix="",
 ):
-    """Build the shared construct/merge name, optionally version-isolated."""
-    base = (
-        f"{dataset_name}_{data_setup}_{budget_per_sample}_{cal_size}_"
-        f"{tau_prior}_{np.round(gamma, 3)}"
-    )
+    """Build the compact directory name shared by construct and merge.
+
+    Calibration size, prior, gamma, N1, and CRC remain result metadata or
+    method-name metadata.  Keeping them out of this directory component avoids
+    exceeding Windows path limits and lets one run consolidate related methods.
+    """
+    budget_label = f"{float(budget_per_sample):g}"
+    base = f"{dataset_name}_{data_setup}_{budget_label}_calibration"
     if not suffix:
         return base
     if (
@@ -1531,7 +1534,7 @@ def get_calibration_experiment_name(
             "Experiment suffix must be a 1-64 character filename token "
             "(letters, numbers, underscore, dot, or hyphen; no '..')."
         )
-    return f"{base}__{suffix}"
+    return f"{base}_{suffix}"
 
 
 def resolve_m_upper_bound(

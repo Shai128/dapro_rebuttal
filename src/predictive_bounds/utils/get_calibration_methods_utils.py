@@ -121,7 +121,7 @@ def get_baseline_calibrations(
                     n1=n1,
                     projection_budget_margin=margin,
                 ))
-            if n1 >= 100:
+            if n1 >= 50:
                 all_allocations.append(DefinitiveCRCDAPRO(
                     conditional_grid,
                     budget_per_sample,
@@ -270,7 +270,7 @@ def get_baseline_calibrations(
             )
             if not include_a_weighted:
                 continue
-            if projection == "direct_bins_2" and n1 >= 100:
+            if projection == "direct_bins_2" and n1 >= 50:
                 control_size = min(100, n1 // 2)
                 crc_kwargs = {
                     "budget_control_mode": "crc",

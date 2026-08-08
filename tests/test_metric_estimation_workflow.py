@@ -1,6 +1,7 @@
 from types import SimpleNamespace
 
 import numpy as np
+import pandas as pd
 import torch
 
 from src.evaluation.estimate import (
@@ -18,6 +19,8 @@ from src.predictive_bounds.budget_allocators.oracle_dapro_allocator import (
 from src.predictive_bounds.utils.get_calibration_methods_utils import (
     get_metric_allocators,
 )
+from src.evaluation import merge_results as metric_merge
+from src.predictive_bounds.utils.utils import get_calibration_experiment_name
 
 
 def test_metric_registry_contains_exact_requested_comparison():
@@ -70,8 +73,60 @@ def test_metric_registry_contains_exact_requested_comparison():
 
 def test_metric_experiment_name_normalizes_integer_budget():
     assert metric_experiment_name("data", "setup", 5.0, 200, 100, "v1") == (
-        "data_setup_5_metric_estimation_n1_200_crc_100__v1"
+        "data_setup_5_metric_estimation_v1"
     )
+    assert metric_experiment_name("data", "setup", 5, 50, 25, "v1") == (
+        "data_setup_5_metric_estimation_v1"
+    )
+
+
+def test_bound_experiment_name_is_compact_and_configuration_independent():
+    assert get_calibration_experiment_name(
+        "data", "setup", 5.0, 3000, 0.56, 40.0, "lpb_v1"
+    ) == "data_setup_5_calibration_lpb_v1"
+
+
+def test_metric_merge_consolidates_configs_in_one_output(tmp_path, monkeypatch):
+    def fake_registry(*args, dapro_n1, crc_control_size, **kwargs):
+        del args, kwargs, crc_control_size
+        return [
+            SimpleNamespace(name="shared_baseline"),
+            SimpleNamespace(name=f"dapro_n1_{dapro_n1}"),
+        ]
+
+    def fake_process(calibration, seed, experiments_name):
+        del experiments_name
+        return pd.DataFrame([{
+            "seed": seed,
+            "allocator_name": calibration.name,
+            "calibration_name": calibration.name,
+        }])
+
+    monkeypatch.setattr(metric_merge, "get_metric_allocators", fake_registry)
+    monkeypatch.setattr(metric_merge, "process_calibration", fake_process)
+    monkeypatch.setattr(
+        metric_merge,
+        "get_merged_metric_calibration_result_path",
+        lambda _name: str(tmp_path),
+    )
+
+    metric_merge.merge_results(
+        experiments_name="compact",
+        seeds=(0, 2),
+        budget_per_sample=5,
+        taus_range=torch.tensor([0.1]),
+        tau_prior=0.56,
+        m_upper_bound=200,
+        device="cpu",
+        dapro_configs=[(200, 100), (100, 50), (50, 25)],
+    )
+
+    merged = pd.read_csv(tmp_path / "all_df.csv")
+    assert len(merged) == 12
+    assert set(zip(
+        merged["configured_dapro_n1"],
+        merged["configured_crc_control_size"],
+    )) == {(200, 100), (100, 50), (50, 25)}
 
 
 def test_target_a_uses_metric_event_instead_of_lpb_anchor():
