@@ -163,6 +163,9 @@ PLOT_COLUMNS = {
 
 _METHOD_N1_RE = re.compile(r"(?:^|_)n1_(?P<n1>\d+)(?:_|$)")
 _METHOD_CRC_RE = re.compile(r"(?:^|_)control_(?P<crc>\d+)(?:_|$)")
+_COMPACT_LPB_VERSION_RE = re.compile(
+    r"^(?P<base>.+_calibration_lpb)_v(?P<version>\d+)$"
+)
 EXCLUDED_DISPLAY_METHODS = DAPRO_ORACLE_METHODS | frozenset({
     "Legacy DAPRO",
     "Legacy DAPRO + CRC",
@@ -203,6 +206,26 @@ def _compact_result_configurations(
     for n1 in discovered_n1 - paired_n1:
         pairs.add((n1, min(100, n1 // 2)))
     return sorted(pairs, reverse=True)
+
+
+def _prefer_latest_compact_lpb_results(paths: list[Path]) -> list[Path]:
+    """Ignore stale compact result versions when a newer version exists."""
+    passthrough = []
+    latest_by_experiment: dict[str, tuple[int, Path]] = {}
+    for path in paths:
+        match = _COMPACT_LPB_VERSION_RE.match(path.parent.name)
+        if match is None:
+            passthrough.append(path)
+            continue
+        key = match.group("base")
+        candidate = (int(match.group("version")), path)
+        previous = latest_by_experiment.get(key)
+        if previous is None or candidate[0] > previous[0]:
+            latest_by_experiment[key] = candidate
+    return sorted(
+        passthrough
+        + [candidate[1] for candidate in latest_by_experiment.values()]
+    )
 
 
 def _read_plot_columns(path: Path) -> pd.DataFrame:
@@ -381,7 +404,15 @@ def load_lpb_matrix(input_dir: Path) -> tuple[pd.DataFrame, pd.DataFrame]:
     frames = []
     inventory_rows = []
     skipped = []
-    for path in sorted(input_dir.rglob("all_df.csv")):
+    discovered_paths = sorted(input_dir.rglob("all_df.csv"))
+    selected_paths = _prefer_latest_compact_lpb_results(discovered_paths)
+    superseded_count = len(discovered_paths) - len(selected_paths)
+    if superseded_count:
+        print(
+            f"Ignored {superseded_count} superseded compact LPB result "
+            "file(s)."
+        )
+    for path in selected_paths:
         metadata = parse_lpb_result(path)
         if metadata is None:
             skipped.append(path)

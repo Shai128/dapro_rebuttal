@@ -22,6 +22,7 @@ from src.predictive_bounds.experiments.full_bounds.summarize import (
     LOW_QUALITY_MAX_BYTES,
     _compact_result_configurations,
     _method_n1,
+    _prefer_latest_compact_lpb_results,
     _save_jpeg,
 )
 
@@ -92,4 +93,16 @@ def test_compact_result_configurations_are_inferred_from_method_names():
         (200, 100),
         (100, 50),
         (50, 25),
+    ]
+
+
+def test_latest_compact_lpb_result_supersedes_stale_version():
+    base = "dataset_x_attack_a_lm_target_m_judge_j_5_calibration_lpb"
+    v1 = Path("results") / f"{base}_v1" / "all_df.csv"
+    v2 = Path("results") / f"{base}_v2" / "all_df.csv"
+    unrelated = Path("results") / "legacy-layout" / "all_df.csv"
+
+    assert _prefer_latest_compact_lpb_results([v1, unrelated, v2]) == [
+        v2,
+        unrelated,
     ]

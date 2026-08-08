@@ -60,7 +60,7 @@ BUDGET_PER_SAMPLE_VALUES=(
 
 # All N1/CRC methods for one dataset/model/budget share one compact directory
 # and are constructed and merged together.
-BASE_EXPERIMENT_SUFFIX="lpb_v1"
+BASE_EXPERIMENT_SUFFIX="lpb_v2"
 ARCHIVE_PATH="results/lpb_merged_${BASE_EXPERIMENT_SUFFIX}.tar.gz"
 
 SLURM_ACCOUNT="galileo"
