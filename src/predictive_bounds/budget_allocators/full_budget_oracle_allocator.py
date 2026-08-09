@@ -55,9 +55,50 @@ class FullBudgetOracleAllocator(BudgetAllocator):
                     cost_semantics="full_observation_with_event_stopping",
                 ),
                 "is_full_budget_oracle": 1,
+                "is_fixed_truth_reference": 1,
+                "is_split_full_budget_baseline": 0,
+                "reference_scope": "full_calibration_test_benchmark",
             },
         )
 
     @property
     def name(self) -> str:
         return "oracle_full_budget"
+
+
+class SplitFullBudgetOracleAllocator(FullBudgetOracleAllocator):
+    """Observe every row in each random calibration split.
+
+    Unlike :class:`FullBudgetOracleAllocator`, this method deliberately runs
+    on the same calibration subset as finite-budget methods.  It has zero
+    acquisition variance conditional on a split, but its estimates vary over
+    calibration/test partitions and therefore expose the irreducible split
+    component of metric-estimation variance.
+    """
+
+    uses_full_benchmark = False
+
+    def allocate_budget(
+            self,
+            probability_est: torch.Tensor,
+            x: torch.Tensor,
+            t: torch.Tensor,
+            quantile_est: torch.Tensor,
+    ) -> BudgetAllocationResult:
+        result = super().allocate_budget(
+            probability_est,
+            x,
+            t,
+            quantile_est,
+        )
+        result.additional_metrics.update({
+            "is_full_budget_oracle": 0,
+            "is_fixed_truth_reference": 0,
+            "is_split_full_budget_baseline": 1,
+            "reference_scope": "calibration_split",
+        })
+        return result
+
+    @property
+    def name(self) -> str:
+        return "oracle_split_full_budget"

@@ -1,4 +1,4 @@
-"""Create metric-estimation boxplots and across-seed variance plots.
+"""Create metric-estimation boxplots and calibration/test-split variance plots.
 
 The trivial full-budget oracle distribution is excluded.  Its value is drawn
 only on plots of the estimated metrics themselves; the realized budget plot
@@ -19,7 +19,6 @@ import pandas as pd
 import seaborn as sns
 
 from src.evaluation.result_matrix import (
-    DAPRO_ORACLE_METHODS,
     METHOD_COLORS,
     METHOD_ORDER,
     method_display_name,
@@ -35,10 +34,20 @@ ORACLE_NAME = "oracle_full_budget"
 LOG_SCALE_METRICS = {"mean_weight", "mean_a_weighted_weight"}
 ORACLE_REFERENCE_METRICS = {"estimated_cjr", "estimated_rmttu"}
 TARGET_BUDGET_REFERENCE_METRICS = {"budget_per_sample"}
-EXCLUDED_DISPLAY_METHODS = DAPRO_ORACLE_METHODS | frozenset({
-    "Legacy DAPRO",
-    "Legacy DAPRO + CRC",
-    "Local + CRC",
+FULL_OBSERVATION_COST_METRICS = {
+    "budget_per_sample",
+    "total_budget_utilized",
+}
+INCLUDED_DISPLAY_METHODS = frozenset({
+    "Uniform (unweighted)",
+    "Uniform + reweighting",
+    "Static",
+    "Constant + CRC",
+    "Metric-optimal PMF",
+    "Generalized DAPRO (soft metric)",
+    "Generalized DAPRO + CRC",
+    "Full budget (calibration)",
+    "Full budget (calibration+test)",
 })
 
 METRICS = {
@@ -53,9 +62,6 @@ METRICS = {
         r"Mean metric-event-weighted weight $A_i/\pi_i$"
     ),
     "num_events_observed": "Number of unsafe events observed",
-    "conditional_variance_unsafe_event_rate_estimator": (
-        "Conditional variance proxy for unsafe-event-rate estimator"
-    ),
     "metric_a_weighted_effective_sample_size": (
         "Metric-event-weighted effective sample size"
     ),
@@ -83,6 +89,61 @@ def _save_figure(figure, output_path: Path, quality: str) -> None:
     figure.savefig(output_path, dpi=dpi, bbox_inches="tight")
 
 
+def _normalize_legacy_configuration_rows(frame: pd.DataFrame) -> pd.DataFrame:
+    """Collapse legacy copies of shared baselines to one stored observation."""
+    config_columns = {
+        "configured_dapro_n1",
+        "configured_crc_control_size",
+    }
+    if "configuration_scope" in frame.columns:
+        return frame
+    if not config_columns.issubset(frame.columns):
+        return frame
+
+    normalized = []
+    comparison_columns = [
+        column for column in frame.columns if column not in config_columns
+    ]
+    for (_seed, _allocator), group in frame.groupby(
+            ["seed", "allocator_name"], sort=False, dropna=False
+    ):
+        configurations = sorted({
+            (int(n1), int(crc))
+            for n1, crc in zip(
+                group["configured_dapro_n1"],
+                group["configured_crc_control_size"],
+            )
+        })
+        if len(group) != len(configurations):
+            raise ValueError(
+                "Legacy metric results contain duplicate rows within one "
+                "N1/CRC configuration."
+            )
+        if len(group) > 1:
+            differing = [
+                column
+                for column in comparison_columns
+                if group[column].nunique(dropna=False) > 1
+            ]
+            if differing:
+                raise ValueError(
+                    "Rows sharing a seed and allocator differ beyond their "
+                    f"configuration metadata: {differing}."
+                )
+        row = group.iloc[0].copy()
+        row["applicable_dapro_configs"] = "|".join(
+            f"{n1}:{crc}" for n1, crc in configurations
+        )
+        if len(configurations) == 1:
+            row["configuration_scope"] = "specific"
+        else:
+            row["configuration_scope"] = "shared"
+            row["configured_dapro_n1"] = pd.NA
+            row["configured_crc_control_size"] = pd.NA
+        normalized.append(row)
+    return pd.DataFrame(normalized).reset_index(drop=True)
+
+
 def _oracle_reference(frame: pd.DataFrame, metric: str) -> float:
     values = pd.to_numeric(
         frame.loc[frame["allocator_name"] == ORACLE_NAME, metric],
@@ -107,8 +168,12 @@ def _plot_metric(
 ) -> None:
     plot_frame = frame[frame["allocator_name"] != ORACLE_NAME].copy()
     plot_frame = plot_frame[
-        ~plot_frame["method_display"].isin(EXCLUDED_DISPLAY_METHODS)
+        plot_frame["method_display"].isin(INCLUDED_DISPLAY_METHODS)
     ]
+    if metric in FULL_OBSERVATION_COST_METRICS:
+        plot_frame = plot_frame[
+            plot_frame["method_display"] != "Full budget (calibration)"
+        ]
     plot_frame[metric] = pd.to_numeric(plot_frame[metric], errors="coerce")
     plot_frame = plot_frame.dropna(subset=[metric])
     if plot_frame.empty:
@@ -185,7 +250,7 @@ def summarize_experiment(
         raise ValueError(f"{csv_path} has no {ORACLE_NAME} rows.")
     frame["method_display"] = frame["allocator_name"].map(_display_name)
     frame = frame[
-        ~frame["method_display"].isin(EXCLUDED_DISPLAY_METHODS)
+        frame["method_display"].isin(INCLUDED_DISPLAY_METHODS)
     ].copy()
     metadata = parse_metric_result(csv_path)
     if metadata is not None:
@@ -220,12 +285,25 @@ def summarize_experiment(
     return generated
 
 
-def load_metric_matrix(input_dir: Path) -> tuple[pd.DataFrame, pd.DataFrame]:
+def load_metric_matrix(
+        input_dir: Path,
+        experiments: list[str] | None = None,
+        experiment_suffix: str | None = None,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Load every metric result and attach budget/N1/dataset metadata."""
     frames = []
     inventory_rows = []
     skipped = []
-    for path in sorted(input_dir.rglob("all_df.csv")):
+    paths = sorted(input_dir.rglob("all_df.csv"))
+    if experiments:
+        requested = set(experiments)
+        paths = [path for path in paths if path.parent.name in requested]
+    if experiment_suffix:
+        paths = [
+            path for path in paths
+            if path.parent.name.endswith(experiment_suffix)
+        ]
+    for path in paths:
         metadata = parse_metric_result(path)
         if metadata is None:
             skipped.append(path)
@@ -237,11 +315,12 @@ def load_metric_matrix(input_dir: Path) -> tuple[pd.DataFrame, pd.DataFrame]:
             raise ValueError(f"{path} is missing columns {sorted(missing)}")
         if ORACLE_NAME not in set(frame["allocator_name"]):
             raise ValueError(f"{path} has no {ORACLE_NAME} rows.")
+        frame = _normalize_legacy_configuration_rows(frame)
         frame["method_display"] = frame["calibration_name"].map(
             method_display_name
         )
         frame = frame[
-            ~frame["method_display"].isin(EXCLUDED_DISPLAY_METHODS)
+            frame["method_display"].isin(INCLUDED_DISPLAY_METHODS)
         ].copy()
         frame["target_model"] = metadata.target_model_display
         frame["target_model_key"] = metadata.target_model
@@ -252,6 +331,27 @@ def load_metric_matrix(input_dir: Path) -> tuple[pd.DataFrame, pd.DataFrame]:
             "configured_dapro_n1",
             "configured_crc_control_size",
         }.issubset(frame.columns):
+            if "configuration_scope" in frame.columns:
+                shared = frame["configuration_scope"].eq("shared")
+                expanded_shared = []
+                for _, row in frame[shared].iterrows():
+                    specifications = str(
+                        row["applicable_dapro_configs"]
+                    ).split("|")
+                    for specification in specifications:
+                        n1_text, crc_text = specification.split(":", 1)
+                        expanded = row.copy()
+                        expanded["configured_dapro_n1"] = int(n1_text)
+                        expanded["configured_crc_control_size"] = int(crc_text)
+                        expanded["analysis_row_expanded_from_shared"] = True
+                        expanded_shared.append(expanded)
+                frame = frame[~shared].copy()
+                frame["analysis_row_expanded_from_shared"] = False
+                if expanded_shared:
+                    frame = pd.concat(
+                        [frame, pd.DataFrame(expanded_shared)],
+                        ignore_index=True,
+                    )
             frame["dapro_n1"] = pd.to_numeric(
                 frame["configured_dapro_n1"], errors="raise"
             ).astype(int)
@@ -310,8 +410,12 @@ def _plot_grouped_metric(
 ) -> None:
     plot_frame = frame[frame["allocator_name"] != ORACLE_NAME].copy()
     plot_frame = plot_frame[
-        ~plot_frame["method_display"].isin(EXCLUDED_DISPLAY_METHODS)
+        plot_frame["method_display"].isin(INCLUDED_DISPLAY_METHODS)
     ]
+    if metric in FULL_OBSERVATION_COST_METRICS:
+        plot_frame = plot_frame[
+            plot_frame["method_display"] != "Full budget (calibration)"
+        ]
     plot_frame[metric] = pd.to_numeric(plot_frame[metric], errors="coerce")
     plot_frame = plot_frame.dropna(subset=[metric, "method_display"])
     if plot_frame.empty:
@@ -421,11 +525,15 @@ def _plot_grouped_variance(
         output_path: Path,
         quality: str,
 ) -> pd.DataFrame:
-    """Plot sample variance across calibration/test splits for each method."""
+    """Plot sample variance across random calibration/test splits."""
     plot_frame = frame[frame["allocator_name"] != ORACLE_NAME].copy()
     plot_frame = plot_frame[
-        ~plot_frame["method_display"].isin(EXCLUDED_DISPLAY_METHODS)
+        plot_frame["method_display"].isin(INCLUDED_DISPLAY_METHODS)
     ]
+    if metric in FULL_OBSERVATION_COST_METRICS:
+        plot_frame = plot_frame[
+            plot_frame["method_display"] != "Full budget (calibration)"
+        ]
     plot_frame[metric] = pd.to_numeric(plot_frame[metric], errors="coerce")
     plot_frame = plot_frame.dropna(
         subset=[metric, "method_display", "target_model"]
@@ -437,11 +545,13 @@ def _plot_grouped_variance(
             as_index=False,
         )[metric]
         .var(ddof=1)
-        .rename(columns={metric: "across_seed_variance"})
-        .dropna(subset=["across_seed_variance"])
+        .rename(columns={metric: "variance_across_random_splits"})
+        .dropna(subset=["variance_across_random_splits"])
     )
     if variance.empty:
-        raise ValueError(f"No across-seed variance available for {metric}.")
+        raise ValueError(
+            f"No variance across random splits is available for {metric}."
+        )
 
     target_order = list(dict.fromkeys(plot_frame["target_model"]))
     method_order = _ordered_present(variance["method_display"], METHOD_ORDER)
@@ -453,21 +563,24 @@ def _plot_grouped_variance(
     sns.barplot(
         data=variance,
         x="target_model",
-        y="across_seed_variance",
+        y="variance_across_random_splits",
         hue="method_display",
         order=target_order,
         hue_order=method_order,
         palette=palette,
-        ci=None,
+        errorbar=None,
         ax=axis,
     )
     positive = variance.loc[
-        variance["across_seed_variance"] > 0, "across_seed_variance"
+        variance["variance_across_random_splits"] > 0,
+        "variance_across_random_splits",
     ]
     if not positive.empty and positive.max() / positive.min() >= 1_000:
         axis.set_yscale("log")
     axis.set_xlabel("Target model")
-    axis.set_ylabel(f"Across-seed variance of {ylabel.lower()}")
+    axis.set_ylabel(
+        f"Variance across random calibration/test splits of {ylabel.lower()}"
+    )
     axis.grid(axis="y", linestyle=":", linewidth=0.8, alpha=0.55)
     axis.set_axisbelow(True)
     axis.spines["top"].set_visible(False)
@@ -475,7 +588,8 @@ def _plot_grouped_variance(
     dataset = str(frame["dataset_display"].iloc[0])
     context = str(frame["plot_context"].iloc[0])
     figure.suptitle(
-        f"{dataset}: across-seed variance of {ylabel.lower()} ({context})",
+        f"{dataset}: variance across random calibration/test splits of "
+        f"{ylabel.lower()} ({context})",
         y=0.995,
     )
     handles, labels = axis.get_legend_handles_labels()
@@ -591,6 +705,13 @@ def _parse_args() -> argparse.Namespace:
         help="Merged experiment directory name; repeat to select several.",
     )
     parser.add_argument(
+        "--experiment-suffix",
+        help=(
+            "Load only merged experiment directories ending in this suffix. "
+            "Useful after downloading a server result matrix."
+        ),
+    )
+    parser.add_argument(
         "--legacy-per-experiment",
         action="store_true",
         help="Generate the original one-target-model-per-directory figures.",
@@ -601,7 +722,11 @@ def _parse_args() -> argparse.Namespace:
 def main() -> None:
     args = _parse_args()
     if not args.legacy_per_experiment:
-        frame, inventory = load_metric_matrix(args.input_dir)
+        frame, inventory = load_metric_matrix(
+            args.input_dir,
+            experiments=args.experiment,
+            experiment_suffix=args.experiment_suffix,
+        )
         print(
             f"Loaded {len(frame):,} metric rows from "
             f"{frame['source_file'].nunique()} files, covering "
@@ -620,6 +745,11 @@ def main() -> None:
     if args.experiment:
         requested = set(args.experiment)
         paths = [path for path in paths if path.parent.name in requested]
+    if args.experiment_suffix:
+        paths = [
+            path for path in paths
+            if path.parent.name.endswith(args.experiment_suffix)
+        ]
     if not paths:
         raise FileNotFoundError(
             f"No merged all_df.csv files below {args.input_dir}")

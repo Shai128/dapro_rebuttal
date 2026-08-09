@@ -20,6 +20,7 @@ from src.predictive_bounds.utils.get_calibration_methods_utils import (
     get_metric_allocators,
 )
 from src.evaluation import merge_results as metric_merge
+from src.evaluation.summarize import _normalize_legacy_configuration_rows
 from src.predictive_bounds.utils.utils import get_calibration_experiment_name
 
 
@@ -41,39 +42,35 @@ def test_metric_registry_contains_exact_requested_comparison():
     assert names == [
         "UniformBudgetAllocator",
         "UnweightedUniformBudgetAllocator",
-        "oracle_full_budget",
         "optimized",
         "random_adaptive_optimized_mixture_terminal_floor_0p005_crc",
-        "projected_optimization_direct_bins_2_prob_n1_200",
+        "metric_optimal_pmf_model_budget",
         (
-            "projected_optimization_direct_bins_2_prob_a_target_raw_"
-            "alpha_0p10_n1_200"
-        ),
-        (
-            "dapro_variance_aligned_bins_2_alpha_0p10_global_0p001_"
+            "dapro_soft_prefix_bins_2_metric_horizon_200_global_0p001_"
             "projection_margin_1p00_n1_200"
         ),
         (
-            "projected_optimization_direct_bins_2_prob_budget_crc_control_"
-            "100_row_cap_2p00x_budget_n1_200"
-        ),
-        (
-            "projected_optimization_direct_bins_2_prob_a_target_raw_"
-            "alpha_0p10_budget_crc_control_100_row_cap_2p00x_budget_n1_200"
-        ),
-        (
-            "dapro_variance_aligned_bins_2_alpha_0p10_global_0p001_budget_"
+            "dapro_soft_prefix_bins_2_metric_horizon_200_global_0p001_budget_"
             "crc_control_100_row_cap_2p00x_budget_n1_200"
         ),
-        "oracle_target_a_dapro_alpha_0p10_n1_200",
-        "oracle_target_a_dapro_alpha_0p10_crc_control_100_n1_200",
-        "oracle_target_a_dapro_no_split_alpha_0p10",
+        "oracle_split_full_budget",
+        "oracle_full_budget",
     ]
 
 
-def test_metric_registry_can_exclude_legacy_and_local_methods():
+def test_legacy_registry_flags_do_not_change_the_production_matrix():
     taus = torch.arange(0.01, 1.0, 0.01)
-    allocators = get_metric_allocators(
+    default_names = [allocator.name for allocator in get_metric_allocators(
+        None,
+        20,
+        200,
+        taus,
+        0.56,
+        "cpu",
+        dapro_n1=200,
+        crc_control_size=100,
+    )]
+    flagged_names = [allocator.name for allocator in get_metric_allocators(
         None,
         20,
         200,
@@ -84,14 +81,9 @@ def test_metric_registry_can_exclude_legacy_and_local_methods():
         crc_control_size=100,
         include_legacy_dapro=False,
         include_locally_adaptive=False,
-    )
+    )]
 
-    assert all(type(allocator).__name__ != "LegacyMeanWeightDAPRO"
-               for allocator in allocators)
-    assert all(type(allocator).__name__ != "AdaptiveOptimizedBudgetAllocator"
-               for allocator in allocators)
-    assert any(isinstance(allocator, TargetAWeightedDAPRO)
-               for allocator in allocators)
+    assert flagged_names == default_names
 
 
 def test_metric_experiment_name_normalizes_integer_budget():
@@ -145,11 +137,54 @@ def test_metric_merge_consolidates_configs_in_one_output(tmp_path, monkeypatch):
     )
 
     merged = pd.read_csv(tmp_path / "all_df.csv")
-    assert len(merged) == 12
+    assert len(merged) == 8
+    shared = merged[merged["allocator_name"] == "shared_baseline"]
+    assert len(shared) == 2
+    assert shared["configuration_scope"].eq("shared").all()
+    assert shared["configured_dapro_n1"].isna().all()
+    assert shared["configured_crc_control_size"].isna().all()
+    assert set(shared["applicable_dapro_configs"]) == {
+        "200:100|100:50|50:25"
+    }
+
+    specific = merged[merged["allocator_name"] != "shared_baseline"]
+    assert specific["configuration_scope"].eq("specific").all()
     assert set(zip(
-        merged["configured_dapro_n1"],
-        merged["configured_crc_control_size"],
+        specific["configured_dapro_n1"],
+        specific["configured_crc_control_size"],
     )) == {(200, 100), (100, 50), (50, 25)}
+
+
+def test_legacy_configuration_copies_are_normalized_without_data_loss():
+    rows = []
+    for n1, crc in ((200, 100), (100, 50), (50, 25)):
+        rows.append({
+            "seed": 7,
+            "allocator_name": "shared",
+            "estimated_cjr": 42.0,
+            "configured_dapro_n1": n1,
+            "configured_crc_control_size": crc,
+        })
+    rows.append({
+        "seed": 7,
+        "allocator_name": "dapro_n1_100",
+        "estimated_cjr": 41.0,
+        "configured_dapro_n1": 100,
+        "configured_crc_control_size": 50,
+    })
+
+    normalized = _normalize_legacy_configuration_rows(pd.DataFrame(rows))
+
+    assert len(normalized) == 2
+    shared = normalized[normalized["allocator_name"] == "shared"].iloc[0]
+    assert shared["configuration_scope"] == "shared"
+    assert shared["applicable_dapro_configs"] == "50:25|100:50|200:100"
+    assert pd.isna(shared["configured_dapro_n1"])
+    specific = normalized[
+        normalized["allocator_name"] == "dapro_n1_100"
+    ].iloc[0]
+    assert specific["configuration_scope"] == "specific"
+    assert specific["configured_dapro_n1"] == 100
 
 
 def test_target_a_uses_metric_event_instead_of_lpb_anchor():
@@ -240,3 +275,9 @@ def test_metric_diagnostics_record_requested_seed_level_values():
     assert metrics["metric_target_a_count"] == 2
     assert metrics["num_trajectories_fully_resolved"] == 2
     assert metrics["total_expected_budget"] == 6.5
+    np.testing.assert_allclose(
+        metrics[
+            "estimated_conditional_variance_unsafe_event_rate_estimator"
+        ],
+        14 / 9,
+    )

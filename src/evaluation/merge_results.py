@@ -71,6 +71,7 @@ def merge_results(
         dapro_configs=None,
         exclude_legacy_dapro=False,
         exclude_locally_adaptive=False,
+        allocator_names=None,
 ):
     all_dfs = []
     num_cpus = os.cpu_count()
@@ -103,6 +104,19 @@ def merge_results(
             )
             entry["configs"].append((config_n1, config_crc))
     calibration_entries = list(calibrations_by_name.values())
+    if allocator_names is not None:
+        requested = set(allocator_names)
+        missing = requested - set(calibrations_by_name)
+        if missing:
+            raise ValueError(
+                "Unknown metric allocator name(s): "
+                + ", ".join(sorted(missing))
+            )
+        calibration_entries = [
+            calibrations_by_name[name]
+            for name in calibrations_by_name
+            if name in requested
+        ]
 
     print(f"Starting merge for experiment: {experiments_name}")
     print(f"Discovered {len(calibration_entries)} unique calibration methods.")
@@ -123,11 +137,24 @@ def merge_results(
             try:
                 result_df = future.result()
                 if result_df is not None and not result_df.empty:
-                    for config_n1, config_crc in futures[future]:
-                        configured = result_df.copy()
+                    configs = futures[future]
+                    configured = result_df.copy()
+                    configured["applicable_dapro_configs"] = "|".join(
+                        f"{config_n1}:{config_crc}"
+                        for config_n1, config_crc in configs
+                    )
+                    if len(configs) == 1:
+                        config_n1, config_crc = configs[0]
+                        configured["configuration_scope"] = "specific"
                         configured["configured_dapro_n1"] = config_n1
                         configured["configured_crc_control_size"] = config_crc
-                        all_dfs.append(configured)
+                    else:
+                        # A shared baseline is one experimental observation,
+                        # not one observation per registry configuration.
+                        configured["configuration_scope"] = "shared"
+                        configured["configured_dapro_n1"] = pd.NA
+                        configured["configured_crc_control_size"] = pd.NA
+                    all_dfs.append(configured)
             except Exception as e:
                 print(f"Error resolving future: {e}")
 
@@ -136,26 +163,17 @@ def merge_results(
             "No calibrations found. Check your file paths and seed ranges.")
 
     all_df = pd.concat(all_dfs, ignore_index=True)
-    methods_per_configuration = sum(
-        len(entry["configs"]) for entry in calibration_entries
-    )
-    expected_rows = (seeds[1] - seeds[0]) * methods_per_configuration
+    expected_rows = (seeds[1] - seeds[0]) * len(calibration_entries)
     if len(all_df) != expected_rows:
         raise RuntimeError(
             f"Incomplete merge: expected {expected_rows} rows but loaded "
             f"{len(all_df)}. Re-run estimation for the missing methods/seeds."
         )
-    identity_columns = [
-        "seed",
-        "allocator_name",
-        "configured_dapro_n1",
-        "configured_crc_control_size",
-    ]
+    identity_columns = ["seed", "allocator_name"]
     duplicates = all_df.duplicated(identity_columns, keep=False)
     if duplicates.any():
         raise RuntimeError("Duplicate seed/allocator rows found during merge.")
-    all_df = all_df.sort_values(
-        identity_columns).reset_index(drop=True)
+    all_df = all_df.sort_values(identity_columns).reset_index(drop=True)
 
     results_dir = get_merged_metric_calibration_result_path(experiments_name)
     os.makedirs(results_dir, exist_ok=True)
@@ -193,6 +211,15 @@ def main():
     parser.add_argument('--experiment-suffix', type=str, default='')
     parser.add_argument('--exclude-legacy-dapro', action='store_true')
     parser.add_argument('--exclude-locally-adaptive', action='store_true')
+    parser.add_argument(
+        '--allocator-name',
+        action='append',
+        dest='allocator_names',
+        help=(
+            'Merge only the named allocator; repeat the option for multiple '
+            'methods.'
+        ),
+    )
     args = parser.parse_args()
 
     dapro_configs = []
@@ -236,6 +263,7 @@ def main():
         dapro_configs=dapro_configs or None,
         exclude_legacy_dapro=args.exclude_legacy_dapro,
         exclude_locally_adaptive=args.exclude_locally_adaptive,
+        allocator_names=args.allocator_names,
     )
 
 

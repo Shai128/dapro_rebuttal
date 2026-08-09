@@ -26,6 +26,8 @@ from src.predictive_bounds.budget_allocators.DAPRO import (
     RandomAnchoredTargetAWeightedDAPRO,
     RegularizedTargetAWeightedDAPRO,
     RobustTargetAWeightedDAPRO,
+    SoftTargetCRCDAPRO,
+    SoftTargetDAPRO,
     TargetAWeightedDAPRO,
 )
 from src.predictive_bounds.budget_allocators.random_adaptive_optimized_allocator import (
@@ -41,7 +43,13 @@ from src.predictive_bounds.reward_functions.reward_by_probability_diff import Re
 from src.predictive_bounds.utils.get_best_params_utils import get_best_rexp3_params, get_best_discounted_ucb_params, \
     new_alg_best_params
 from src.predictive_bounds.budget_allocators.uniform_allocator import UniformBudgetAllocator, UnweightedUniformBudgetAllocator
-from src.predictive_bounds.budget_allocators.full_budget_oracle_allocator import FullBudgetOracleAllocator
+from src.predictive_bounds.budget_allocators.full_budget_oracle_allocator import (
+    FullBudgetOracleAllocator,
+    SplitFullBudgetOracleAllocator,
+)
+from src.predictive_bounds.budget_allocators.metric_optimal_allocator import (
+    MetricOptimalPMFAllocator,
+)
 from typing import List
 
 
@@ -121,7 +129,26 @@ def get_baseline_calibrations(
                     n1=n1,
                     projection_budget_margin=margin,
                 ))
+                all_allocations.append(SoftTargetDAPRO(
+                    conditional_grid,
+                    budget_per_sample,
+                    taus_range,
+                    tau_prior,
+                    m_upper_bound,
+                    n1=n1,
+                    projection_budget_margin=margin,
+                ))
             if n1 >= 50:
+                all_allocations.append(SoftTargetCRCDAPRO(
+                    conditional_grid,
+                    budget_per_sample,
+                    taus_range,
+                    tau_prior,
+                    m_upper_bound,
+                    n1=n1,
+                    budget_control_size=min(100, n1 // 2),
+                    row_cost_cap_multiplier=2.0,
+                ))
                 all_allocations.append(DefinitiveCRCDAPRO(
                     conditional_grid,
                     budget_per_sample,
@@ -570,15 +597,22 @@ def get_metric_allocators(
         include_legacy_dapro=True,
         include_locally_adaptive=True,
 ) -> List[BudgetAllocator]:
-    """Return the fixed-benchmark metric-estimation comparison.
+    """Return the exact server/local metric-estimation comparison.
 
-    Target-A methods use ``A_i = 1{T_i <= m_upper_bound}``, the binary event
-    whose population mean is estimated by the unsafe-event-rate estimator.
-    This differs intentionally from the LPB construction target anchored at a
-    model quantile.  ``device`` and the optional observed-data arguments are
-    retained for compatibility with older callers.
+    Shared methods are the intentional weighted/unweighted Uniform pair,
+    naive under-cost Static, no-split initial-PMF allocation, and the two
+    full-budget oracle scopes. Configuration-specific methods are Constant +
+    CRC and soft-prefix Generalized DAPRO with and without CRC. Legacy,
+    Target-A, Definitive, PMF+CRC, and clairvoyant DAPRO oracles are excluded
+    from this production registry.
     """
-    del device, t_tilde_cal, cal_model_prediction
+    del (
+        device,
+        t_tilde_cal,
+        cal_model_prediction,
+        include_legacy_dapro,
+        include_locally_adaptive,
+    )
     if dapro_n1 <= 0:
         raise ValueError("`dapro_n1` must be positive.")
     if not 0 < crc_control_size < dapro_n1:
@@ -591,100 +625,54 @@ def get_metric_allocators(
         tau_prior=tau_prior,
         m_upper_bound=m_upper_bound,
     )
-    crc = dict(
-        budget_control_mode="crc",
-        budget_control_size=crc_control_size,
-        risk_candidate_row_cost_cap=2.0 * budget_per_sample,
-    )
     target = dict(metric_estimation_horizon=m_upper_bound)
 
     allocators = [
-        # Uniform sampling, with and without inverse-probability correction.
+        # Intentional duplicate allocation with and without IPCW correction.
         UniformBudgetAllocator(
             budget_per_sample, taus_range, tau_prior, m_upper_bound
         ),
         UnweightedUniformBudgetAllocator(
             budget_per_sample, taus_range, tau_prior, m_upper_bound
         ),
-        # The repeated, deterministic reference is evaluated on the complete
-        # fixed benchmark rather than on each calibration subsample.
-        FullBudgetOracleAllocator(taus_range, tau_prior, m_upper_bound),
+        # Keep the original naive Static allocation and its event-stopped
+        # budget underuse exactly as defined by the baseline.
         OptimizedBudgetAllocator(
             budget_per_sample, taus_range, tau_prior, m_upper_bound
         ),
-        ConstantCRCBudgetAllocator(**common, phase1_size=100),
-        # DAPRO: legacy, metric-aligned Target-A, and definitive objective.
-        LegacyMeanWeightDAPRO(
+        # Constant continuation with CRC. It has no policy-fit fold, so the
+        # requested N1//2 CRC size is its fully observed control size.
+        ConstantCRCBudgetAllocator(
             **common,
-            projection="direct_bins_2",
-            score="prob",
-            n1=dapro_n1,
+            phase1_size=crc_control_size,
         ),
-        TargetAWeightedDAPRO(
-            **common,
-            projection="direct_bins_2",
-            score="prob",
-            n1=dapro_n1,
-            anchor_kind="raw_alpha",
-            target_alpha=0.10,
-            **target,
+        # No-split, model-budget, initial-PMF cumulative-reach optimum.
+        MetricOptimalPMFAllocator(
+            budget_per_sample,
+            taus_range,
+            tau_prior,
+            m_upper_bound,
         ),
-        DefinitiveDAPRO(
+        # Generalized DAPRO: identical soft-prefix metric objective with an
+        # assumption-based projection controller or an independent CRC fold.
+        SoftTargetDAPRO(
             **common,
             n1=dapro_n1,
             projection_budget_margin=1.0,
             **target,
         ),
-        LegacyMeanWeightDAPRO(
-            **common,
-            projection="direct_bins_2",
-            score="prob",
-            n1=dapro_n1,
-            **crc,
-        ),
-        TargetAWeightedDAPRO(
-            **common,
-            projection="direct_bins_2",
-            score="prob",
-            n1=dapro_n1,
-            anchor_kind="raw_alpha",
-            target_alpha=0.10,
-            **target,
-            **crc,
-        ),
-        DefinitiveCRCDAPRO(
+        SoftTargetCRCDAPRO(
             **common,
             n1=dapro_n1,
             budget_control_size=crc_control_size,
             row_cost_cap_multiplier=2.0,
             **target,
         ),
-        SplitOracleTargetADAPRO(
-            **common,
-            n1=dapro_n1,
-            **target,
+        # Infinite budget on the random calibration side only.
+        SplitFullBudgetOracleAllocator(
+            taus_range, tau_prior, m_upper_bound
         ),
-        CRCOracleTargetADAPRO(
-            **common,
-            n1=dapro_n1,
-            budget_control_size=crc_control_size,
-            **target,
-        ),
-        GlobalOracleTargetADAPRO(
-            **common,
-            **target,
-        ),
+        # Fixed truth over the complete calibration+test union.
+        FullBudgetOracleAllocator(taus_range, tau_prior, m_upper_bound),
     ]
-    if not include_legacy_dapro:
-        allocators = [
-            allocator
-            for allocator in allocators
-            if type(allocator) is not LegacyMeanWeightDAPRO
-        ]
-    if not include_locally_adaptive:
-        allocators = [
-            allocator
-            for allocator in allocators
-            if type(allocator) is not AdaptiveOptimizedBudgetAllocator
-        ]
     return allocators

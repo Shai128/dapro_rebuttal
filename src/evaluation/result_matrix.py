@@ -173,8 +173,30 @@ def method_display_name(name: str) -> str:
         return "Raw"
     if name in {"oracle_survival_calibration", "oracle_survival_upb_calibration"}:
         return "Oracle"
-    if name == "oracle_full_budget":
-        return "Full-budget oracle"
+    if "oracle_split_full_budget" in name:
+        return "Full budget (calibration)"
+    if "oracle_full_budget" in name:
+        return "Full budget (calibration+test)"
+    if "metric_optimal_pmf" in name and "crc_control" in name:
+        return "Metric-optimal PMF + CRC"
+    if "metric_optimal_pmf_model_budget" in name:
+        return "Metric-optimal PMF"
+    if (
+        "dapro_soft_prefix" in name
+        and "metric_horizon" in name
+        and "budget_crc" in name
+    ):
+        return "Generalized DAPRO + CRC"
+    if "dapro_soft_prefix" in name and "metric_horizon" in name:
+        return "Generalized DAPRO (soft metric)"
+    if (
+        "dapro_soft_prefix" in name
+        and "lpb_alpha" in name
+        and "budget_crc" in name
+    ):
+        return "Generalized DAPRO (soft LPB) + CRC"
+    if "dapro_soft_prefix" in name and "lpb_alpha" in name:
+        return "Generalized DAPRO (soft LPB)"
     if "UnweightedUniformBudgetAllocator" in name:
         return "Uniform (unweighted)"
     if "UniformBudgetAllocator" in name:
@@ -214,23 +236,15 @@ def method_display_name(name: str) -> str:
 
 
 METHOD_ORDER = (
-    "Raw",
     "Uniform (unweighted)",
     "Uniform + reweighting",
     "Static",
     "Constant + CRC",
-    "Local + CRC",
-    "Legacy DAPRO",
-    "Target-A DAPRO",
-    "DAPRO (projection)",
-    "Legacy DAPRO + CRC",
-    "Target-A DAPRO + CRC",
-    "DAPRO + CRC",
-    "DAPRO Oracle (split)",
-    "DAPRO Oracle + CRC",
-    "DAPRO Oracle (global)",
-    "Oracle",
-    "Full-budget oracle",
+    "Metric-optimal PMF",
+    "Generalized DAPRO (soft metric)",
+    "Generalized DAPRO + CRC",
+    "Full budget (calibration)",
+    "Full budget (calibration+test)",
 )
 
 DAPRO_ORACLE_METHODS = frozenset({
@@ -247,6 +261,11 @@ METHOD_COLORS = {
     "Static": "#1f77b4",
     "Constant + CRC": "#9467bd",
     "Local + CRC": "#bcbd22",
+    "Metric-optimal PMF": "#003f5c",
+    "Metric-optimal PMF + CRC": "#58508d",
+    "Generalized DAPRO (soft metric)": "#2f4b7c",
+    "Generalized DAPRO + CRC": "#e45756",
+    "Generalized DAPRO (soft LPB)": "#665191",
     "Legacy DAPRO": "#ff9f40",
     "Target-A DAPRO": "#17a2b8",
     "DAPRO (projection)": "#2ca02c",
@@ -257,5 +276,6 @@ METHOD_COLORS = {
     "DAPRO Oracle + CRC": "#7f3c8d",
     "DAPRO Oracle (global)": "#11a579",
     "Oracle": "#4d4d4d",
-    "Full-budget oracle": "#4d4d4d",
+    "Full budget (calibration)": "#8c8c8c",
+    "Full budget (calibration+test)": "#4d4d4d",
 }

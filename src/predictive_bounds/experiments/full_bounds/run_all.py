@@ -64,9 +64,9 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--seed-start", type=int, default=0)
     parser.add_argument("--seed-end", type=int, default=50)
     parser.add_argument("--device", default="cuda:0")
-    parser.add_argument("--suffix", default="full_bounds_v1")
+    parser.add_argument("--suffix", default="full_bounds_v2")
     parser.add_argument(
-        "--quality", choices=["high", "low"], default="high"
+        "--quality", choices=["high", "low"], default="low"
     )
     parser.add_argument(
         "--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR

@@ -485,6 +485,7 @@ def solve_exact_fast(
         C: torch.Tensor,
         B_bar: float,
         objective_weights: torch.Tensor | np.ndarray | None = None,
+        objective_masses: torch.Tensor | np.ndarray | None = None,
         terminal_pi_min: float | None = None,
         max_outer: int = 60,
         max_inner: int = 30,
@@ -493,14 +494,16 @@ def solve_exact_fast(
 ) -> np.ndarray:
     """Solve the score-monotone acquisition problem in log probabilities.
 
-    ``C[i]`` is the strict active length ``min(T_i, q_i)``.  With terminal
-    propensity ``pi_i = prod_{t<C[i]} P[i,t]``, the objective is
+    ``C[i]`` is the strict active length ``min(T_i, q_i)``. With cumulative
+    reach ``rho[i,t] = prod_{s<=t} P[i,s]``, ``objective_masses`` solves
 
-        mean(objective_weights[i] / pi_i).
+        mean_i sum_t objective_masses[i,t] / rho[i,t].
 
-    The omitted ``-objective_weights[i]`` term is constant. Passing binary
-    event indicators therefore minimizes the requested conditional-variance
-    proxy.
+    The omitted ``-objective_masses`` term is constant. ``objective_weights``
+    is the backward-compatible terminal-event shorthand: weight ``i`` is
+    placed at time ``C[i]-1``. Passing binary target indicators therefore
+    minimizes the usual terminal-event conditional-variance proxy, while soft
+    prefix masses implement its Rao--Blackwellized/model-integrated version.
 
     A terminal-propensity floor is deliberately not solved here: it couples
     coordinates and the previous coordinate-descent implementation could stop
@@ -521,19 +524,46 @@ def solve_exact_fast(
         raise ValueError(f"`C` must lie in [0, {width}].")
     if not np.isfinite(B_bar) or B_bar < 0:
         raise ValueError(f"`B_bar` must be finite and nonnegative; got {B_bar}.")
+    time = np.arange(width)
+    mask = (time[None, :] < C_np[:, None]).astype(np.float64)
 
-    if objective_weights is None:
-        weights = np.ones(n, dtype=np.float64)
-    else:
-        if torch.is_tensor(objective_weights):
-            objective_weights = objective_weights.detach().cpu().numpy()
-        weights = np.asarray(objective_weights, dtype=np.float64)
-        if weights.shape != (n,):
+    if objective_weights is not None and objective_masses is not None:
+        raise ValueError(
+            "Pass either `objective_weights` or `objective_masses`, not both."
+        )
+    if objective_masses is not None:
+        if torch.is_tensor(objective_masses):
+            objective_masses = objective_masses.detach().cpu().numpy()
+        masses = np.asarray(objective_masses, dtype=np.float64)
+        if masses.shape != (n, width):
             raise ValueError(
-                f"`objective_weights` must have shape {(n,)}; got {weights.shape}."
+                "`objective_masses` must have shape "
+                f"{(n, width)}; got {masses.shape}."
             )
-        if not np.all(np.isfinite(weights)) or np.any(weights < 0):
-            raise ValueError("`objective_weights` must be finite and nonnegative.")
+        if not np.all(np.isfinite(masses)) or np.any(masses < 0):
+            raise ValueError(
+                "`objective_masses` must be finite and nonnegative."
+            )
+        masses = masses * mask
+    else:
+        if objective_weights is None:
+            weights = np.ones(n, dtype=np.float64)
+        else:
+            if torch.is_tensor(objective_weights):
+                objective_weights = objective_weights.detach().cpu().numpy()
+            weights = np.asarray(objective_weights, dtype=np.float64)
+            if weights.shape != (n,):
+                raise ValueError(
+                    f"`objective_weights` must have shape {(n,)}; got {weights.shape}."
+                )
+            if not np.all(np.isfinite(weights)) or np.any(weights < 0):
+                raise ValueError("`objective_weights` must be finite and nonnegative.")
+        masses = np.zeros((n, width), dtype=np.float64)
+        positive_length = C_np > 0
+        masses[
+            np.flatnonzero(positive_length),
+            C_np[positive_length] - 1,
+        ] = weights[positive_length]
 
     if terminal_pi_min is not None:
         raise NotImplementedError(
@@ -541,9 +571,6 @@ def solve_exact_fast(
             "by coordinate descent. Enforce positivity in the deployed policy "
             "with an explicit exploration mixture instead."
         )
-    time = np.arange(width)
-    mask = (time[None, :] < C_np[:, None]).astype(np.float64)
-    end_idx = np.maximum(C_np - 1, 0)
     maximum_budget = float(np.mean(C_np))
     if B_bar >= maximum_budget - tol:
         return mask.copy()
@@ -558,7 +585,7 @@ def solve_exact_fast(
         else:
             ordered_rows_by_time.append(None)
 
-    if np.all(weights == 0):
+    if np.all(masses == 0):
         y_minimum = np.zeros((n, width), dtype=np.float64)
         y_minimum[C_np > 0, 0] = -700.0
         y_minimum[mask == 0] = -1e9
@@ -572,15 +599,12 @@ def solve_exact_fast(
         return float(np.mean(np.sum(cumulative * mask, axis=1)))
 
     def compute_weighted_objective(y):
-        terminal_log = np.sum(np.where(mask > 0, y, 0.0), axis=1)
-        terminal_probability = np.exp(np.clip(terminal_log, -700, 0))
-        contributions = np.zeros(n, dtype=np.float64)
-        positive = weights > 0
-        contributions[positive] = (
-            weights[positive]
-            * (1 / terminal_probability[positive] - 1)
-        )
-        return float(np.mean(contributions))
+        cumulative_y = np.cumsum(y, axis=1)
+        inverse_reach = np.exp(np.clip(-cumulative_y, 0, 700))
+        return float(np.mean(np.sum(
+            masses * (inverse_reach - 1.0),
+            axis=1,
+        )))
 
     def inner_solve(lam, y_start):
         y = y_start.copy()
@@ -593,22 +617,21 @@ def solve_exact_fast(
                 if rows is None:
                     continue
                 old_column = y[:, t].copy()
-                terminal_log = cumulative_y[rows, end_idx[rows]]
                 suffix = np.sum(
                     np.exp(np.clip(cumulative_y[rows, t:], -700, 0))
                     * mask[rows, t:],
                     axis=1,
                 )
-                alpha = np.zeros(len(rows), dtype=np.float64)
-                positive = weights[rows] > 0
-                alpha[positive] = np.exp(np.clip(
-                    np.log(weights[rows][positive])
-                    - log_n
-                    - terminal_log[positive]
-                    + old_column[rows][positive],
-                    -700,
-                    700,
-                ))
+                inverse_objective_suffix = np.sum(
+                    masses[rows, t:]
+                    * np.exp(np.clip(-cumulative_y[rows, t:], 0, 700)),
+                    axis=1,
+                )
+                alpha = (
+                    inverse_objective_suffix
+                    * np.exp(old_column[rows])
+                    / n
+                )
                 beta = np.exp(np.clip(
                     log_lam
                     - log_n
@@ -723,6 +746,7 @@ def solve_binned_deployable_policy(
         budget_per_sample: float,
         objective_weights: torch.Tensor | np.ndarray | None,
         n_bins: int,
+        objective_masses: torch.Tensor | np.ndarray | None = None,
 ) -> tuple[np.ndarray, torch.Tensor, torch.Tensor, dict]:
     """Optimize a score-bin policy that deploys without regression.
 
@@ -794,6 +818,7 @@ def solve_binned_deployable_policy(
         validation_lengths,
         budget_per_sample,
         objective_weights=objective_weights,
+        objective_masses=objective_masses,
         terminal_pi_min=None,
         verbose=False,
     )

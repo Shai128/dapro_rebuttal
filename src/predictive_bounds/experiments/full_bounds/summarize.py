@@ -695,7 +695,7 @@ def _plot_coverage_variance(
         order=target_order,
         hue_order=hue_order,
         palette=METHOD_COLORS,
-        ci=None,
+        errorbar=None,
         ax=axis,
     )
     _style_axis(axis, "Coverage variance (squared pp)")

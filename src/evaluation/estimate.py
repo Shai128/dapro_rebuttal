@@ -151,6 +151,10 @@ class AllocationEstimationDiagnostics(SafetyMetric):
         target_a = (data.t_tilde.reshape(-1) <= data.max_time).to(
             torch.float64
         )
+        observed_target_a = (
+            data.Delta_i.reshape(-1).bool()
+            & (data.Y_i.reshape(-1) <= data.max_time)
+        ).to(torch.float64)
         a_weight = target_a * inverse
         sum_a_weight = a_weight.sum()
         ess = (
@@ -184,6 +188,18 @@ class AllocationEstimationDiagnostics(SafetyMetric):
             # 100^2 if desired.
             "conditional_variance_unsafe_event_rate_estimator": (
                 (target_a * (inverse - 1)).sum().item() / data.N ** 2
+            ),
+            # Design-unbiased estimate of the same conditional acquisition
+            # variance.  Unlike the preceding offline diagnostic, this uses
+            # only unsafe events actually observed under the policy:
+            # E[R_i A_i (1-pi_i)/pi_i^2] = A_i(1/pi_i-1).
+            "estimated_conditional_variance_unsafe_event_rate_estimator": (
+                (
+                    observed_target_a
+                    * (1 - propensities)
+                    / propensities.square()
+                ).sum().item()
+                / data.N ** 2
             ),
         }
         for key, value in data.allocation_metrics.items():
@@ -369,6 +385,16 @@ def run_one_experiment(experiments_name, seed, allocator: BudgetAllocator, x, t_
                 else f'calibration_{allocator_name}_allocation'
             ),
             'evaluation_sample_size': traj_data.N,
+            'evaluation_scope': (
+                'full_calibration_test_benchmark'
+                if allocator_name == 'oracle_full_budget'
+                else 'calibration_split'
+            ),
+            'full_benchmark_sample_size': oracle_metrics.get(
+                'sample_size', np.nan
+            ),
+            'full_benchmark_cjr': oracle_metrics['cjr'] * 100,
+            'full_benchmark_rmttu': oracle_metrics['rmttu'],
             **metrics_results
         }
 
@@ -390,19 +416,21 @@ def run_one_experiment(experiments_name, seed, allocator: BudgetAllocator, x, t_
 
 def compute_oracle_metric(t_tilde_cal_test, max_time):
     # --- SINGLE ORACLE COMPUTATION ACROSS CAL+TEST ---
-    true_event_all = (t_tilde_cal_test <= max_time).float()
+    full_times = t_tilde_cal_test.reshape(-1).to(torch.float64)
+    true_event_all = (full_times <= max_time).to(torch.float64)
     global_oracle_cjr = true_event_all.mean().item()
-    global_oracle_rmttu = t_tilde_cal_test[t_tilde_cal_test <= max_time].float(
-    ).mean().item()
+    global_oracle_rmttu = full_times[full_times <= max_time].mean().item()
     global_oracle_quantiles = {}
     for q in [0.25, 0.50, 0.75]:
         global_oracle_quantiles[f'oracle_quantile_{int(q * 100)}'] = torch.quantile(
-            t_tilde_cal_test.float(), q).item()
+            full_times, q).item()
 
     oracle_metrics = {
         'cjr': global_oracle_cjr,
         'rmttu': global_oracle_rmttu,
-        'quantiles': global_oracle_quantiles
+        'quantiles': global_oracle_quantiles,
+        'sample_size': len(full_times),
+        'horizon': int(max_time),
     }
     return oracle_metrics
 
@@ -437,6 +465,8 @@ REQUIRED_RESULT_COLUMNS = {
     "mean_weight",
     "mean_a_weighted_weight",
     "num_events_observed",
+    "conditional_variance_unsafe_event_rate_estimator",
+    "estimated_conditional_variance_unsafe_event_rate_estimator",
 }
 
 
@@ -464,6 +494,7 @@ def run_experiments(
         tau_prior=0.56,
         exclude_legacy_dapro=False,
         exclude_locally_adaptive=False,
+        allocator_names=None,
 ):
     taus_range = torch.tensor(np.arange(0.01, 1.0, 0.01)).to(device)
     m_upper_bound = 200 if is_real else 20
@@ -503,6 +534,20 @@ def run_experiments(
             include_legacy_dapro=not exclude_legacy_dapro,
             include_locally_adaptive=not exclude_locally_adaptive,
         )
+        if allocator_names is not None:
+            requested = set(allocator_names)
+            available = {allocator.name for allocator in allocators}
+            missing = requested - available
+            if missing:
+                raise ValueError(
+                    "Unknown metric allocator name(s): "
+                    + ", ".join(sorted(missing))
+                )
+            allocators = [
+                allocator
+                for allocator in allocators
+                if allocator.name in requested
+            ]
         common_uniforms = np.random.default_rng(seed).random(
             (cal_size, curr_conditional_grid.shape[1])
         )
@@ -565,6 +610,15 @@ def main():
     parser.add_argument('--experiment-suffix', type=str, default='')
     parser.add_argument('--exclude-legacy-dapro', action='store_true')
     parser.add_argument('--exclude-locally-adaptive', action='store_true')
+    parser.add_argument(
+        '--allocator-name',
+        action='append',
+        dest='allocator_names',
+        help=(
+            'Run only the named allocator; repeat the option for multiple '
+            'methods.'
+        ),
+    )
     parser.add_argument('--overwrite', action='store_true')
     args = parser.parse_args()
 
@@ -592,7 +646,8 @@ def main():
                     crc_control_size=args.crc_control_size,
                     tau_prior=args.tau_prior,
                     exclude_legacy_dapro=args.exclude_legacy_dapro,
-                    exclude_locally_adaptive=args.exclude_locally_adaptive)
+                    exclude_locally_adaptive=args.exclude_locally_adaptive,
+                    allocator_names=args.allocator_names)
     print("Finished Metrics Evaluation Suite.")
 
 

@@ -8,6 +8,10 @@ from src.predictive_bounds.budget_allocators.budget_allocator import (
 from src.predictive_bounds.budget_allocators.dapro_projection_metrics import (
     compute_dapro_projection_metrics,
 )
+from src.predictive_bounds.budget_allocators.dapro_objectives import (
+    history_soft_objective_coefficients,
+    realized_target_weights,
+)
 from src.predictive_bounds.budget_allocators.optimization_solver_utils import (
     solve_binned_deployable_policy,
     solve_exact_fast,
@@ -218,6 +222,23 @@ class LegacyMeanWeightDAPRO(BudgetAllocator):
     ) -> torch.Tensor | None:
         return None
 
+    def phase1_objective_masses(
+            self,
+            event_times: torch.Tensor,
+            prior_q: torch.Tensor,
+            quantile_est: torch.Tensor,
+            conditional_grid: torch.Tensor,
+    ) -> torch.Tensor | None:
+        """Optional soft event/influence mass at every observed prefix.
+
+        Existing hard-label DAPRO variants return ``None`` and use terminal
+        ``phase1_objective_weights``. Generalized soft DAPRO overrides this
+        hook with model-integrated prefix masses, keeping the policy fitting,
+        projection, and deployment machinery shared.
+        """
+        del event_times, prior_q, quantile_est, conditional_grid
+        return None
+
     def phase2_objective_weights(
             self,
             event_times: torch.Tensor,
@@ -238,9 +259,11 @@ class LegacyMeanWeightDAPRO(BudgetAllocator):
             quantile_est: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """Return the binary event whose acquisition variance is audited."""
-        return (
-            event_times.reshape(-1) < prior_q.reshape(-1)
-        ).to(torch.float64)
+        return realized_target_weights(
+            event_times,
+            prior_q,
+            strict=True,
+        )
 
     def objective_metadata(self) -> dict:
         return {}
@@ -279,6 +302,12 @@ class LegacyMeanWeightDAPRO(BudgetAllocator):
                 val_quantile_est,
             )
             policy_fit_weights = phase1_weights
+            policy_fit_masses = self.phase1_objective_masses(
+                t_val,
+                val_prior_q,
+                val_quantile_est,
+                val_grid,
+            )
         else:
             policy_fit_count = len(t_val) - self.budget_control_size
             policy_fit_weights = self.phase1_objective_weights(
@@ -286,10 +315,19 @@ class LegacyMeanWeightDAPRO(BudgetAllocator):
                 val_prior_q[:policy_fit_count],
                 val_quantile_est[:policy_fit_count],
             )
+            policy_fit_masses = self.phase1_objective_masses(
+                t_val[:policy_fit_count],
+                val_prior_q[:policy_fit_count],
+                val_quantile_est[:policy_fit_count],
+                val_grid[:policy_fit_count],
+            )
             # The full-fold objective is computed after the policy has been
             # frozen.  This keeps the independent control labels out of both
             # the target-anchor choice and the learned time-policy shape.
             phase1_weights = None
+        solver_policy_fit_weights = (
+            None if policy_fit_masses is not None else policy_fit_weights
+        )
         policy_shape_budget_per_sample = (
             target_budget_avg - self.projection_budget_margin
         )
@@ -321,6 +359,11 @@ class LegacyMeanWeightDAPRO(BudgetAllocator):
             'direct_bins_4': 4,
         }.get(self.projection)
         cumulative_projection = self.projection == 'cumulative_platt'
+        if policy_fit_masses is not None and direct_time_projection:
+            raise ValueError(
+                "Soft prefix-mass objectives require a score-adaptive or "
+                "row-adaptive DAPRO projection, not direct_time."
+            )
         if direct_time_projection:
             direct_weights = (
                 torch.ones(
@@ -695,8 +738,9 @@ class LegacyMeanWeightDAPRO(BudgetAllocator):
                     remaining_scores,
                     val_max_steps[:policy_fit_count],
                     policy_shape_budget_per_sample,
-                    policy_fit_weights,
+                    solver_policy_fit_weights,
                     direct_bin_count,
+                    objective_masses=policy_fit_masses,
                 )
                 fit_raw_cumulative = p_fit_binned.cumprod(dim=1)
                 remaining_raw_cumulative = (
@@ -1093,8 +1137,9 @@ class LegacyMeanWeightDAPRO(BudgetAllocator):
                     test_scores,
                     val_max_steps,
                     policy_shape_budget_per_sample,
-                    phase1_weights,
+                    solver_policy_fit_weights,
                     direct_bin_count,
+                    objective_masses=policy_fit_masses,
                 )
                 projected_probabilities = torch.cat(
                     [
@@ -1109,7 +1154,8 @@ class LegacyMeanWeightDAPRO(BudgetAllocator):
                     val_scores,
                     val_max_steps,
                     policy_shape_budget_per_sample,
-                    objective_weights=phase1_weights,
+                    objective_weights=solver_policy_fit_weights,
+                    objective_masses=policy_fit_masses,
                     terminal_pi_min=None,
                     verbose=False,
                 )
@@ -1738,9 +1784,11 @@ class AWeightedDAPRO(LegacyMeanWeightDAPRO):
             prior_q: torch.Tensor,
             quantile_est: torch.Tensor | None = None,
     ) -> torch.Tensor:
-        return (
-            event_times.reshape(-1) < prior_q.reshape(-1)
-        ).to(torch.float64)
+        return realized_target_weights(
+            event_times,
+            prior_q,
+            strict=True,
+        )
 
 
 class TargetAWeightedDAPRO(AWeightedDAPRO):
@@ -1860,10 +1908,11 @@ class TargetAWeightedDAPRO(AWeightedDAPRO):
     ) -> tuple[torch.Tensor, int]:
         if self.metric_estimation_horizon is not None:
             return (
-                (
-                    event_times.reshape(-1)
-                    <= self.metric_estimation_horizon
-                ).to(torch.float64),
+                realized_target_weights(
+                    event_times,
+                    self.metric_estimation_horizon,
+                    strict=False,
+                ),
                 int(bool(torch.all(
                     prior_q.reshape(-1) >= self.metric_estimation_horizon
                 ).item())),
@@ -1889,9 +1938,11 @@ class TargetAWeightedDAPRO(AWeightedDAPRO):
                 "The target-A anchor exceeds q_prior for "
                 f"{violations} rows and is not identifiable."
             )
-        weights = (
-            event_times.reshape(-1) < anchor_q.reshape(-1)
-        ).to(torch.float64)
+        weights = realized_target_weights(
+            event_times,
+            anchor_q,
+            strict=True,
+        )
         return weights, int(within_prior)
 
     def phase1_objective_weights(
@@ -2347,6 +2398,7 @@ class DefinitiveDAPRO(RegularizedTargetAWeightedDAPRO):
             target_alpha: float = DEFAULT_TARGET_ALPHA,
             metric_estimation_horizon: int | None = None,
             global_regularization: float = DEFAULT_GLOBAL_REGULARIZATION,
+            score_bin_count: int = SCORE_BIN_COUNT,
             projection_budget_margin: float = (
                 DEFAULT_PROJECTION_BUDGET_MARGIN
             ),
@@ -2358,13 +2410,16 @@ class DefinitiveDAPRO(RegularizedTargetAWeightedDAPRO):
             budget_candidate_count: int = 401,
             risk_candidate_row_cost_cap: float | None = None,
     ):
+        if score_bin_count not in {2, 4}:
+            raise ValueError("`score_bin_count` must be either 2 or 4.")
+        self.score_bin_count = int(score_bin_count)
         super().__init__(
             conditional_grid,
             budget_per_sample,
             taus_range,
             tau_prior,
             m_upper_bound,
-            projection="direct_bins_2",
+            projection=f"direct_bins_{self.score_bin_count}",
             score="prob",
             reach_t_max_is_success=reach_t_max_is_success,
             n1=n1,
@@ -2394,7 +2449,7 @@ class DefinitiveDAPRO(RegularizedTargetAWeightedDAPRO):
         )
         alpha = self._format_parameter(self.target_alpha, 2)
         base = (
-            "dapro_variance_aligned_bins_2"
+            f"dapro_variance_aligned_bins_{self.score_bin_count}"
             f"_alpha_{alpha}"
             f"_global_{regularization}"
             f"_projection_margin_{margin}"
@@ -2411,7 +2466,7 @@ class DefinitiveDAPRO(RegularizedTargetAWeightedDAPRO):
         metadata = super().objective_metadata()
         metadata.update({
             "definitive_dapro": 1,
-            "definitive_score_bin_count": self.SCORE_BIN_COUNT,
+            "definitive_score_bin_count": self.score_bin_count,
             "definitive_projection_budget_margin": (
                 self.projection_budget_margin
             ),
@@ -2420,6 +2475,105 @@ class DefinitiveDAPRO(RegularizedTargetAWeightedDAPRO):
                 if self.budget_control_mode is not None
                 else "projection_assumption"
             ),
+        })
+        return metadata
+
+
+class SoftTargetDAPRO(DefinitiveDAPRO):
+    """Generalized DAPRO with Rao--Blackwellized prefix event masses.
+
+    Target-A and Definitive DAPRO put a hard binary target weight at each
+    fully observed Phase-I row's realized endpoint. This variant optimizes the
+    same target-specific HT variance functional after replacing that noisy
+    terminal indicator by conditional event mass at every causal prefix:
+
+        a_it = P_hat(T_i=t | T_i>=t, X_it).
+
+    The existing time/score-bin DAPRO backend then learns a continuation map
+    from the policy-fit fold and applies it causally to Phase II as ``X_it`` is
+    observed. ``metric_estimation_horizon`` selects the unsafe-event-rate
+    target; leaving it ``None`` selects the same raw-alpha LPB target as
+    Definitive DAPRO. Thus hard Target-A, soft history-adaptive DAPRO, and the
+    pre-run initial-PMF allocator share one event-mass/cost-mass objective but
+    use different coefficient estimators and policy classes.
+    """
+
+    @property
+    def name(self) -> str:
+        regularization = self._format_parameter(
+            self.global_regularization,
+            3,
+        )
+        margin = self._format_parameter(
+            self.projection_budget_margin,
+            2,
+        )
+        if self.metric_estimation_horizon is None:
+            alpha = self._format_parameter(self.target_alpha, 2)
+            target = f"lpb_alpha_{alpha}"
+        else:
+            target = f"metric_horizon_{self.metric_estimation_horizon}"
+        base = (
+            f"dapro_soft_prefix_bins_{self.score_bin_count}_"
+            f"{target}_global_{regularization}"
+            f"_projection_margin_{margin}"
+        )
+        return f"{base}_n1_{self.n1}"
+
+    @property
+    def objective_kind(self) -> str:
+        target = (
+            "unsafe_event_rate"
+            if self.metric_estimation_horizon is not None
+            else "lpb_raw_alpha"
+        )
+        return f"soft_prefix_hazard_variance_{target}"
+
+    def phase1_objective_masses(
+            self,
+            event_times: torch.Tensor,
+            prior_q: torch.Tensor,
+            quantile_est: torch.Tensor,
+            conditional_grid: torch.Tensor,
+    ) -> torch.Tensor:
+        active_lengths = torch.minimum(
+            event_times.reshape(-1).to(torch.long),
+            prior_q.reshape(-1).to(torch.long),
+        )
+        if self.metric_estimation_horizon is not None:
+            horizons = self.metric_estimation_horizon
+            strict = False
+            target_kind = "unsafe_event_rate"
+        else:
+            if self._target_anchor_index is None:
+                self._select_target_anchor(event_times, quantile_est)
+            horizons = quantile_est[:, self._target_anchor_index]
+            strict = True
+            target_kind = "lpb_raw_alpha"
+        coefficients = history_soft_objective_coefficients(
+            conditional_grid,
+            active_lengths,
+            horizons,
+            strict=strict,
+            target_kind=target_kind,
+            global_regularization=self.global_regularization,
+        )
+        return torch.as_tensor(
+            coefficients.event_mass,
+            dtype=torch.float64,
+            device=conditional_grid.device,
+        )
+
+    def objective_metadata(self) -> dict:
+        metadata = super().objective_metadata()
+        metadata.update({
+            "generalized_dapro": 1,
+            "generalized_dapro_coefficient_estimator": (
+                "history_prefix_hazard_model_integrated"
+            ),
+            "generalized_dapro_policy_class": "time_score_bin_dynamic",
+            "generalized_dapro_uses_current_prefix_x_it": 1,
+            "generalized_dapro_uses_initial_x_i0_only": 0,
         })
         return metadata
 
@@ -2510,7 +2664,7 @@ class DefinitiveCRCDAPRO(DefinitiveDAPRO):
         )
         alpha = self._format_parameter(self.target_alpha, 2)
         base = (
-            "dapro_variance_aligned_bins_2"
+            f"dapro_variance_aligned_bins_{self.score_bin_count}"
             f"_alpha_{alpha}"
             f"_global_{regularization}"
             "_budget_crc"
@@ -2529,6 +2683,126 @@ class DefinitiveCRCDAPRO(DefinitiveDAPRO):
         if self.metric_estimation_horizon is not None:
             return "definitive_regularized_metric_event_variance_crc"
         return "definitive_regularized_target_a_variance_crc"
+
+
+class SoftTargetCRCDAPRO(SoftTargetDAPRO):
+    """Soft-prefix Generalized DAPRO with independent CRC budget control.
+
+    The first ``n1 - budget_control_size`` fully observed rows learn the
+    causal time/score-bin policy from soft prefix event masses.  The remaining
+    fully observed rows are used only by the existing nested-family CRC
+    selector.  Hence this class changes the budget controller, not the target
+    or coefficient estimator, relative to :class:`SoftTargetDAPRO`.
+    """
+
+    DEFAULT_N1 = 50
+    DEFAULT_BUDGET_CONTROL_SIZE = 25
+    DEFAULT_ROW_COST_CAP_MULTIPLIER = 2.0
+
+    def __init__(
+            self,
+            conditional_grid,
+            budget_per_sample,
+            taus_range,
+            tau_prior,
+            m_upper_bound,
+            *,
+            n1: int = DEFAULT_N1,
+            budget_control_size: int = DEFAULT_BUDGET_CONTROL_SIZE,
+            target_alpha: float = DefinitiveDAPRO.DEFAULT_TARGET_ALPHA,
+            metric_estimation_horizon: int | None = None,
+            global_regularization: float = (
+                DefinitiveDAPRO.DEFAULT_GLOBAL_REGULARIZATION
+            ),
+            score_bin_count: int = DefinitiveDAPRO.SCORE_BIN_COUNT,
+            terminal_pi_min: float = 0.005,
+            budget_candidate_count: int = 401,
+            row_cost_cap_multiplier: float | None = (
+                DEFAULT_ROW_COST_CAP_MULTIPLIER
+            ),
+            reach_t_max_is_success: bool = False,
+            evaluate_projection: bool = False,
+    ):
+        if (
+                row_cost_cap_multiplier is not None
+                and (
+                    not np.isfinite(row_cost_cap_multiplier)
+                    or row_cost_cap_multiplier <= 0
+                )
+        ):
+            raise ValueError(
+                "`row_cost_cap_multiplier` must be finite and positive."
+            )
+        self.row_cost_cap_multiplier = (
+            None
+            if row_cost_cap_multiplier is None
+            else float(row_cost_cap_multiplier)
+        )
+        super().__init__(
+            conditional_grid,
+            budget_per_sample,
+            taus_range,
+            tau_prior,
+            m_upper_bound,
+            n1=n1,
+            target_alpha=target_alpha,
+            metric_estimation_horizon=metric_estimation_horizon,
+            global_regularization=global_regularization,
+            score_bin_count=score_bin_count,
+            projection_budget_margin=0.0,
+            terminal_pi_min=terminal_pi_min,
+            reach_t_max_is_success=reach_t_max_is_success,
+            evaluate_projection=evaluate_projection,
+            budget_control_mode="crc",
+            budget_control_size=budget_control_size,
+            budget_candidate_count=budget_candidate_count,
+            risk_candidate_row_cost_cap=(
+                None
+                if self.row_cost_cap_multiplier is None
+                else self.row_cost_cap_multiplier * budget_per_sample
+            ),
+        )
+
+    @property
+    def name(self) -> str:
+        regularization = self._format_parameter(
+            self.global_regularization,
+            3,
+        )
+        if self.metric_estimation_horizon is None:
+            alpha = self._format_parameter(self.target_alpha, 2)
+            target = f"lpb_alpha_{alpha}"
+        else:
+            target = f"metric_horizon_{self.metric_estimation_horizon}"
+        base = (
+            f"dapro_soft_prefix_bins_{self.score_bin_count}_"
+            f"{target}_global_{regularization}_budget_crc"
+            f"_control_{self.budget_control_size}"
+        )
+        if self.row_cost_cap_multiplier is not None:
+            multiplier = self._format_parameter(
+                self.row_cost_cap_multiplier,
+                2,
+            )
+            base += f"_row_cap_{multiplier}x_budget"
+        return f"{base}_n1_{self.n1}"
+
+    @property
+    def objective_kind(self) -> str:
+        return f"{super().objective_kind}_crc"
+
+    def objective_metadata(self) -> dict:
+        metadata = super().objective_metadata()
+        metadata.update({
+            "generalized_dapro_budget_control_mode": "crc",
+            "generalized_dapro_crc_control_size": self.budget_control_size,
+            "generalized_dapro_crc_row_cost_cap_multiplier": (
+                self.row_cost_cap_multiplier
+                if self.row_cost_cap_multiplier is not None
+                else np.nan
+            ),
+        })
+        return metadata
 
 
 class DefinitiveCRCUPBDAPRO(DefinitiveCRCDAPRO):

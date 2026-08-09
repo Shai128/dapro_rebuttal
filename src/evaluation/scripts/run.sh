@@ -1,5 +1,10 @@
 #!/usr/bin/env bash
-# Run, merge, and plot the complete fixed-benchmark metric comparison.
+# Run and merge the production fixed-benchmark metric comparison.
+#
+# The registry contains only:
+#   weighted/unweighted Uniform, naive Static, Constant+CRC,
+#   Metric-optimal PMF without CRC, Generalized DAPRO with/without CRC,
+#   full-budget calibration, and full-budget calibration+test.
 #
 # Parallelism is across complete experiment configurations, not across seeds.
 # Every estimate.py invocation processes the full configured seed range.
@@ -18,7 +23,7 @@ DEVICE="cuda:0"
 PYTHON_BIN="${PYTHON_BIN:-python}"
 AVAILABLE_ONLY=0
 DRY_RUN=0
-GENERATE_FIGURES=1
+GENERATE_FIGURES=0
 
 DATASETS=(
   toxicity
@@ -40,7 +45,7 @@ CAL_SIZE=3000
 SEED_START=0
 SEED_END=50
 TAU_PRIOR=0.56
-EXPERIMENT_SUFFIX="metric_v1"
+EXPERIMENT_SUFFIX="generalized_dapro_metric_v1"
 
 # Each entry is DAPRO_N1:CRC_CONTROL_SIZE.
 DAPRO_CONFIGS=(
@@ -51,9 +56,9 @@ DAPRO_CONFIGS=(
 
 # Every budget is run for every DAPRO/CRC configuration.
 BUDGET_PER_SAMPLE_VALUES=(
-  5
-  10
   20
+  10
+  5
 )
 
 SLURM_ACCOUNT="galileo"
@@ -72,7 +77,7 @@ EXCLUDE_LIST=""
 usage() {
   echo "Usage: $0 [--local | --slurm] [--cpu | --device DEVICE]"
   echo "          [--available-only] [--parallel-jobs N] [--seed-end N]"
-  echo "          [--skip-figures] [--dry-run]"
+  echo "          [--figures | --skip-figures] [--dry-run]"
   echo
   echo "--parallel-jobs controls the number of complete experiment configurations"
   echo "that run concurrently. It does not split seeds into separate jobs."
@@ -120,6 +125,9 @@ while (( $# > 0 )); do
     --skip-figures)
       GENERATE_FIGURES=0
       ;;
+    --figures)
+      GENERATE_FIGURES=1
+      ;;
     --dry-run)
       DRY_RUN=1
       ;;
@@ -163,6 +171,10 @@ for config in "${DAPRO_CONFIGS[@]}"; do
 
   if (( crc_control_size >= dapro_n1 || dapro_n1 >= CAL_SIZE )); then
     echo "Require CRC_CONTROL_SIZE < DAPRO_N1 < CAL_SIZE: $config" >&2
+    exit 2
+  fi
+  if (( crc_control_size != dapro_n1 / 2 )); then
+    echo "Require CRC_CONTROL_SIZE = DAPRO_N1 // 2: $config" >&2
     exit 2
   fi
 done
@@ -279,8 +291,6 @@ run_configuration() {
     --tau-prior "$TAU_PRIOR"
     --device "$DEVICE"
     --experiment-suffix "$EXPERIMENT_SUFFIX"
-    --exclude-legacy-dapro
-    --exclude-locally-adaptive
   )
 
   key="${dataset}_${target}_b_${budget}"
@@ -288,16 +298,16 @@ run_configuration() {
   local dapro_n1
   local crc_control_size
   local merge_config_args=()
+  local failed_dapro_configs=()
 
   # All N1/CRC methods share one compact experiment directory. Run the
   # configurations sequentially inside this job so common baseline files are
   # never written concurrently, then merge the complete method set once.
   for config in "${DAPRO_CONFIGS[@]}"; do
     IFS=: read -r dapro_n1 crc_control_size <<< "$config"
-    merge_config_args+=(--dapro-config "$config")
     echo
     echo "[$key | N1=$dapro_n1 | CRC=$crc_control_size] estimate seeds [$SEED_START, $SEED_END)"
-    if ! run_module \
+    if run_module \
       src.evaluation.estimate \
       "${key}_n1_${dapro_n1}_estimate" \
       "${shared_args[@]}" \
@@ -305,10 +315,17 @@ run_configuration() {
       --crc-control-size "$crc_control_size" \
       --seed-start "$SEED_START" \
       --seed-end "$SEED_END"; then
-      echo "ERROR: estimate failed for $key / N1=$dapro_n1 / CRC=$crc_control_size." >&2
-      return 1
+      merge_config_args+=(--dapro-config "$config")
+    else
+      failed_dapro_configs+=("$config")
+      echo "WARNING: estimate failed for $key / N1=$dapro_n1 / CRC=$crc_control_size; continuing with the next N1." >&2
     fi
   done
+
+  if (( ${#merge_config_args[@]} == 0 )); then
+    echo "ERROR: every N1/CRC configuration failed for $key." >&2
+    return 1
+  fi
 
   echo "[$key] merge"
 
@@ -323,7 +340,11 @@ run_configuration() {
     return 1
   fi
 
-  echo "[$key] completed successfully"
+  if (( ${#failed_dapro_configs[@]} > 0 )); then
+    echo "[$key] merged the successful configurations; failed: ${failed_dapro_configs[*]}"
+  else
+    echo "[$key] completed successfully"
+  fi
   return 0
 }
 
@@ -372,6 +393,7 @@ echo "DAPRO/CRC configurations: ${DAPRO_CONFIGS[*]}"
 echo "Budgets per sample: ${BUDGET_PER_SAMPLE_VALUES[*]}"
 echo "Maximum parallel complete experiments: $MAX_CONCURRENT_EXPERIMENTS"
 echo "Experiment suffix: $EXPERIMENT_SUFFIX"
+echo "Figures during server run: $GENERATE_FIGURES"
 
 CONFIG_PIDS=()
 CONFIG_LABELS=()
@@ -478,6 +500,11 @@ if (( ${#SKIPPED_CONFIGURATIONS[@]} > 0 )); then
     echo "  - $label"
   done
 fi
+
+echo
+echo "Merged CSVs are under: results/merged_metric_calibration_dfs"
+echo "After downloading that directory, generate local figures with:"
+echo "  python -m src.evaluation.summarize --input-dir results/merged_metric_calibration_dfs --output-dir figures/metric_estimation --quality high --experiment-suffix $EXPERIMENT_SUFFIX"
 
 # Intentionally succeed even if individual Python experiments failed.
 # Failures are reported above and do not crash the overall launcher.
