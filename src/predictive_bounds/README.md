@@ -32,6 +32,31 @@ available only as `LegacyMeanWeightDAPRO` for ablation compatibility.
 The frozen configuration, five-dataset runner, and reporting script are in
 `experiments/definitive_dapro/`.
 
+## Generalized DAPRO with soft prefix masses
+
+`SoftTargetDAPRO` and `SoftTargetCRCDAPRO` use the same causal two-bin DAPRO
+policy class, but replace the hard Phase-I endpoint target by model-integrated
+event mass at every observed prefix. With no metric horizon configured, they
+target the raw-alpha LPB miscoverage event. The first method uses the
+projection-margin budget controller; the second uses an independent CRC fold
+of size `N1 // 2` and the row cap `2 * budget_per_sample`.
+
+The production LPB matrix, including both soft-prefix variants for
+`N1={200,100,50}` and budgets `{5,10,20}`, can be constructed and merged on a
+server with:
+
+```bash
+bash src/predictive_bounds/scripts/calibrate.sh --slurm
+```
+
+After downloading or extracting the merged `all_df.csv` files locally,
+generate the complete budget/N1 figure tree with:
+
+```bash
+python -m src.predictive_bounds.experiments.full_bounds.summarize \
+  --input-dir results/merged_calibration_dfs --quality low
+```
+
 ## Timing contract
 
 Tensor positions are zero-based, while event times and allocation horizons are

@@ -5,6 +5,8 @@
 #   (DAPRO_N1=200, CRC_CONTROL_SIZE=100) x BUDGET_PER_SAMPLE={5,10,20}
 #   (DAPRO_N1=100, CRC_CONTROL_SIZE=50)  x BUDGET_PER_SAMPLE={5,10,20}
 #   (DAPRO_N1=50,  CRC_CONTROL_SIZE=25)  x BUDGET_PER_SAMPLE={5,10,20}
+# Each DAPRO configuration includes hard Target-A/Definitive methods and
+# soft-prefix Generalized DAPRO with projection and CRC budget control.
 #
 # Typical invocations:
 #   bash src/predictive_bounds/scripts/calibrate.sh --local
@@ -60,7 +62,7 @@ BUDGET_PER_SAMPLE_VALUES=(
 
 # All N1/CRC methods for one dataset/model/budget share one compact directory
 # and are constructed and merged together.
-BASE_EXPERIMENT_SUFFIX="lpb_v2"
+BASE_EXPERIMENT_SUFFIX="lpb_v3"
 ARCHIVE_PATH="results/lpb_merged_${BASE_EXPERIMENT_SUFFIX}.tar.gz"
 
 SLURM_ACCOUNT="galileo"
@@ -322,6 +324,8 @@ build_methods() {
       "calibration_dapro_variance_aligned_bins_2_alpha_0p10_global_0p001_projection_margin_1p00_n1_${dapro_n1}_allocation"
       "calibration_projected_optimization_direct_bins_2_prob_a_target_raw_alpha_0p10_budget_crc_control_${crc_control_size}_row_cap_2p00x_budget${historical_n1_suffix}_allocation"
       "calibration_dapro_variance_aligned_bins_2_alpha_0p10_global_0p001_budget_crc_control_${crc_control_size}_row_cap_2p00x_budget_n1_${dapro_n1}_allocation"
+      "calibration_dapro_soft_prefix_bins_2_lpb_alpha_0p10_global_0p001_projection_margin_1p00_n1_${dapro_n1}_allocation"
+      "calibration_dapro_soft_prefix_bins_2_lpb_alpha_0p10_global_0p001_budget_crc_control_${crc_control_size}_row_cap_2p00x_budget_n1_${dapro_n1}_allocation"
     )
   done
   METHOD_CSV="$(IFS=,; echo "${METHODS[*]}")"

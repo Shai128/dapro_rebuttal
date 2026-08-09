@@ -100,7 +100,7 @@ def test_general_target_coefficients_cover_hard_initial_and_history_forms():
     )
 
 
-def test_soft_target_dapro_runs_as_a_dynamic_metric_backend():
+def test_soft_target_dapro_runs_for_metric_and_lpb_targets():
     n, width = 80, 4
     grid = torch.zeros((n, width, width + 1), dtype=torch.float64)
     row = torch.arange(n)
@@ -110,38 +110,43 @@ def test_soft_target_dapro_runs_as_a_dynamic_metric_backend():
         grid[:, step, -1] = 1 - hazard
     event_times = (row % (width + 1)) + 1
     quantiles = torch.full((n, 5), width, dtype=torch.float32)
-    allocator = SoftTargetDAPRO(
-        grid,
-        2.0,
-        torch.tensor([0.1, 0.2, 0.3, 0.4, 0.5]),
-        0.5,
-        width,
-        n1=20,
-        metric_estimation_horizon=width,
-        projection_budget_margin=0.2,
-    )
-    allocator.set_acquisition_randomness(
-        seed=7,
-        uniforms=np.random.default_rng(7).random((n, width)),
-    )
+    for metric_horizon in (width, None):
+        allocator = SoftTargetDAPRO(
+            grid,
+            2.0,
+            torch.tensor([0.1, 0.2, 0.3, 0.4, 0.5]),
+            0.5,
+            width,
+            n1=20,
+            metric_estimation_horizon=metric_horizon,
+            projection_budget_margin=0.2,
+        )
+        allocator.set_acquisition_randomness(
+            seed=7,
+            uniforms=np.random.default_rng(7).random((n, width)),
+        )
 
-    result = allocator.allocate_budget(
-        grid,
-        None,
-        event_times,
-        quantiles,
-    )
+        result = allocator.allocate_budget(
+            grid,
+            None,
+            event_times,
+            quantiles,
+        )
 
-    assert result.C.shape == (n,)
-    assert torch.all(result.C_probs > 0)
-    assert result.additional_metrics["generalized_dapro"] == 1
-    assert (
-        result.additional_metrics["generalized_dapro_policy_class"]
-        == "time_score_bin_dynamic"
-    )
-    assert result.additional_metrics[
-        "generalized_dapro_uses_current_prefix_x_it"
-    ] == 1
+        assert result.C.shape == (n,)
+        assert torch.all(result.C_probs > 0)
+        assert result.additional_metrics["generalized_dapro"] == 1
+        assert (
+            result.additional_metrics["generalized_dapro_policy_class"]
+            == "time_score_bin_dynamic"
+        )
+        assert result.additional_metrics[
+            "generalized_dapro_uses_current_prefix_x_it"
+        ] == 1
+        if metric_horizon is None:
+            assert "lpb_alpha" in allocator.name
+        else:
+            assert "metric_horizon" in allocator.name
 
 
 def test_soft_target_dapro_supports_a_four_bin_policy_class():

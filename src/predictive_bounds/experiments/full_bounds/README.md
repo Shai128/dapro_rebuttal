@@ -1,12 +1,14 @@
 # Full predictive-bound comparison
 
-This package constructs and merges the seven-method comparison requested for the
+This package constructs and merges the full comparison requested for the
 paper, then generates all grouped figures and one LaTeX table file.
 
 The methods are raw uncalibrated model output, Static Optimized, empirical
 Constant, the genuinely distinct CRC power-reach schedule with exponent 2,
-Locally Adaptive, row-capped CRC-DAPRO, and an exact infinite-generation-budget
-oracle. The oracle observes every calibration outcome, has unit weights, and is
+Locally Adaptive, row-capped CRC-DAPRO, Generalized DAPRO with soft prefix
+event masses (with projection or CRC budget control), and an exact
+infinite-generation-budget oracle. The oracle observes every calibration
+outcome, has unit weights, and is
 shown in figures/tables but is excluded from every boldface "best method"
 comparison. The requested
 `1 - lambda ** (alpha * t)` schedule is not used as the improved constant

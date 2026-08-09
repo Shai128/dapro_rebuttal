@@ -266,6 +266,7 @@ METHOD_COLORS = {
     "Generalized DAPRO (soft metric)": "#2f4b7c",
     "Generalized DAPRO + CRC": "#e45756",
     "Generalized DAPRO (soft LPB)": "#665191",
+    "Generalized DAPRO (soft LPB) + CRC": "#d45087",
     "Legacy DAPRO": "#ff9f40",
     "Target-A DAPRO": "#17a2b8",
     "DAPRO (projection)": "#2ca02c",

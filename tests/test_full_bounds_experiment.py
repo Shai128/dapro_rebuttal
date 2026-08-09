@@ -10,6 +10,8 @@ from src.predictive_bounds.experiments.full_bounds.config import (
     GLOBAL_DAPRO_ORACLE,
     LPB_ORACLE,
     LPB_DAPRO,
+    GENERALIZED_LPB_CRC_DAPRO,
+    GENERALIZED_LPB_DAPRO,
     LOCALLY_ADAPTIVE,
     POWER_REACH,
     UPB_DAPRO,
@@ -48,10 +50,15 @@ def test_full_bounds_matrix_covers_every_dataset_model_and_bound():
 def test_full_bounds_method_profiles_are_exact_and_bound_specific():
     lpb = calibration_names("lpb")
     upb = calibration_names("upb")
-    assert len(lpb) == 9
+    assert len(lpb) == 11
     assert len(upb) == 6
     assert LOCALLY_ADAPTIVE not in lpb and LOCALLY_ADAPTIVE not in upb
     assert LPB_DAPRO in lpb and LPB_DAPRO not in upb
+    assert GENERALIZED_LPB_DAPRO in lpb and GENERALIZED_LPB_DAPRO not in upb
+    assert (
+        GENERALIZED_LPB_CRC_DAPRO in lpb
+        and GENERALIZED_LPB_CRC_DAPRO not in upb
+    )
     assert UPB_DAPRO in upb and UPB_DAPRO not in lpb
     assert POWER_REACH in lpb and POWER_REACH in upb
     assert LPB_ORACLE in lpb and LPB_ORACLE not in upb

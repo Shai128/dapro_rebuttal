@@ -173,6 +173,17 @@ def test_construct_registers_all_a_weighted_lpb_variants():
         "_budget_crc_control_50_allocation"
         in names
     )
+    assert (
+        "calibration_dapro_soft_prefix_bins_2_lpb_alpha_0p10_"
+        "global_0p001_projection_margin_1p00_n1_100_allocation"
+        in names
+    )
+    assert (
+        "calibration_dapro_soft_prefix_bins_2_lpb_alpha_0p10_"
+        "global_0p001_budget_crc_control_50_row_cap_2p00x_budget_"
+        "n1_100_allocation"
+        in names
+    )
     merge_names = {
         calibration.name
         for calibration in get_merge_calibration_methods(

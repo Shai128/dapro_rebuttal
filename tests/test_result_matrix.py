@@ -93,6 +93,15 @@ def test_n1_dependent_method_names_have_stable_labels():
         "n1_50_allocation"
     ) == "Generalized DAPRO + CRC"
     assert method_display_name(
+        "calibration_dapro_soft_prefix_bins_2_lpb_alpha_0p10_"
+        "global_0p001_projection_margin_1p00_n1_50_allocation"
+    ) == "Generalized DAPRO (soft LPB)"
+    assert method_display_name(
+        "calibration_dapro_soft_prefix_bins_2_lpb_alpha_0p10_"
+        "global_0p001_budget_crc_control_25_row_cap_2p00x_budget_"
+        "n1_50_allocation"
+    ) == "Generalized DAPRO (soft LPB) + CRC"
+    assert method_display_name(
         "calibration_oracle_split_full_budget_allocation"
     ) == "Full budget (calibration)"
     assert method_display_name(

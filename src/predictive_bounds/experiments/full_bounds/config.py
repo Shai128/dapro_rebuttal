@@ -172,6 +172,14 @@ LPB_DAPRO = (
     "calibration_dapro_variance_aligned_bins_2_alpha_0p10_global_0p001_"
     "budget_crc_control_100_row_cap_2p00x_budget_n1_200_allocation"
 )
+GENERALIZED_LPB_DAPRO = (
+    "calibration_dapro_soft_prefix_bins_2_lpb_alpha_0p10_global_0p001_"
+    "projection_margin_1p00_n1_200_allocation"
+)
+GENERALIZED_LPB_CRC_DAPRO = (
+    "calibration_dapro_soft_prefix_bins_2_lpb_alpha_0p10_global_0p001_"
+    "budget_crc_control_100_row_cap_2p00x_budget_n1_200_allocation"
+)
 UPB_DAPRO = (
     "calibration_dapro_upb_variance_aligned_bins_2_alpha_0p70_global_0p001_"
     "budget_crc_control_100_row_cap_2p00x_budget_n1_200_allocation"
@@ -199,6 +207,8 @@ METHOD_ORDER = (
     "Legacy DAPRO + CRC",
     "Target-A DAPRO + CRC",
     "DAPRO + CRC",
+    "Generalized DAPRO (soft LPB)",
+    "Generalized DAPRO (soft LPB) + CRC",
     "DAPRO Oracle (split)",
     "DAPRO Oracle + CRC",
     "DAPRO Oracle (global)",
@@ -219,6 +229,8 @@ METHOD_DISPLAY = {
     LEGACY_CRC_DAPRO: "Legacy DAPRO + CRC",
     TARGET_A_CRC_DAPRO: "Target-A DAPRO + CRC",
     LPB_DAPRO: "DAPRO + CRC",
+    GENERALIZED_LPB_DAPRO: "Generalized DAPRO (soft LPB)",
+    GENERALIZED_LPB_CRC_DAPRO: "Generalized DAPRO (soft LPB) + CRC",
     UPB_DAPRO: "DAPRO + CRC",
     SPLIT_DAPRO_ORACLE: "DAPRO Oracle (split)",
     CRC_DAPRO_ORACLE: "DAPRO Oracle + CRC",
@@ -237,6 +249,8 @@ METHOD_COLORS = {
     "Legacy DAPRO + CRC": "#c45a00",
     "Target-A DAPRO + CRC": "#007f8b",
     "DAPRO + CRC": "#006d2c",
+    "Generalized DAPRO (soft LPB)": "#665191",
+    "Generalized DAPRO (soft LPB) + CRC": "#d45087",
     "DAPRO Oracle (split)": "#e377c2",
     "DAPRO Oracle + CRC": "#7f3c8d",
     "DAPRO Oracle (global)": "#11a579",
@@ -259,6 +273,8 @@ def calibration_names(bound_type: str) -> tuple[str, ...]:
     ]
     if bound_type == "lpb":
         methods[-1:-1] = [
+            GENERALIZED_LPB_DAPRO,
+            GENERALIZED_LPB_CRC_DAPRO,
             SPLIT_DAPRO_ORACLE,
             CRC_DAPRO_ORACLE,
             GLOBAL_DAPRO_ORACLE,
