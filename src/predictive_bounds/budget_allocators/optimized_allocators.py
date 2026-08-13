@@ -19,12 +19,21 @@ class OptimizedBudgetAllocator(BudgetAllocator):
                         quantile_est: torch.Tensor) -> BudgetAllocationResult:
         self.cal_size = len(probability_est)
 
-        prior_quantile_est = get_prior(quantile_est, self.taus_range, self.tau_prior)
+        prior_quantile_est = get_prior(
+            quantile_est, self.taus_range, self.tau_prior
+        ).clamp(max=self.max_estimator)
 
         device = probability_est.device
         trimmed_prior_quantile_est = torch.minimum(prior_quantile_est,
                                                    self.max_estimator * torch.ones_like(prior_quantile_est))
-        trimmed_quantile_est = torch.minimum(quantile_est, self.max_estimator * torch.ones_like(quantile_est))
+        trimmed_quantile_est = torch.where(
+            quantile_est == self.max_estimator + 1,
+            quantile_est,
+            torch.minimum(
+                quantile_est,
+                self.max_estimator * torch.ones_like(quantile_est),
+            ),
+        )
         C_probs, _ = solve_optimization(trimmed_prior_quantile_est.cpu().detach().numpy(),
                                         self.budget_per_sample * len(prior_quantile_est), tol=1e-8)
         C_probs = torch.Tensor(C_probs).to(device)
@@ -80,6 +89,13 @@ class OptimizedBudgetAllocator(BudgetAllocator):
             C_probs,
             total_budget_used=total_budget_used,
             additional_metrics=additional_metrics,
+            candidate_C_probs=torch.where(
+                trimmed_quantile_est == self.max_estimator + 1,
+                torch.ones_like(trimmed_quantile_est, dtype=torch.float64),
+                C_probs.to(torch.float64).reshape(-1, 1).expand_as(
+                    trimmed_quantile_est
+                ),
+            ),
         )
 
     @property

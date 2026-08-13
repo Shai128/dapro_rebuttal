@@ -450,7 +450,7 @@ def metric_experiment_name(
     the signature for compatibility with existing callers.
     """
     budget_label = f"{float(budget_per_sample):g}"
-    name = f"{dataset_name}_{data_setup}_{budget_label}_metric_estimation"
+    name = f"{dataset_name}_{data_setup}_{budget_label}_m"
     return f"{name}_{experiment_suffix}" if experiment_suffix else name
 
 
@@ -495,6 +495,7 @@ def run_experiments(
         exclude_legacy_dapro=False,
         exclude_locally_adaptive=False,
         allocator_names=None,
+        include_dapro_comparison=False,
 ):
     taus_range = torch.tensor(np.arange(0.01, 1.0, 0.01)).to(device)
     m_upper_bound = 200 if is_real else 20
@@ -533,6 +534,7 @@ def run_experiments(
             crc_control_size=crc_control_size,
             include_legacy_dapro=not exclude_legacy_dapro,
             include_locally_adaptive=not exclude_locally_adaptive,
+            include_dapro_comparison=include_dapro_comparison,
         )
         if allocator_names is not None:
             requested = set(allocator_names)
@@ -619,6 +621,14 @@ def main():
             'methods.'
         ),
     )
+    parser.add_argument(
+        '--include-dapro-comparison',
+        action='store_true',
+        help=(
+            'Add hard Target-A and regularized Definitive DAPRO, with and '
+            'without corrected causal shared-PAV CRC, to the metric registry.'
+        ),
+    )
     parser.add_argument('--overwrite', action='store_true')
     args = parser.parse_args()
 
@@ -647,7 +657,8 @@ def main():
                     tau_prior=args.tau_prior,
                     exclude_legacy_dapro=args.exclude_legacy_dapro,
                     exclude_locally_adaptive=args.exclude_locally_adaptive,
-                    allocator_names=args.allocator_names)
+                    allocator_names=args.allocator_names,
+                    include_dapro_comparison=args.include_dapro_comparison)
     print("Finished Metrics Evaluation Suite.")
 
 

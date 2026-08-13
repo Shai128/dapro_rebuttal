@@ -27,7 +27,9 @@ from src.predictive_bounds.budget_allocators.DAPRO import (
     RegularizedTargetAWeightedDAPRO,
     RobustTargetAWeightedDAPRO,
     SoftTargetCRCDAPRO,
+    SoftTargetCRCUPBDAPRO,
     SoftTargetDAPRO,
+    SoftTargetUPBDAPRO,
     TargetAWeightedDAPRO,
 )
 from src.predictive_bounds.budget_allocators.random_adaptive_optimized_allocator import (
@@ -35,9 +37,21 @@ from src.predictive_bounds.budget_allocators.random_adaptive_optimized_allocator
     RandomAdaptiveOptimizedBudgetAllocator,
 )
 from src.predictive_bounds.budget_allocators.trimmed_allocator import TrimmedBudgetAllocator
-from src.predictive_bounds.calibration.abstract_calibration import SurvivalLPBCalibration
-from src.predictive_bounds.calibration.dummy_calibration import UncalibratedLPBSurvivalCalibration
+from src.predictive_bounds.calibration.abstract_calibration import (
+    SurvivalLPBCalibration,
+    SurvivalUPBCalibration,
+)
+from src.predictive_bounds.calibration.dummy_calibration import (
+    UncalibratedLPBSurvivalCalibration,
+    UncalibratedUPBSurvivalCalibration,
+)
+from src.predictive_bounds.calibration.oracle_survival_calibration import (
+    OracleSurvivalUPBCalibration,
+)
 from src.predictive_bounds.calibration.survival_calibration_with_known_weights import SurvivalCalibrationWithKnownWeights
+from src.predictive_bounds.calibration.survival_upb_calibration_with_known_weights import (
+    SurvivalUPBCalibrationWithKnownWeights,
+)
 from src.predictive_bounds.reward_functions.reward_by_probability import RewardByProbability
 from src.predictive_bounds.reward_functions.reward_by_probability_diff import RewardByProbabilityDiff
 from src.predictive_bounds.utils.get_best_params_utils import get_best_rexp3_params, get_best_discounted_ucb_params, \
@@ -49,8 +63,138 @@ from src.predictive_bounds.budget_allocators.full_budget_oracle_allocator import
 )
 from src.predictive_bounds.budget_allocators.metric_optimal_allocator import (
     MetricOptimalPMFAllocator,
+    MetricPrefixNeymanCRCAllocator,
+    MetricOptimalPooledTimeAllocator,
 )
 from typing import List
+
+
+def get_upb_calibrations(
+        conditional_grid,
+        budget_per_sample,
+        taus_range,
+        tau_prior,
+        m_upper_bound,
+        *,
+        dapro_n1_values=(200, 100, 50),
+        projection_budget_margin: float = 1.0,
+        target_coverage: float = 0.70,
+) -> List[SurvivalUPBCalibration]:
+    """Return the shared UPB construction/merge registry.
+
+    All ordinary allocation baselines are retained.  The only DAPRO family
+    instantiated is soft-prefix Generalized DAPRO, with its UPB coverage
+    target, both with the projection controller and with independent CRC.
+    The CRC variant intentionally uses no shared-PAV row cap.
+    """
+    reach = {"reach_t_max_is_success": True}
+    allocations: List[BudgetAllocator] = [
+        BasicBudgetAllocator(
+            budget_per_sample, taus_range, tau_prior
+        ),
+        TrimmedBudgetAllocator(
+            budget_per_sample, taus_range, tau_prior, m_upper_bound
+        ),
+        OptimizedBudgetAllocator(
+            budget_per_sample, taus_range, tau_prior, m_upper_bound
+        ),
+        AdaptiveOptimizedBudgetAllocator(
+            conditional_grid,
+            budget_per_sample,
+            taus_range,
+            tau_prior,
+            m_upper_bound,
+            **reach,
+        ),
+        AdaptiveOptimizedBudgetAllocator(
+            conditional_grid,
+            budget_per_sample,
+            taus_range,
+            tau_prior,
+            m_upper_bound,
+            terminal_pi_min=1.0 / float(m_upper_bound),
+            terminal_floor_mode="mixture",
+            **reach,
+        ),
+        AdaptiveOptimizedBudgetAllocator(
+            conditional_grid,
+            budget_per_sample,
+            taus_range,
+            tau_prior,
+            m_upper_bound,
+            terminal_pi_min=None,
+            terminal_floor_mode="none",
+            **reach,
+        ),
+        AdaptiveOptimizedBudgetAllocator(
+            conditional_grid,
+            budget_per_sample,
+            taus_range,
+            tau_prior,
+            m_upper_bound,
+            budget_control_mode="crc",
+            **reach,
+        ),
+        RandomAdaptiveOptimizedBudgetAllocator(
+            conditional_grid,
+            budget_per_sample,
+            taus_range,
+            tau_prior,
+            m_upper_bound,
+            **reach,
+        ),
+        ConstantCRCBudgetAllocator(
+            conditional_grid,
+            budget_per_sample,
+            taus_range,
+            tau_prior,
+            m_upper_bound,
+            **reach,
+        ),
+        RandomAdaptiveOptimizedBudgetAllocator(
+            conditional_grid,
+            budget_per_sample,
+            taus_range,
+            tau_prior,
+            m_upper_bound,
+            schedule_family="power_reach",
+            schedule_alpha=2.0,
+            budget_control_mode="crc",
+            **reach,
+        ),
+    ]
+    for n1 in dapro_n1_values:
+        allocations.append(SoftTargetUPBDAPRO(
+            conditional_grid,
+            budget_per_sample,
+            taus_range,
+            tau_prior,
+            m_upper_bound,
+            n1=n1,
+            target_coverage=target_coverage,
+            projection_budget_margin=projection_budget_margin,
+        ))
+        if n1 >= 2:
+            allocations.append(SoftTargetCRCUPBDAPRO(
+                conditional_grid,
+                budget_per_sample,
+                taus_range,
+                tau_prior,
+                m_upper_bound,
+                n1=n1,
+                budget_control_size=min(100, n1 // 2),
+                target_coverage=target_coverage,
+            ))
+    return [
+        UncalibratedUPBSurvivalCalibration(taus_range),
+        OracleSurvivalUPBCalibration(taus_range, tau_prior),
+        *[
+            SurvivalUPBCalibrationWithKnownWeights(
+                allocation, taus_range, tau_prior
+            )
+            for allocation in allocations
+        ],
+    ]
 
 
 def is_budget_sufficient_for_split(N, n1, total_budget, censored_event_time, prior_q):
@@ -596,15 +740,16 @@ def get_metric_allocators(
         crc_control_size=100,
         include_legacy_dapro=True,
         include_locally_adaptive=True,
+        include_dapro_comparison=False,
 ) -> List[BudgetAllocator]:
     """Return the exact server/local metric-estimation comparison.
 
     Shared methods are the intentional weighted/unweighted Uniform pair,
-    naive under-cost Static, no-split initial-PMF allocation, and the two
+    naive under-cost Static, no-split initial-PMF allocations, and the two
     full-budget oracle scopes. Configuration-specific methods are Constant +
-    CRC and soft-prefix Generalized DAPRO with and without CRC. Legacy,
-    Target-A, Definitive, PMF+CRC, and clairvoyant DAPRO oracles are excluded
-    from this production registry.
+    CRC, prefix-Neyman CRC, and soft-prefix Generalized DAPRO with and
+    without CRC. Legacy, Target-A, Definitive, personalized PMF+CRC, and
+    clairvoyant DAPRO oracles are excluded from this production registry.
     """
     del (
         device,
@@ -653,6 +798,26 @@ def get_metric_allocators(
             tau_prior,
             m_upper_bound,
         ),
+        # The same variance objective restricted to one shared, time-varying
+        # cumulative-reach schedule.  This is a simple O(NM), no-split,
+        # model-budget alternative to DAPRO.
+        MetricOptimalPooledTimeAllocator(
+            budget_per_sample,
+            taus_range,
+            tau_prior,
+            m_upper_bound,
+        ),
+        # A closed-form current-prefix value/cost index.  CRC selects only one
+        # global scale; no score bins or DAPRO coordinate optimization are fit.
+        MetricPrefixNeymanCRCAllocator(
+            conditional_grid,
+            budget_per_sample,
+            taus_range,
+            tau_prior,
+            m_upper_bound,
+            control_size=crc_control_size,
+            row_cost_cap_multiplier=2.0,
+        ),
         # Generalized DAPRO: identical soft-prefix metric objective with an
         # assumption-based projection controller or an independent CRC fold.
         SoftTargetDAPRO(
@@ -675,4 +840,47 @@ def get_metric_allocators(
         # Fixed truth over the complete calibration+test union.
         FullBudgetOracleAllocator(taus_range, tau_prior, m_upper_bound),
     ]
+    if include_dapro_comparison:
+        comparison = [
+            TargetAWeightedDAPRO(
+                **common,
+                n1=dapro_n1,
+                projection="direct_bins_2",
+                score="prob",
+                anchor_kind="raw_alpha",
+                target_alpha=0.10,
+                metric_estimation_horizon=m_upper_bound,
+            ),
+            DefinitiveDAPRO(
+                **common,
+                n1=dapro_n1,
+                metric_estimation_horizon=m_upper_bound,
+                projection_budget_margin=1.0,
+            ),
+            TargetAWeightedDAPRO(
+                **common,
+                n1=dapro_n1,
+                projection="direct_bins_2",
+                score="prob",
+                anchor_kind="raw_alpha",
+                target_alpha=0.10,
+                metric_estimation_horizon=m_upper_bound,
+                projection_budget_margin=0.0,
+                budget_control_mode="crc",
+                budget_control_size=crc_control_size,
+                risk_candidate_row_cost_cap=(
+                    2.0 * budget_per_sample
+                ),
+            ),
+            DefinitiveCRCDAPRO(
+                **common,
+                n1=dapro_n1,
+                metric_estimation_horizon=m_upper_bound,
+                budget_control_size=crc_control_size,
+                row_cost_cap_multiplier=2.0,
+            ),
+        ]
+        # Soft projection/CRC variants are already in the main registry.
+        allocators[7:7] = comparison[:2]
+        allocators[-2:-2] = comparison[2:]
     return allocators

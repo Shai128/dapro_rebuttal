@@ -3,6 +3,7 @@ import numpy as np
 from src.predictive_bounds.budget_allocators.budget_allocator import (
     BudgetAllocationResult,
     BudgetAllocator,
+    candidate_reach_probabilities,
     summarize_expected_budget,
 )
 from src.predictive_bounds.budget_allocators.dapro_projection_metrics import (
@@ -16,6 +17,10 @@ from src.predictive_bounds.budget_allocators.optimization_solver_utils import (
     solve_binned_deployable_policy,
     solve_exact_fast,
     solve_time_only_cumulative_policy,
+)
+from src.predictive_bounds.budget_allocators.metric_optimal_allocator import (
+    antitonic_pav_bases,
+    solve_common_scale,
 )
 from src.predictive_bounds.budget_allocators.projected_optimization_utils import adaptive_budget_allocation, \
     construct_final_result, split_to_two_sets, project_to_test_platt, project_to_test_ir, project_to_test_beta, \
@@ -33,11 +38,343 @@ from src.predictive_bounds.calibration.calibration_utils import (
     get_prior,
     quantiles_to_interaction_counts,
     select_calibration_positions,
+    select_upb_calibration_positions,
 )
 
 import torch
 
 from src.predictive_bounds.survival_utils.compute_mean_time_given_pmf import compute_quantile_survival_time
+
+
+CAUSAL_SHARED_PAV_CAP_VERSION = "causal_shared_pav_v1"
+
+
+def _apply_causal_cumulative_row_cost_cap(
+        base_conditionals: torch.Tensor,
+        row_prior_q: torch.Tensor,
+        row_cost_cap: float,
+        terminal_pi_min: float,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Cap every cumulative-reach path without looking into its future.
+
+    A row-local affine contraction chosen from the *full* cumulative path is
+    not deployable for a history-adaptive policy: its first-turn probability
+    changes when an as-yet-unobserved future score changes.  This projection
+    instead maintains an excess-reach token bucket.  At turn ``t`` it spends
+    as much of the remaining bucket as the base cumulative reach requests,
+    and therefore depends only on the base path through ``t``.
+
+    If ``q_i`` is the known acquisition horizon and ``epsilon`` is the
+    terminal propensity floor, the initial bucket is
+
+        row_cost_cap - epsilon * q_i.
+
+    Consequently every possible future path satisfies
+
+        sum_{t <= q_i} rho_it <= row_cost_cap,
+
+    while cumulative reach stays non-increasing, no larger than the base
+    path, and at least ``epsilon``.  The returned Boolean vector identifies
+    rows whose active cumulative path was changed.
+    """
+    probabilities = base_conditionals.to(torch.float64)
+    if probabilities.ndim != 2:
+        raise ValueError("`base_conditionals` must be a matrix.")
+    if not bool(torch.isfinite(probabilities).all()):
+        raise ValueError("Base continuation probabilities must be finite.")
+    if bool(((probabilities < 0) | (probabilities > 1)).any()):
+        raise ValueError("Base continuation probabilities must lie in [0, 1].")
+    if not np.isfinite(row_cost_cap) or row_cost_cap <= 0:
+        raise ValueError("`row_cost_cap` must be finite and positive.")
+    if not 0 < terminal_pi_min <= 1:
+        raise ValueError("`terminal_pi_min` must lie in (0, 1].")
+
+    row_q = row_prior_q.to(
+        device=probabilities.device,
+        dtype=torch.long,
+    ).reshape(-1).clamp(min=0, max=probabilities.shape[1])
+    if len(row_q) != len(probabilities):
+        raise ValueError("`row_prior_q` must have one value per policy row.")
+
+    base_cumulative = probabilities.cumprod(dim=1)
+    active = (
+        torch.arange(
+            probabilities.shape[1],
+            device=probabilities.device,
+        ).unsqueeze(0)
+        < row_q.unsqueeze(1)
+    )
+    if bool((base_cumulative[active] < terminal_pi_min - 1e-10).any()):
+        raise ValueError(
+            "The active base cumulative path must respect the terminal floor."
+        )
+    floor_cost = terminal_pi_min * row_q.to(torch.float64)
+    if torch.any(floor_cost > row_cost_cap + 1e-10):
+        raise ValueError(
+            "The terminal floor is incompatible with the risk-candidate "
+            "row cost cap."
+        )
+
+    remaining_excess = (row_cost_cap - floor_cost).clamp_min(0.0)
+    capped_cumulative = torch.ones_like(base_cumulative)
+    previous = torch.ones(
+        len(probabilities),
+        dtype=torch.float64,
+        device=probabilities.device,
+    )
+    for step in range(probabilities.shape[1]):
+        active = step < row_q
+        desired_excess = (
+            base_cumulative[:, step] - terminal_pi_min
+        ).clamp_min(0.0)
+        spent = torch.minimum(desired_excess, remaining_excess)
+        current = terminal_pi_min + spent
+        current = torch.minimum(current, previous)
+        current = torch.minimum(current, base_cumulative[:, step])
+        current = torch.where(active, current, torch.ones_like(current))
+        capped_cumulative[:, step] = current
+        active_spent = torch.where(
+            active,
+            (current - terminal_pi_min).clamp_min(0.0),
+            torch.zeros_like(current),
+        )
+        remaining_excess = (remaining_excess - active_spent).clamp_min(0.0)
+        previous = torch.where(active, current, previous)
+
+    time = torch.arange(
+        probabilities.shape[1],
+        device=probabilities.device,
+    ).unsqueeze(0)
+    active = time < row_q.unsqueeze(1)
+    previous_cumulative = torch.cat(
+        [
+            torch.ones(
+                (len(probabilities), 1),
+                dtype=torch.float64,
+                device=probabilities.device,
+            ),
+            capped_cumulative[:, :-1],
+        ],
+        dim=1,
+    )
+    capped_conditionals = (
+        capped_cumulative
+        / previous_cumulative.clamp_min(torch.finfo(torch.float64).tiny)
+    ).clamp(max=1.0)
+    capped_conditionals = torch.where(
+        active,
+        capped_conditionals,
+        torch.ones_like(capped_conditionals),
+    )
+    changed = (
+        (capped_cumulative - torch.where(
+            active,
+            base_cumulative,
+            torch.ones_like(base_cumulative),
+        )).abs() > 1e-10
+    ).any(dim=1)
+    return capped_conditionals, changed
+
+
+def _solve_shared_causal_row_cap_envelope(
+        active_lengths: torch.Tensor,
+        row_cost_cap: float,
+        terminal_pi_min: float,
+        width: int,
+        *,
+        objective_weights: torch.Tensor | np.ndarray | None = None,
+        objective_masses: torch.Tensor | np.ndarray | None = None,
+) -> tuple[torch.Tensor, dict]:
+    """Fit the target-optimal shared full-horizon CRC cap envelope.
+
+    The envelope is learned only from the policy-fit objective coefficients.
+    It minimizes their pooled inverse-reach objective subject to a worst-path
+    horizon-cost cap.  Taking the pointwise minimum of a causal base path and
+    this frozen envelope remains causal and gives every candidate the support
+    bound required by CRC.
+    """
+    lengths = np.asarray(
+        active_lengths.detach().cpu(),
+        dtype=np.int64,
+    ).reshape(-1)
+    if np.any(lengths < 0) or np.any(lengths > width):
+        raise ValueError("Active lengths must lie in the envelope width.")
+    if objective_weights is not None and objective_masses is not None:
+        raise ValueError(
+            "Pass either envelope objective weights or masses, not both."
+        )
+    if objective_masses is not None:
+        masses = np.asarray(
+            (
+                objective_masses.detach().cpu()
+                if torch.is_tensor(objective_masses)
+                else objective_masses
+            ),
+            dtype=np.float64,
+        )
+        if masses.shape != (len(lengths), width):
+            raise ValueError("Envelope objective masses have the wrong shape.")
+        active = np.arange(width)[None, :] < lengths[:, None]
+        masses = masses * active
+    else:
+        weights = np.ones(len(lengths), dtype=np.float64)
+        if objective_weights is not None:
+            weights = np.asarray(
+                (
+                    objective_weights.detach().cpu()
+                    if torch.is_tensor(objective_weights)
+                    else objective_weights
+                ),
+                dtype=np.float64,
+            ).reshape(-1)
+        if weights.shape != (len(lengths),):
+            raise ValueError("Envelope objective weights have the wrong shape.")
+        masses = np.zeros((len(lengths), width), dtype=np.float64)
+        positive = lengths > 0
+        masses[np.flatnonzero(positive), lengths[positive] - 1] = (
+            weights[positive]
+        )
+    if not np.all(np.isfinite(masses)) or np.any(masses < 0):
+        raise ValueError("Envelope objective masses must be nonnegative.")
+
+    pooled_mass = masses.mean(axis=0, keepdims=True)
+    horizon_cost = np.ones_like(pooled_mass)
+    bases, block_counts = antitonic_pav_bases(
+        pooled_mass,
+        horizon_cost,
+    )
+    envelope, scale, boundary = solve_common_scale(
+        bases,
+        horizon_cost,
+        row_cost_cap,
+        terminal_pi_min,
+    )
+    return (
+        torch.as_tensor(
+            envelope[0],
+            dtype=torch.float64,
+            device=active_lengths.device,
+        ),
+        {
+            "risk_budget_row_cost_cap_envelope_scale": scale,
+            "risk_budget_row_cost_cap_envelope_boundary": boundary,
+            "risk_budget_row_cost_cap_envelope_pav_blocks": int(
+                block_counts[0]
+            ),
+            "risk_budget_row_cost_cap_envelope_horizon_cost": float(
+                envelope[0].sum()
+            ),
+        },
+    )
+
+
+def _apply_shared_cumulative_row_cost_envelope(
+        base_conditionals: torch.Tensor,
+        row_prior_q: torch.Tensor,
+        envelope: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Intersect a causal cumulative policy with a frozen shared envelope."""
+    probabilities = base_conditionals.to(torch.float64)
+    row_q = row_prior_q.to(
+        device=probabilities.device,
+        dtype=torch.long,
+    ).reshape(-1).clamp(min=0, max=probabilities.shape[1])
+    cap = envelope.to(
+        device=probabilities.device,
+        dtype=torch.float64,
+    ).reshape(-1)
+    if len(row_q) != len(probabilities) or len(cap) != probabilities.shape[1]:
+        raise ValueError("Policy rows, horizons, and envelope must agree.")
+    if not bool(torch.isfinite(cap).all()) or bool(((cap < 0) | (cap > 1)).any()):
+        raise ValueError("The cumulative envelope must lie in [0, 1].")
+    if bool((cap[1:] > cap[:-1] + 1e-12).any()):
+        raise ValueError("The cumulative envelope must be non-increasing.")
+
+    base_cumulative = probabilities.cumprod(dim=1)
+    active = (
+        torch.arange(
+            probabilities.shape[1],
+            device=probabilities.device,
+        ).unsqueeze(0)
+        < row_q.unsqueeze(1)
+    )
+    capped_cumulative = torch.minimum(base_cumulative, cap.unsqueeze(0))
+    capped_cumulative = torch.where(
+        active,
+        capped_cumulative,
+        torch.ones_like(capped_cumulative),
+    )
+    previous = torch.cat(
+        [
+            torch.ones(
+                (len(probabilities), 1),
+                dtype=torch.float64,
+                device=probabilities.device,
+            ),
+            capped_cumulative[:, :-1],
+        ],
+        dim=1,
+    )
+    capped_conditionals = (capped_cumulative / previous.clamp_min(
+        torch.finfo(torch.float64).tiny
+    )).clamp(max=1.0)
+    capped_conditionals = torch.where(
+        active,
+        capped_conditionals,
+        torch.ones_like(capped_conditionals),
+    )
+    changed = (
+        (capped_cumulative - torch.where(
+            active,
+            base_cumulative,
+            torch.ones_like(base_cumulative),
+        )).abs() > 1e-10
+    ).any(dim=1)
+    return capped_conditionals, changed
+
+
+def _mean_soft_mass_variance_proxy(
+        objective_masses: torch.Tensor | np.ndarray,
+        conditional_probabilities: torch.Tensor | np.ndarray,
+) -> float:
+    """Evaluate the prefix-mass variance proxy under a fixed policy.
+
+    For cumulative reach ``rho_it = prod_{s<=t} p_is``, this returns
+
+        mean_i sum_t m_it * (1 / rho_it - 1).
+
+    This is the exact objective optimized when DAPRO receives
+    ``objective_masses``.  Keeping it separate from terminal hard-weight
+    diagnostics prevents the soft objective from being mislabeled as the
+    legacy endpoint proxy.
+    """
+    masses = torch.as_tensor(objective_masses, dtype=torch.float64)
+    conditionals = torch.as_tensor(
+        conditional_probabilities,
+        dtype=torch.float64,
+        device=masses.device,
+    )
+    if masses.ndim != 2 or conditionals.shape != masses.shape:
+        raise ValueError(
+            "Soft objective masses and policy conditionals must be matrices "
+            "with the same shape."
+        )
+    if not bool(torch.isfinite(masses).all()) or bool((masses < 0).any()):
+        raise ValueError("Soft objective masses must be finite and nonnegative.")
+    if (
+            not bool(torch.isfinite(conditionals).all())
+            or bool(((conditionals < 0) | (conditionals > 1)).any())
+    ):
+        raise ValueError("Policy conditionals must lie in [0, 1].")
+    if len(masses) == 0:
+        return np.nan
+    cumulative_reach = conditionals.cumprod(dim=1).clamp_min(
+        torch.finfo(torch.float64).tiny
+    )
+    row_proxy = (
+        masses * (cumulative_reach.reciprocal() - 1.0)
+    ).sum(dim=1)
+    return float(row_proxy.mean().item())
 
 
 class LegacyMeanWeightDAPRO(BudgetAllocator):
@@ -208,6 +545,7 @@ class LegacyMeanWeightDAPRO(BudgetAllocator):
             )
             formatted = f"{multiplier:.2f}".replace(".", "p")
             suffix += f"_row_cap_{formatted}x_budget"
+            suffix += f"_{CAUSAL_SHARED_PAV_CAP_VERSION}"
         return suffix
 
     @property
@@ -252,6 +590,21 @@ class LegacyMeanWeightDAPRO(BudgetAllocator):
             quantile_est,
         )
 
+    def phase2_objective_masses(
+            self,
+            event_times: torch.Tensor,
+            prior_q: torch.Tensor,
+            quantile_est: torch.Tensor,
+            conditional_grid: torch.Tensor,
+    ) -> torch.Tensor | None:
+        """Audit frozen Phase-I soft coefficients on the Phase-II rows."""
+        return self.phase1_objective_masses(
+            event_times,
+            prior_q,
+            quantile_est,
+            conditional_grid,
+        )
+
     def phase2_target_indicator(
             self,
             event_times: torch.Tensor,
@@ -272,7 +625,11 @@ class LegacyMeanWeightDAPRO(BudgetAllocator):
                         quantile_est: torch.Tensor) -> BudgetAllocationResult:
         device = self.conditional_grid.device
         N, T_max_curr, T_max_future = self.conditional_grid.shape
-        prior_q = get_prior(quantile_est, self.taus_range, self.tau_prior)
+        # Quantile value width+1 is the UPB infinity/no-event sentinel.  It is
+        # a valid prediction target but not an executable acquisition turn.
+        prior_q = get_prior(
+            quantile_est, self.taus_range, self.tau_prior
+        ).clamp(max=T_max_curr)
         if self.score == 'prob':
             scores = self.conditional_grid[:, torch.arange(0, T_max_curr), torch.arange(0, T_max_curr)]
         elif self.score == 'quantile':
@@ -328,6 +685,7 @@ class LegacyMeanWeightDAPRO(BudgetAllocator):
         solver_policy_fit_weights = (
             None if policy_fit_masses is not None else policy_fit_weights
         )
+        raw_policy_fit_conditionals = None
         policy_shape_budget_per_sample = (
             target_budget_avg - self.projection_budget_margin
         )
@@ -742,6 +1100,7 @@ class LegacyMeanWeightDAPRO(BudgetAllocator):
                     direct_bin_count,
                     objective_masses=policy_fit_masses,
                 )
+                raw_policy_fit_conditionals = optimal_fit
                 fit_raw_cumulative = p_fit_binned.cumprod(dim=1)
                 remaining_raw_cumulative = (
                     p_remaining_binned.cumprod(dim=1)
@@ -763,6 +1122,9 @@ class LegacyMeanWeightDAPRO(BudgetAllocator):
                 row_cap_metrics = {
                     "risk_budget_row_cost_cap_enabled": 0,
                     "risk_budget_row_cost_cap_per_sample": np.nan,
+                    "risk_budget_row_cost_cap_kind": "none",
+                    "risk_budget_row_cost_cap_policy_version": "none",
+                    "risk_budget_row_cost_cap_uses_future_prefixes": 0,
                     "risk_budget_row_cost_cap_fit_changed_fraction": 0.0,
                     "risk_budget_row_cost_cap_remaining_changed_fraction": (
                         0.0
@@ -770,111 +1132,53 @@ class LegacyMeanWeightDAPRO(BudgetAllocator):
                 }
                 if self.risk_candidate_row_cost_cap is not None:
                     row_cost_cap = self.risk_candidate_row_cost_cap
-
-                    def apply_row_cost_cap(
-                            base_conditionals: torch.Tensor,
-                            row_prior_q: torch.Tensor,
-                    ) -> tuple[torch.Tensor, torch.Tensor]:
-                        base_cumulative = base_conditionals.cumprod(dim=1)
-                        row_q = row_prior_q.to(
-                            device=base_cumulative.device,
-                            dtype=torch.long,
-                        ).reshape(-1).clamp(min=0, max=T_max_curr)
-                        active = (
-                            torch.arange(
-                                T_max_curr,
-                                device=base_cumulative.device,
-                            ).unsqueeze(0)
-                            < row_q.unsqueeze(1)
+                    envelope, envelope_metrics = (
+                        _solve_shared_causal_row_cap_envelope(
+                            val_max_steps[:policy_fit_count],
+                            row_cost_cap,
+                            self.terminal_pi_min,
+                            T_max_curr,
+                            objective_weights=solver_policy_fit_weights,
+                            objective_masses=policy_fit_masses,
                         )
-                        raw_cost = (
-                            base_cumulative * active.to(torch.float64)
-                        ).sum(dim=1)
-                        floor_cost = self.terminal_pi_min * row_q.to(
-                            torch.float64
+                    )
+                    p_fit_base, fit_cap_changed = (
+                        _apply_shared_cumulative_row_cost_envelope(
+                            p_fit_base,
+                            val_prior_q[:policy_fit_count],
+                            envelope,
                         )
-                        if torch.any(floor_cost > row_cost_cap + 1e-10):
-                            raise ValueError(
-                                "The terminal floor is incompatible with the "
-                                "risk-candidate row cost cap."
-                            )
-                        denominator = (raw_cost - floor_cost).clamp_min(
-                            torch.finfo(torch.float64).tiny
-                        )
-                        coefficient = torch.where(
-                            raw_cost > row_cost_cap,
-                            (
-                                (row_cost_cap - floor_cost) / denominator
-                            ).clamp(0.0, 1.0),
-                            torch.ones_like(raw_cost),
-                        )
-                        capped_cumulative = (
-                            self.terminal_pi_min
-                            + coefficient.unsqueeze(1)
-                            * (base_cumulative - self.terminal_pi_min)
-                        )
-                        capped_cumulative = torch.where(
-                            active,
-                            capped_cumulative,
-                            torch.ones(
-                                (),
-                                dtype=torch.float64,
-                                device=base_cumulative.device,
-                            ),
-                        )
-                        previous = torch.cat(
-                            [
-                                torch.ones(
-                                    (len(base_cumulative), 1),
-                                    dtype=torch.float64,
-                                    device=base_cumulative.device,
-                                ),
-                                capped_cumulative[:, :-1],
-                            ],
-                            dim=1,
-                        )
-                        capped_conditionals = (
-                            capped_cumulative
-                            / previous.clamp_min(
-                                torch.finfo(torch.float64).tiny
-                            )
-                        ).clamp(max=1.0)
-                        capped_conditionals = torch.where(
-                            active,
-                            capped_conditionals,
-                            torch.ones(
-                                (),
-                                dtype=torch.float64,
-                                device=base_cumulative.device,
-                            ),
-                        )
-                        return capped_conditionals, coefficient
-
-                    p_fit_base, fit_cap_coefficient = apply_row_cost_cap(
-                        p_fit_base,
-                        val_prior_q[:policy_fit_count],
                     )
                     (
                         p_remaining_base,
-                        remaining_cap_coefficient,
-                    ) = apply_row_cost_cap(
+                        remaining_cap_changed,
+                    ) = _apply_shared_cumulative_row_cost_envelope(
                         p_remaining_base,
                         remaining_prior_q,
+                        envelope,
                     )
                     row_cap_metrics = {
                         "risk_budget_row_cost_cap_enabled": 1,
                         "risk_budget_row_cost_cap_per_sample": row_cost_cap,
+                        "risk_budget_row_cost_cap_kind": (
+                            "causal_shared_target_pav_envelope"
+                        ),
+                        "risk_budget_row_cost_cap_policy_version": (
+                            CAUSAL_SHARED_PAV_CAP_VERSION
+                        ),
+                        "risk_budget_row_cost_cap_uses_future_prefixes": 0,
                         (
                             "risk_budget_row_cost_cap_fit_changed_fraction"
-                        ): float((fit_cap_coefficient < 1).to(
+                        ): float(fit_cap_changed.to(
                             torch.float64
                         ).mean().item()),
                         (
                             "risk_budget_row_cost_cap_remaining_changed_"
                             "fraction"
-                        ): float((remaining_cap_coefficient < 1).to(
+                        ): float(remaining_cap_changed.to(
                             torch.float64
                         ).mean().item()),
+                        **envelope_metrics,
                     }
 
                 base_remaining_cumulative = p_remaining_base.cumprod(dim=1)
@@ -926,8 +1230,8 @@ class LegacyMeanWeightDAPRO(BudgetAllocator):
                     ),
                     "deployment_sample_count": len(test_idxs),
                     "maximum_cost_per_sample": T_max_curr,
-                    # The score-bin map is data adaptive.  Without an
-                    # additional row-local cap, its distribution-free support
+                    # The score-bin map is data adaptive.  Without the frozen
+                    # shared causal envelope, its distribution-free support
                     # bound is the full horizon even when observed rows are
                     # much cheaper.
                     "maximum_candidate_cost_per_sample": (
@@ -1141,6 +1445,7 @@ class LegacyMeanWeightDAPRO(BudgetAllocator):
                     direct_bin_count,
                     objective_masses=policy_fit_masses,
                 )
+                raw_policy_fit_conditionals = optimal_P
                 projected_probabilities = torch.cat(
                     [
                         p_val_binned.cumprod(dim=1),
@@ -1159,6 +1464,7 @@ class LegacyMeanWeightDAPRO(BudgetAllocator):
                     terminal_pi_min=None,
                     verbose=False,
                 )
+                raw_policy_fit_conditionals = optimal_P
                 optimal_P[optimal_P == 0] = 1
                 projection_targets = torch.cat(
                     [val_scores, test_scores],
@@ -1311,6 +1617,93 @@ class LegacyMeanWeightDAPRO(BudgetAllocator):
             if phase2_weights is None
             else phase2_weights.detach().cpu().numpy().astype(np.float64)
         )
+
+        # The legacy objective columns below intentionally retain their
+        # terminal hard-weight semantics.  SoftTargetDAPRO instead optimizes
+        # prefix masses, so report that exact variance proxy under three
+        # clearly separated policies without repurposing any existing field.
+        if policy_fit_masses is None:
+            phase1_selected_masses = None
+            phase2_frozen_masses = None
+        else:
+            phase1_selected_masses = self.phase1_objective_masses(
+                t_val,
+                val_prior_q,
+                val_quantile_est,
+                val_grid,
+            )
+            phase2_frozen_masses = self.phase2_objective_masses(
+                t_test,
+                test_prior_q,
+                test_quantile_est,
+                test_grid,
+            )
+
+        soft_mass_raw_available = int(
+            policy_fit_masses is not None
+            and raw_policy_fit_conditionals is not None
+        )
+        soft_mass_selected_available = int(
+            phase1_selected_masses is not None
+        )
+        soft_mass_phase2_available = int(
+            phase2_frozen_masses is not None
+        )
+        soft_mass_diagnostics = {
+            "soft_mass_variance_proxy_available": int(
+                soft_mass_raw_available
+                and soft_mass_selected_available
+                and soft_mass_phase2_available
+            ),
+            "soft_mass_variance_proxy_semantics": (
+                "mean_rows_sum_prefix_mass_times_inverse_cumulative_reach_"
+                "minus_one"
+                if policy_fit_masses is not None
+                else "unavailable_no_prefix_objective_masses"
+            ),
+            "soft_mass_phase1_raw_policy_fit_available": (
+                soft_mass_raw_available
+            ),
+            "soft_mass_phase1_raw_policy_fit_sample_count": (
+                policy_fit_count if soft_mass_raw_available else 0
+            ),
+            "soft_mass_phase1_raw_policy_fit_mean_variance_proxy": (
+                _mean_soft_mass_variance_proxy(
+                    policy_fit_masses,
+                    raw_policy_fit_conditionals,
+                )
+                if soft_mass_raw_available
+                else np.nan
+            ),
+            "soft_mass_phase1_selected_full_fold_available": (
+                soft_mass_selected_available
+            ),
+            "soft_mass_phase1_selected_full_fold_sample_count": (
+                len(t_val) if soft_mass_selected_available else 0
+            ),
+            "soft_mass_phase1_selected_full_fold_mean_variance_proxy": (
+                _mean_soft_mass_variance_proxy(
+                    phase1_selected_masses,
+                    p_val,
+                )
+                if soft_mass_selected_available
+                else np.nan
+            ),
+            "soft_mass_phase2_frozen_policy_available": (
+                soft_mass_phase2_available
+            ),
+            "soft_mass_phase2_frozen_policy_sample_count": (
+                len(t_test) if soft_mass_phase2_available else 0
+            ),
+            "soft_mass_phase2_frozen_policy_mean_variance_proxy": (
+                _mean_soft_mass_variance_proxy(
+                    phase2_frozen_masses,
+                    p_test,
+                )
+                if soft_mass_phase2_available
+                else np.nan
+            ),
+        }
 
         val_obj = float(np.mean(1 / val_terminal_probability))
         val_obj2 = val_obj
@@ -1466,6 +1859,7 @@ class LegacyMeanWeightDAPRO(BudgetAllocator):
             'phase1_projected_budget_valid': valid_budget,
             'val_budget': val_budget,
             'objective_kind': self.objective_kind,
+            **soft_mass_diagnostics,
             'val_obj_semantics': 'mean_inverse_probability',
             'phase1_oracle_optimized_objective': (
                 phase1_oracle_optimized_objective
@@ -1741,7 +2135,25 @@ class LegacyMeanWeightDAPRO(BudgetAllocator):
                     **projection_metrics,
                 }
             )
-        return BudgetAllocationResult(quantile_est, final_C, final_C_probs, total_budget_used, additional_metrics=additional_metrics)
+        all_conditionals = torch.ones(
+            (N, T_max_curr), dtype=torch.float64, device=device
+        )
+        # Phase-I rows are fully observed by design, so their inclusion
+        # propensity for every finite candidate is one.
+        all_conditionals[test_idxs] = p_test.to(torch.float64)
+        candidate_C_probs = candidate_reach_probabilities(
+            all_conditionals,
+            quantile_est,
+            infinity_value=T_max_curr + 1,
+        )
+        return BudgetAllocationResult(
+            quantile_est,
+            final_C,
+            final_C_probs,
+            total_budget_used,
+            additional_metrics=additional_metrics,
+            candidate_C_probs=candidate_C_probs,
+        )
 
 
 class AWeightedDAPRO(LegacyMeanWeightDAPRO):
@@ -2098,11 +2510,7 @@ class RandomAnchoredTargetAWeightedDAPRO(TargetAWeightedDAPRO):
         )
         if self.fill_random_slack:
             base += "_random_slack_filled"
-        if self.budget_control_mode is not None:
-            base += (
-                f"_budget_{self.budget_control_mode}"
-                f"_control_{self.budget_control_size}"
-            )
+        base += self.budget_control_name_suffix
         if self.n1 != 100:
             base += f"_n1_{self.n1}"
         return base
@@ -2163,6 +2571,7 @@ class RobustTargetAWeightedDAPRO(TargetAWeightedDAPRO):
             f"projected_optimization_{self.projection}_{self.score}"
             f"_a_target_phase1_robust_raw_{gamma}_alpha_{alpha}"
         )
+        base += self.budget_control_name_suffix
         if self.n1 != 100:
             base += f"_n1_{self.n1}"
         return base
@@ -2309,6 +2718,7 @@ class RegularizedTargetAWeightedDAPRO(TargetAWeightedDAPRO):
             f"projected_optimization_{self.projection}_{self.score}"
             f"_a_target_{anchor}_regularized_global_{delta}_alpha_{alpha}"
         )
+        base += self.budget_control_name_suffix
         if self.n1 != 100:
             base += f"_n1_{self.n1}"
         return base
@@ -2454,6 +2864,7 @@ class DefinitiveDAPRO(RegularizedTargetAWeightedDAPRO):
             f"_global_{regularization}"
             f"_projection_margin_{margin}"
         )
+        base += self.budget_control_name_suffix
         return f"{base}_n1_{self.n1}"
 
     @property
@@ -2518,6 +2929,7 @@ class SoftTargetDAPRO(DefinitiveDAPRO):
             f"{target}_global_{regularization}"
             f"_projection_margin_{margin}"
         )
+        base += self.budget_control_name_suffix
         return f"{base}_n1_{self.n1}"
 
     @property
@@ -2583,11 +2995,14 @@ class DefinitiveCRCDAPRO(DefinitiveDAPRO):
 
     ``n1`` is the total number of fully observed rows.  The first
     ``n1-budget_control_size`` rows learn the target-weighted score-bin table;
-    the remaining rows are an independent budget-control fold.  A nested
-    affine contraction of cumulative reach toward the terminal floor is fixed
-    before the control labels are inspected.  CRC then selects the strongest
-    feasible contraction, giving a finite-sample marginal expected-total-
-    budget guarantee without a projection-accuracy assumption.
+    the remaining rows are an independent budget-control fold.  When enabled,
+    a shared cumulative PAV envelope is fitted from policy-fit objective
+    masses and frozen; pointwise intersection with each causal base path then
+    supplies the pathwise row-cost bound without future-prefix access.  A
+    nested affine contraction of that capped reach toward the terminal floor
+    is fixed before the control labels are inspected.  CRC then selects the
+    strongest feasible contraction, giving a finite-sample marginal expected-
+    total-budget guarantee without a projection-accuracy assumption.
     """
 
     DEFAULT_N1 = 200
@@ -2676,6 +3091,7 @@ class DefinitiveCRCDAPRO(DefinitiveDAPRO):
                 2,
             )
             base += f"_row_cap_{multiplier}x_budget"
+            base += f"_{CAUSAL_SHARED_PAV_CAP_VERSION}"
         return f"{base}_n1_{self.n1}"
 
     @property
@@ -2785,6 +3201,7 @@ class SoftTargetCRCDAPRO(SoftTargetDAPRO):
                 2,
             )
             base += f"_row_cap_{multiplier}x_budget"
+            base += f"_{CAUSAL_SHARED_PAV_CAP_VERSION}"
         return f"{base}_n1_{self.n1}"
 
     @property
@@ -2805,6 +3222,250 @@ class SoftTargetCRCDAPRO(SoftTargetDAPRO):
         return metadata
 
 
+class SoftTargetUPBDAPRO(SoftTargetDAPRO):
+    """Soft-prefix Generalized DAPRO for upper-bound coverage.
+
+    At the frozen nominal UPB anchor ``f_c`` the stochastic calibration
+    contribution is ``A_i=1{T_i<=f_c(X_i), f_c(X_i)<201}``.  Rows assigned
+    201 are already covered deterministically and therefore carry no target
+    acquisition variance.  The hard indicator is Rao--Blackwellized into
+    causal prefix-hazard mass before fitting the usual two-bin policy.
+    """
+
+    DEFAULT_TARGET_COVERAGE = 0.70
+    requires_unclipped_upb_quantiles = True
+
+    def __init__(
+            self,
+            conditional_grid,
+            budget_per_sample,
+            taus_range,
+            tau_prior,
+            m_upper_bound,
+            *,
+            target_coverage: float = DEFAULT_TARGET_COVERAGE,
+            **kwargs,
+    ):
+        if not 0 < target_coverage < 1:
+            raise ValueError("`target_coverage` must lie in (0, 1).")
+        self.target_coverage = float(target_coverage)
+        super().__init__(
+            conditional_grid,
+            budget_per_sample,
+            taus_range,
+            tau_prior,
+            m_upper_bound,
+            target_alpha=self.target_coverage,
+            reach_t_max_is_success=True,
+            **kwargs,
+        )
+
+    def _select_target_anchor(
+            self,
+            event_times: torch.Tensor,
+            quantile_est: torch.Tensor,
+    ) -> None:
+        prior_index = int(
+            torch.abs(self.taus_range - self.tau_prior).argmin().item()
+        )
+        candidates = quantile_est[:, :prior_index + 1]
+        # The nominal model quantile can be badly miscalibrated.  Select the
+        # UPB target on policy-fit outcomes, then freeze it before projection,
+        # the CRC fold, and Phase II.  This aligns the optimized A with the
+        # candidate the final UPB calibrator is likely to choose.
+        phase1_coverages = (
+            event_times.reshape(-1, 1).to(candidates.device) <= candidates
+        ).to(torch.float64).mean(dim=0)
+        selected = select_upb_calibration_positions(
+            phase1_coverages,
+            torch.tensor(
+                [self.target_coverage],
+                dtype=phase1_coverages.dtype,
+                device=phase1_coverages.device,
+            ),
+        )
+        self._target_anchor_index = int(selected.item())
+        self._target_anchor_selection_miscoverage = float(
+            1.0 - phase1_coverages[self._target_anchor_index].item()
+        )
+
+    def _weights_at_frozen_anchor(
+            self,
+            event_times: torch.Tensor,
+            prior_q: torch.Tensor,
+            quantile_est: torch.Tensor | None,
+    ) -> tuple[torch.Tensor, int]:
+        if quantile_est is None:
+            raise ValueError("UPB DAPRO requires candidate quantile estimates.")
+        if self._target_anchor_index is None:
+            raise RuntimeError("The UPB target anchor must be selected first.")
+        anchor_q = quantile_est[:, self._target_anchor_index]
+        finite = anchor_q < 201
+        tolerance = 1e-6
+        within_prior = bool(torch.all(
+            (~finite) | (
+                anchor_q.reshape(-1)
+                <= prior_q.reshape(-1).to(anchor_q.dtype) + tolerance
+            )
+        ).item())
+        if not within_prior:
+            raise ValueError(
+                "A finite UPB target anchor exceeds the executable prior."
+            )
+        weights = (
+            finite
+            & (event_times.reshape(-1) <= anchor_q.reshape(-1))
+        ).to(torch.float64)
+        return weights, int(within_prior)
+
+    def phase1_objective_masses(
+            self,
+            event_times: torch.Tensor,
+            prior_q: torch.Tensor,
+            quantile_est: torch.Tensor,
+            conditional_grid: torch.Tensor,
+    ) -> torch.Tensor:
+        if self._target_anchor_index is None:
+            self._select_target_anchor(event_times, quantile_est)
+        anchor_q = quantile_est[:, self._target_anchor_index]
+        active_lengths = torch.minimum(
+            event_times.reshape(-1).to(torch.long),
+            prior_q.reshape(-1).to(torch.long),
+        )
+        named = history_soft_objective_coefficients(
+            conditional_grid,
+            active_lengths,
+            anchor_q,
+            strict=False,
+            target_kind="upb_coverage_event",
+            global_regularization=0.0,
+        ).event_mass
+        named = np.asarray(named, dtype=np.float64)
+        # f=201 is deterministic coverage and has no target HT variance.
+        sentinel = np.asarray(
+            (anchor_q == 201).detach().cpu(), dtype=bool
+        )
+        named[sentinel] = 0.0
+        if self.global_regularization > 0:
+            all_event = history_soft_objective_coefficients(
+                conditional_grid,
+                active_lengths,
+                conditional_grid.shape[1],
+                strict=False,
+                target_kind="all_observable_events",
+                global_regularization=0.0,
+            ).event_mass
+            named = (
+                named + self.global_regularization * all_event
+            ) / (1.0 + self.global_regularization)
+        return torch.as_tensor(
+            named,
+            dtype=torch.float64,
+            device=conditional_grid.device,
+        )
+
+    @property
+    def name(self) -> str:
+        coverage = self._format_parameter(self.target_coverage, 2)
+        regularization = self._format_parameter(
+            self.global_regularization, 3
+        )
+        margin = self._format_parameter(
+            self.projection_budget_margin, 2
+        )
+        base = (
+            f"dapro_soft_prefix_bins_{self.score_bin_count}_"
+            f"upb_coverage_{coverage}_phase1_anchor_global_{regularization}"
+            f"_projection_margin_{margin}"
+        )
+        base += self.budget_control_name_suffix
+        return f"{base}_n1_{self.n1}"
+
+    @property
+    def objective_kind(self) -> str:
+        return "soft_prefix_hazard_variance_upb_coverage"
+
+    def objective_metadata(self) -> dict:
+        metadata = super().objective_metadata()
+        metadata.update({
+            "target_bound_type": "upb",
+            "target_event_side": "lower_or_equal",
+            "target_coverage": self.target_coverage,
+            "target_anchor_kind": "phase1_unweighted_upb_coverage",
+            "upb_infinity_value": 201,
+            "upb_infinity_contribution_is_deterministic": 1,
+        })
+        return metadata
+
+
+class SoftTargetCRCUPBDAPRO(SoftTargetUPBDAPRO):
+    """UPB soft-prefix DAPRO with CRC and no shared-PAV row cap.
+
+    The nested CRC family uses the full executable horizon (200) as its
+    candidate-cost bound.  This deliberately avoids the causal shared-PAV
+    envelope requested for other experiments; it is valid but can be more
+    conservative because the CRC support bound is larger.
+    """
+
+    DEFAULT_N1 = 200
+    DEFAULT_BUDGET_CONTROL_SIZE = 100
+
+    def __init__(
+            self,
+            conditional_grid,
+            budget_per_sample,
+            taus_range,
+            tau_prior,
+            m_upper_bound,
+            *,
+            n1: int = DEFAULT_N1,
+            budget_control_size: int = DEFAULT_BUDGET_CONTROL_SIZE,
+            budget_candidate_count: int = 401,
+            **kwargs,
+    ):
+        super().__init__(
+            conditional_grid,
+            budget_per_sample,
+            taus_range,
+            tau_prior,
+            m_upper_bound,
+            n1=n1,
+            projection_budget_margin=0.0,
+            budget_control_mode="crc",
+            budget_control_size=budget_control_size,
+            budget_candidate_count=budget_candidate_count,
+            risk_candidate_row_cost_cap=None,
+            **kwargs,
+        )
+
+    @property
+    def name(self) -> str:
+        coverage = self._format_parameter(self.target_coverage, 2)
+        regularization = self._format_parameter(
+            self.global_regularization, 3
+        )
+        return (
+            f"dapro_soft_prefix_bins_{self.score_bin_count}_"
+            f"upb_coverage_{coverage}_phase1_anchor_global_{regularization}"
+            f"_budget_crc_control_{self.budget_control_size}"
+            f"_n1_{self.n1}"
+        )
+
+    @property
+    def objective_kind(self) -> str:
+        return "soft_prefix_hazard_variance_upb_coverage_crc"
+
+    def objective_metadata(self) -> dict:
+        metadata = super().objective_metadata()
+        metadata.update({
+            "generalized_dapro_budget_control_mode": "crc",
+            "generalized_dapro_crc_control_size": self.budget_control_size,
+            "generalized_dapro_crc_row_cost_cap_multiplier": np.nan,
+            "risk_budget_row_cost_cap_policy_version": "none",
+        })
+        return metadata
+
+
 class DefinitiveCRCUPBDAPRO(DefinitiveCRCDAPRO):
     """Upper-bound counterpart of definitive CRC-DAPRO.
 
@@ -2812,9 +3473,10 @@ class DefinitiveCRCUPBDAPRO(DefinitiveCRCDAPRO):
 
         A_i = 1{T_i > q_0.70(X_i)}.
 
-    The two-bin policy, row-local cost cap, and independent CRC budget
-    selector are unchanged.  The explicit class prevents the lower-tail LPB
-    target from being silently reused when constructing an upper bound.
+    The two-bin policy, shared causal PAV cost envelope, and independent CRC
+    budget selector are unchanged.  The explicit class prevents the
+    lower-tail LPB target from being silently reused when constructing an
+    upper bound.
     """
 
     DEFAULT_TARGET_COVERAGE = 0.70
@@ -2964,6 +3626,7 @@ class BandRegularizedTargetAWeightedDAPRO(AWeightedDAPRO):
             f"projected_optimization_{self.projection}_{self.score}"
             f"_a_band_{low}_{high}_global_{delta}"
         )
+        base += self.budget_control_name_suffix
         if self.n1 != 100:
             base += f"_n1_{self.n1}"
         return base

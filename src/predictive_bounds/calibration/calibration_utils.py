@@ -86,21 +86,67 @@ def select_calibration_positions(
     return prefix_scores.argmax(dim=0)
 
 
+def select_upb_calibration_positions(
+        coverage: torch.Tensor,
+        target_coverages: torch.Tensor,
+) -> torch.Tensor:
+    """Select the first UPB candidate attaining each target coverage.
+
+    UPB candidates are ordered from smaller to larger predicted quantiles, so
+    their *population* coverage curve is nondecreasing.  An HT curve need not
+    be pointwise monotone: when a row first receives the 201 infinity value,
+    its random inverse-weighted event contribution is replaced by the
+    deterministic value one.  We therefore use the monotone lower envelope
+
+        L_j = min_{k >= j} coverage_k
+
+    and select the first ``j`` with ``L_j >= target``.  This is the exact UPB
+    analogue of the LPB selector's initial-prefix restriction: an isolated
+    upward HT fluctuation cannot select an unnecessarily small bound.  If a
+    target remains unattained, the largest candidate is returned.
+    """
+    if not torch.is_tensor(coverage) or coverage.ndim != 1:
+        raise ValueError("`coverage` must be a one-dimensional torch tensor.")
+    if not torch.is_tensor(target_coverages) or target_coverages.ndim != 1:
+        raise ValueError(
+            "`target_coverages` must be a one-dimensional torch tensor."
+        )
+    if len(coverage) == 0 or len(target_coverages) == 0:
+        raise ValueError("Coverage candidates and targets must be non-empty.")
+    targets = target_coverages.to(
+        device=coverage.device,
+        dtype=coverage.dtype,
+    )
+    lower_envelope = torch.flip(
+        torch.cummin(torch.flip(coverage, dims=(0,)), dim=0).values,
+        dims=(0,),
+    )
+    feasible = lower_envelope[:, None] >= targets[None, :]
+    first = feasible.to(torch.int64).argmax(dim=0)
+    fallback = torch.full_like(first, len(coverage) - 1)
+    return torch.where(feasible.any(dim=0), first, fallback)
+
+
 def quantiles_to_interaction_counts(
         quantiles: torch.Tensor | np.ndarray,
         width: int,
         upper_bound: float | None = None,
+        allow_no_event_sentinel: bool = False,
 ) -> torch.Tensor | np.ndarray:
     """Convert saved zero-based quantile indices to interaction counts.
 
     Event times in the repository are one-based counts in ``[1, width]``,
     whereas the survival quantile routines return zero-based grid indices.
-    The maximum-horizon sentinel is already ``width``, so clipping after the
-    increment maps both the last grid point and the sentinel to ``width``.
+    A survival PMF with ``width`` acquisition turns has ``width + 1`` outcome
+    classes: event times 1,...,``width`` and a final no-event class.  LPB and
+    acquisition callers historically clip that final class to ``width``.
+    UPB callers set ``allow_no_event_sentinel=True`` so it remains
+    ``width + 1`` (201 when the evaluation horizon is 200), which represents
+    an infinite upper bound rather than an event at the last real turn.
     """
     if width <= 0:
         raise ValueError(f"`width` must be positive; got {width}.")
-    cap = float(width)
+    cap = float(width + int(bool(allow_no_event_sentinel)))
     if upper_bound is not None:
         if not np.isfinite(upper_bound) or upper_bound <= 0:
             raise ValueError(

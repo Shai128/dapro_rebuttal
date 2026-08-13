@@ -31,19 +31,39 @@ METHODS = {
     "budget_crc_control_100_n1_300_allocation": "CRC-DAPRO fit200/control100",
     "calibration_dapro_variance_aligned_bins_2_alpha_0p10_global_0p001_"
     "budget_crc_control_100_row_cap_1p00x_budget_n1_200_allocation": (
-        "CRC-DAPRO fit100/control100 rowcap1"
+        "CRC-DAPRO fit100/control100 rowcap1 (legacy future-path cap)"
     ),
     "calibration_dapro_variance_aligned_bins_2_alpha_0p10_global_0p001_"
     "budget_crc_control_100_row_cap_2p00x_budget_n1_200_allocation": (
-        "CRC-DAPRO fit100/control100 rowcap2"
+        "CRC-DAPRO fit100/control100 rowcap2 (legacy future-path cap)"
     ),
     "calibration_dapro_variance_aligned_bins_2_alpha_0p10_global_0p001_"
     "budget_crc_control_100_row_cap_1p00x_budget_n1_300_allocation": (
-        "CRC-DAPRO fit200/control100 rowcap1"
+        "CRC-DAPRO fit200/control100 rowcap1 (legacy future-path cap)"
     ),
     "calibration_dapro_variance_aligned_bins_2_alpha_0p10_global_0p001_"
     "budget_crc_control_100_row_cap_2p00x_budget_n1_300_allocation": (
-        "CRC-DAPRO fit200/control100 rowcap2"
+        "CRC-DAPRO fit200/control100 rowcap2 (legacy future-path cap)"
+    ),
+    "calibration_dapro_variance_aligned_bins_2_alpha_0p10_global_0p001_"
+    "budget_crc_control_100_row_cap_1p00x_budget_causal_shared_pav_v1_"
+    "n1_200_allocation": (
+        "CRC-DAPRO fit100/control100 rowcap1 (causal shared PAV v1)"
+    ),
+    "calibration_dapro_variance_aligned_bins_2_alpha_0p10_global_0p001_"
+    "budget_crc_control_100_row_cap_2p00x_budget_causal_shared_pav_v1_"
+    "n1_200_allocation": (
+        "CRC-DAPRO fit100/control100 rowcap2 (causal shared PAV v1)"
+    ),
+    "calibration_dapro_variance_aligned_bins_2_alpha_0p10_global_0p001_"
+    "budget_crc_control_100_row_cap_1p00x_budget_causal_shared_pav_v1_"
+    "n1_300_allocation": (
+        "CRC-DAPRO fit200/control100 rowcap1 (causal shared PAV v1)"
+    ),
+    "calibration_dapro_variance_aligned_bins_2_alpha_0p10_global_0p001_"
+    "budget_crc_control_100_row_cap_2p00x_budget_causal_shared_pav_v1_"
+    "n1_300_allocation": (
+        "CRC-DAPRO fit200/control100 rowcap2 (causal shared PAV v1)"
     ),
     "calibration_random_adaptive_optimized_allocation": "Constant empirical",
     "calibration_random_adaptive_optimized_crc_allocation": "Constant CRC",

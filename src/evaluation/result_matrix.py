@@ -15,14 +15,22 @@ _LPB_SUFFIX_RE = re.compile(
     r"^lpb_all_methods_v1_n1_(?P<n1>\d+)_crc_(?P<crc>\d+)_"
     r"budget_(?P<budget>\d+(?:\.\d+)?)$"
 )
-_METRIC_RE = re.compile(
+_LEGACY_METRIC_RE = re.compile(
     r"^(?P<setup>dataset_.+)_"
     r"(?P<budget>\d+(?:\.\d+)?)_metric_estimation_"
+    r"n1_(?P<n1>\d+)_crc_(?P<crc>\d+)(?:__.+)?$"
+)
+_METRIC_RE = re.compile(
+    r"^(?P<setup>dataset_.+)_"
+    r"(?P<budget>\d+(?:\.\d+)?)_"
     r"n1_(?P<n1>\d+)_crc_(?P<crc>\d+)(?:__.+)?$"
 )
 _COMPACT_METRIC_RE = re.compile(
     r"^(?P<setup>dataset_.+)_(?P<budget>\d+(?:\.\d+)?)_"
     r"metric_estimation(?:_.+)?$"
+)
+_SHORT_COMPACT_METRIC_RE = re.compile(
+    r"^(?P<setup>dataset_.+)_(?P<budget>\d+(?:\.\d+)?)_m(?:_.+)?$"
 )
 _COMPACT_LPB_RE = re.compile(
     r"^(?P<setup>dataset_.+)_(?P<budget>\d+(?:\.\d+)?)_"
@@ -130,9 +138,13 @@ def parse_lpb_result(path: Path) -> MatrixResult | None:
 
 def parse_metric_result(path: Path) -> MatrixResult | None:
     """Parse a metric-estimation result path."""
-    match = _METRIC_RE.match(path.parent.name)
+    match = _LEGACY_METRIC_RE.match(path.parent.name)
+    if match is None:
+        match = _METRIC_RE.match(path.parent.name)
     if match is None:
         compact_match = _COMPACT_METRIC_RE.match(path.parent.name)
+        if compact_match is None:
+            compact_match = _SHORT_COMPACT_METRIC_RE.match(path.parent.name)
         if compact_match is None:
             return None
         parsed_setup = _parse_setup(compact_match.group("setup"))
@@ -177,6 +189,12 @@ def method_display_name(name: str) -> str:
         return "Full budget (calibration)"
     if "oracle_full_budget" in name:
         return "Full budget (calibration+test)"
+    if "metric_optimal_pooled_time" in name and "crc_control" in name:
+        return "Pooled-Neyman schedule + CRC"
+    if "metric_optimal_pooled_time_model_budget" in name:
+        return "Pooled-Neyman schedule"
+    if "metric_prefix_neyman" in name and "crc_control" in name:
+        return "Prefix-Neyman + CRC"
     if "metric_optimal_pmf" in name and "crc_control" in name:
         return "Metric-optimal PMF + CRC"
     if "metric_optimal_pmf_model_budget" in name:
@@ -241,6 +259,8 @@ METHOD_ORDER = (
     "Static",
     "Constant + CRC",
     "Metric-optimal PMF",
+    "Pooled-Neyman schedule",
+    "Prefix-Neyman + CRC",
     "Generalized DAPRO (soft metric)",
     "Generalized DAPRO + CRC",
     "Full budget (calibration)",
@@ -263,6 +283,9 @@ METHOD_COLORS = {
     "Local + CRC": "#bcbd22",
     "Metric-optimal PMF": "#003f5c",
     "Metric-optimal PMF + CRC": "#58508d",
+    "Pooled-Neyman schedule": "#00a6a6",
+    "Pooled-Neyman schedule + CRC": "#f28e2b",
+    "Prefix-Neyman + CRC": "#f28e2b",
     "Generalized DAPRO (soft metric)": "#2f4b7c",
     "Generalized DAPRO + CRC": "#e45756",
     "Generalized DAPRO (soft LPB)": "#665191",

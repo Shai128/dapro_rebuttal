@@ -3,8 +3,9 @@
 #
 # The registry contains only:
 #   weighted/unweighted Uniform, naive Static, Constant+CRC,
-#   Metric-optimal PMF without CRC, Generalized DAPRO with/without CRC,
-#   full-budget calibration, and full-budget calibration+test.
+#   Metric-optimal PMF without CRC, pooled-Neyman without CRC,
+#   prefix-Neyman+CRC, Generalized DAPRO with/without CRC, full-budget
+#   calibration, and full-budget calibration+test.
 #
 # Parallelism is across complete experiment configurations, not across seeds.
 # Every estimate.py invocation processes the full configured seed range.
@@ -45,7 +46,7 @@ CAL_SIZE=3000
 SEED_START=0
 SEED_END=50
 TAU_PRIOR=0.56
-EXPERIMENT_SUFFIX="metric_v1"
+EXPERIMENT_SUFFIX="metric_v3_causal_pav"
 
 # Each entry is DAPRO_N1:CRC_CONTROL_SIZE.
 DAPRO_CONFIGS=(
@@ -408,7 +409,7 @@ for budget in "${BUDGET_PER_SAMPLE_VALUES[@]}"; do
     for target in "${TARGET_MODELS[@]}"; do
       configure_dataset "$dataset" "$target"
 
-      experiment_name="${DATASET_NAME}_${DATASET_SETUP}_${budget}_metric_estimation_${EXPERIMENT_SUFFIX}"
+      experiment_name="${DATASET_NAME}_${DATASET_SETUP}_${budget}_m_${EXPERIMENT_SUFFIX}"
       config_label="${dataset}/${target}/budget=${budget}/all-dapro-configs"
 
       # Parallelism is across complete dataset/model/budget experiments.
@@ -505,6 +506,13 @@ echo
 echo "Merged CSVs are under: results/merged_metric_calibration_dfs"
 echo "After downloading that directory, generate local figures with:"
 echo "  python -m src.evaluation.summarize --input-dir results/merged_metric_calibration_dfs --output-dir figures/metric_estimation --quality high --experiment-suffix $EXPERIMENT_SUFFIX"
+if [[ -d "results/merged_metric_calibration_dfs" ]]; then
+  if ! tar -czf "results/metrics.tar.gz" "results/merged_metric_calibration_dfs"; then
+    echo "WARNING: could not create results/metrics.tar.gz." >&2
+  fi
+else
+  echo "WARNING: no merged metric directory was created; skipping archive." >&2
+fi
 
 # Intentionally succeed even if individual Python experiments failed.
 # Failures are reported above and do not crash the overall launcher.

@@ -12,6 +12,8 @@ from src.predictive_bounds.experiments.full_bounds.config import (
     LPB_DAPRO,
     GENERALIZED_LPB_CRC_DAPRO,
     GENERALIZED_LPB_DAPRO,
+    GENERALIZED_UPB_CRC_DAPRO,
+    GENERALIZED_UPB_DAPRO,
     LOCALLY_ADAPTIVE,
     POWER_REACH,
     UPB_DAPRO,
@@ -31,17 +33,21 @@ from src.predictive_bounds.experiments.full_bounds.summarize import (
 
 def test_full_bounds_matrix_covers_every_dataset_model_and_bound():
     configs = all_experiment_configs()
-    assert len(configs) == 24
+    assert len(configs) == 40
     assert sum(config.bound_type == "lpb" for config in configs) == 20
-    assert sum(config.bound_type == "upb" for config in configs) == 4
+    assert sum(config.bound_type == "upb" for config in configs) == 20
     assert {config.target_model.key for config in configs} == {
         "qwen", "llama", "phi", "gemma",
     }
     assert {config.figure_dataset_name for config in configs} == {
         "toxicity",
+        "toxicity_upb",
         "red_team_qwen",
+        "red_team_qwen_upb",
         "red_team_llama_guard",
+        "red_team_llama_guard_upb",
         "hallucination3",
+        "hallucination3_upb",
         "autoif",
         "autoif_upb",
     }
@@ -50,16 +56,19 @@ def test_full_bounds_matrix_covers_every_dataset_model_and_bound():
 def test_full_bounds_method_profiles_are_exact_and_bound_specific():
     lpb = calibration_names("lpb")
     upb = calibration_names("upb")
-    assert len(lpb) == 11
-    assert len(upb) == 6
+    assert len(lpb) == 7
+    assert len(upb) == 7
     assert LOCALLY_ADAPTIVE not in lpb and LOCALLY_ADAPTIVE not in upb
-    assert LPB_DAPRO in lpb and LPB_DAPRO not in upb
+    assert LPB_DAPRO not in lpb and LPB_DAPRO not in upb
     assert GENERALIZED_LPB_DAPRO in lpb and GENERALIZED_LPB_DAPRO not in upb
     assert (
         GENERALIZED_LPB_CRC_DAPRO in lpb
         and GENERALIZED_LPB_CRC_DAPRO not in upb
     )
     assert UPB_DAPRO in upb and UPB_DAPRO not in lpb
+    assert GENERALIZED_UPB_DAPRO in upb
+    assert GENERALIZED_UPB_CRC_DAPRO in upb
+    assert GENERALIZED_UPB_DAPRO not in lpb
     assert POWER_REACH in lpb and POWER_REACH in upb
     assert LPB_ORACLE in lpb and LPB_ORACLE not in upb
     assert UPB_ORACLE in upb and UPB_ORACLE not in lpb
@@ -68,7 +77,7 @@ def test_full_bounds_method_profiles_are_exact_and_bound_specific():
         CRC_DAPRO_ORACLE,
         GLOBAL_DAPRO_ORACLE,
     ]:
-        assert oracle in lpb and oracle not in upb
+        assert oracle not in lpb and oracle not in upb
 
 
 def test_low_quality_jpeg_respects_the_hard_size_limit(tmp_path: Path):

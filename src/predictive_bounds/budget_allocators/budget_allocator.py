@@ -43,6 +43,33 @@ class BudgetAllocationResult:
     mean_weight: float = None
     max_weight: float = None
     additional_metrics: dict = None
+    # Optional N-by-J probability of reaching each row-specific candidate
+    # bound.  UPB calibration needs this candidate-specific propensity for
+    # the survivor event 1{T > f_j}; a single terminal/event propensity is
+    # insufficient for a history-adaptive allocation.
+    candidate_C_probs: torch.Tensor = None
+
+
+def candidate_reach_probabilities(
+        continuation_probabilities: torch.Tensor,
+        candidates: torch.Tensor,
+        *,
+        infinity_value: int = 201,
+) -> torch.Tensor:
+    """Gather cumulative reach probabilities at row-specific UPB values."""
+    probabilities = continuation_probabilities.to(torch.float64)
+    if probabilities.ndim != 2 or candidates.ndim != 2:
+        raise ValueError("Continuation probabilities and candidates must be matrices.")
+    if len(probabilities) != len(candidates):
+        raise ValueError("Probability and candidate rows must agree.")
+    cumulative = probabilities.cumprod(dim=1)
+    finite = candidates < infinity_value
+    indices = candidates.to(torch.long).clamp(
+        min=1, max=probabilities.shape[1]
+    ) - 1
+    gathered = cumulative.gather(1, indices)
+    # The infinite UPB is deterministically valid and never reweighted.
+    return torch.where(finite, gathered, torch.ones_like(gathered))
 
 class BudgetAllocator(abc.ABC):
     def __init__(self, budget_per_sample: float, taus_range: torch.Tensor, tau_prior: float):

@@ -88,7 +88,7 @@ def get_model(model_save_path, model_figure_save_path, is_real, x_train, t_tilde
 
 def compute_probabilities_and_quantiles(x_cal, x_train, x_test, model_cal_test_preds_path, dataset_name, data_setup, p_cal, p_test, max_time,
             model_save_path, model_figure_save_path, is_real, t_tilde_train,
-            taus_range, m_upper_bound, device):
+            taus_range, m_upper_bound, device, bound_type="lpb"):
     current_time = 0
     if 'synthetic' in dataset_name and 'oracle' in data_setup:
         probability_est = torch.cat([p_cal, p_test]).clone().to(device)
@@ -158,7 +158,12 @@ def compute_probabilities_and_quantiles(x_cal, x_train, x_test, model_cal_test_p
     quantile_est_cal_test = quantiles_to_interaction_counts(
         quantile_est_cal_test,
         width=int(conditional_grid.shape[1]),
-        upper_bound=min(max_time, m_upper_bound),
+        upper_bound=(
+            max_time + 1
+            if bound_type == "upb"
+            else min(max_time, m_upper_bound)
+        ),
+        allow_no_event_sentinel=(bound_type == "upb"),
     )
     return quantile_est_cal_test, probability_est, conditional_grid
 
@@ -1552,6 +1557,18 @@ def make_lpb_tau_grid(device=None) -> torch.Tensor:
     return torch.tensor(values, device=device)
 
 
+def make_upb_tau_grid(device=None) -> torch.Tensor:
+    """Build the full UPB candidate grid, including semantic infinity.
+
+    The historical UPB grid started at 0.5, which can make a 70% target
+    unattainable when the model is conservative: even its smallest candidate
+    may already cover substantially more than 70% of trajectories.  The full
+    [0, 1] grid permits calibration in either direction.  Tau=1 maps to the
+    final no-event class and is converted to the UPB infinity value 201.
+    """
+    return torch.linspace(0.0, 1.0, 3001, device=device)
+
+
 def resolve_m_upper_bound(
         is_real: bool,
         budget_per_sample: float,
@@ -1597,7 +1614,7 @@ from src.dataset_utils.data_utils import get_data
 
 def setup_experiment_data(
         cal_size, is_real, device, dataset_name, data_setup, taus_range,
-        m_upper_bound, prediction_cache_path=None,
+        m_upper_bound, prediction_cache_path=None, bound_type="lpb",
 ):
     model_preds_dir = f'alg_playground_model/is_real_{is_real}_dataset_{dataset_name}_dataset_{data_setup}'
     model_cal_test_preds_path = (
@@ -1631,7 +1648,8 @@ def setup_experiment_data(
     t_tilde_cal_test = torch.cat([t_tilde_cal, t_tilde_test]).clone()
     quantile_est_cal_test, probability_est, conditional_grid = compute_probabilities_and_quantiles(
         x_cal, x_train, x_test, model_cal_test_preds_path, dataset_name, data_setup, p_cal, p_test, max_time,
-        model_save_path, model_figure_save_path, is_real, t_tilde_train, taus_range, m_upper_bound, device
+        model_save_path, model_figure_save_path, is_real, t_tilde_train,
+        taus_range, m_upper_bound, device, bound_type=bound_type,
     )
 
     test_size = len(quantile_est_cal_test) - cal_size

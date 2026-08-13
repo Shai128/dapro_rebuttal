@@ -6,7 +6,7 @@ PYTHON_EXE="${PYTHON:-python}"
 DEVICE_VALUE="${DEVICE:-cuda:0}"
 SEED_START_VALUE="${SEED_START:-0}"
 SEED_END_VALUE="${SEED_END:-50}"
-SUFFIX_VALUE="${EXPERIMENT_SUFFIX:-full_bounds_v1}"
+SUFFIX_VALUE="${EXPERIMENT_SUFFIX:-full_bounds_v4_soft_upb}"
 QUALITY_VALUE="${FIGURE_QUALITY:-high}"
 
 extra=()
@@ -22,4 +22,3 @@ fi
   --quality "$QUALITY_VALUE" \
   "${extra[@]}" \
   "$@"
-

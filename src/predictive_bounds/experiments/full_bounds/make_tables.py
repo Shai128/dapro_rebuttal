@@ -27,6 +27,8 @@ METRICS = (
     ("coverage_pct", r"Coverage (\%)"),
     ("coverage_diff_pct", r"$|$Cov.-target$|$ (pp)"),
     ("budget_used_per_sample", r"Budget/sample"),
+    ("size", r"Mean bound"),
+    ("infinite_bound_rate_pct", r"UPB=201 (\%)"),
 )
 
 
@@ -95,6 +97,8 @@ def _configuration_summary(frame: pd.DataFrame) -> pd.DataFrame:
             "coverage_pct",
             "coverage_diff_pct",
             "budget_used_per_sample",
+            "size",
+            "infinite_bound_rate_pct",
         ]]
         .agg(["mean", "std"])
     )
@@ -113,6 +117,8 @@ def _configuration_summary(frame: pd.DataFrame) -> pd.DataFrame:
             "coverage_pct",
             "coverage_diff_pct",
             "budget_used_per_sample",
+            "size",
+            "infinite_bound_rate_pct",
         ]:
             row[metric] = ordinary.loc[method, (metric, "mean")]
             row[f"{metric}_std"] = ordinary.loc[method, (metric, "std")]
@@ -171,7 +177,7 @@ def render_latex_tables(frame: pd.DataFrame) -> str:
             rf"\caption{{{_escape_latex(caption)}}}",
             rf"\label{{{label}}}",
             r"\resizebox{\textwidth}{!}{%",
-            r"\begin{tabular}{lrrrrrr}",
+            rf"\begin{{tabular}}{{l{'r' * len(METRICS)}}}",
             r"\toprule",
             "Method & " + " & ".join(header for _, header in METRICS) + r" \\",
             r"\midrule",
@@ -203,7 +209,7 @@ def render_latex_tables(frame: pd.DataFrame) -> str:
 
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--suffix", default="full_bounds_v1")
+    parser.add_argument("--suffix", default="full_bounds_v4_soft_upb")
     parser.add_argument(
         "--output", type=Path,
         default=DEFAULT_OUTPUT_DIR / "full_bounds_tables.tex",
@@ -213,6 +219,9 @@ def _parse_args() -> argparse.Namespace:
         "--target-model",
         action="append",
         choices=[model.key for model in TARGET_MODELS],
+    )
+    parser.add_argument(
+        "--bound-type", action="append", choices=["lpb", "upb"]
     )
     parser.add_argument("--available-only", action="store_true")
     parser.add_argument("--allow-missing", action="store_true")
@@ -225,6 +234,7 @@ def main() -> None:
         ROOT,
         keys=set(args.configs or []),
         target_models=set(args.target_model or []),
+        bound_types=set(args.bound_type or []),
         available_only=args.available_only,
     )
     if not configs:

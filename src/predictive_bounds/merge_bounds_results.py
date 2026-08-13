@@ -11,7 +11,11 @@ from src.predictive_bounds.calibration.oracle_survival_calibration import (
     OracleSurvivalUPBCalibration,
 )
 from src.predictive_bounds.calibration.survival_calibration_with_known_weights import get_gamma, SurvivalCalibrationWithKnownWeights
-from src.predictive_bounds.utils.get_calibration_methods_utils import get_baseline_calibrations, get_new_allocation_algorithms
+from src.predictive_bounds.utils.get_calibration_methods_utils import (
+    get_baseline_calibrations,
+    get_new_allocation_algorithms,
+    get_upb_calibrations,
+)
 from src.predictive_bounds.utils.utils import (
     get_tmp_calibration_result_path,
     get_merged_calibration_result_path,
@@ -19,6 +23,7 @@ from src.predictive_bounds.utils.utils import (
     get_merged_upb_calibration_result_path,
     get_calibration_experiment_name,
     make_lpb_tau_grid,
+    make_upb_tau_grid,
     resolve_m_upper_bound,
 )
 from src.utils.utils import set_seeds
@@ -65,6 +70,17 @@ def process_calibration(calibration, seed, experiments_name, bound_type):
 def get_calibration_methods(conditional_grid, budget_per_sample, taus_range, tau_prior, m_upper_bound, allocations: str,
                             device, bound_type, dapro_n1_values=(200,),
                             definitive_dapro_margins=(1.0,)):
+    if bound_type == "upb":
+        return get_upb_calibrations(
+            conditional_grid,
+            budget_per_sample,
+            taus_range,
+            tau_prior,
+            m_upper_bound,
+            dapro_n1_values=dapro_n1_values,
+            projection_budget_margin=float(definitive_dapro_margins[0]),
+            target_coverage=0.70,
+        )
     baseline_calibrations = get_baseline_calibrations(
         conditional_grid,
         budget_per_sample,
@@ -90,18 +106,6 @@ def get_calibration_methods(conditional_grid, budget_per_sample, taus_range, tau
                 for allocation in all_allocations
             ]
         )
-    else:
-        all_calibrations = (
-            baseline_calibrations
-            + [OracleSurvivalUPBCalibration(taus_range, tau_prior)]
-            + [
-                SurvivalUPBCalibrationWithKnownWeights(
-                    allocation, taus_range, tau_prior
-                )
-                for allocation in all_allocations
-            ]
-        )
-
     return all_calibrations
 
 
@@ -283,8 +287,7 @@ def main():
     else:
         tau_prior = args.tau_prior if args.tau_prior is not None else 0.98
         target_taus_list = 1 - np.arange(0.01, 0.5, 0.01)
-        num_taus = 3000
-        taus_range = torch.tensor(np.linspace(0.5, 0.95, num_taus)).to(device)
+        taus_range = make_upb_tau_grid(device=device)
 
     budget_per_sample = args.budget_per_sample
 

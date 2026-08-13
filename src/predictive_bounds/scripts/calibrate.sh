@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
-# Construct and merge the complete LPB comparison for every configured dataset.
+# Construct and merge predictive bounds for every configured dataset.
 #
 # Experiment matrix:
 #   (DAPRO_N1=200, CRC_CONTROL_SIZE=100) x BUDGET_PER_SAMPLE={5,10,20}
 #   (DAPRO_N1=100, CRC_CONTROL_SIZE=50)  x BUDGET_PER_SAMPLE={5,10,20}
 #   (DAPRO_N1=50,  CRC_CONTROL_SIZE=25)  x BUDGET_PER_SAMPLE={5,10,20}
-# Each DAPRO configuration includes hard Target-A/Definitive methods and
-# soft-prefix Generalized DAPRO with projection and CRC budget control.
+# The only DAPRO family run is Soft-prefix Generalized DAPRO, with and without
+# CRC.  UPB CRC deliberately uses the full 200-turn CRC support bound and no
+# shared-PAV row cap.  UPB value 201 is infinity/no event through turn 200.
 #
 # Typical invocations:
 #   bash src/predictive_bounds/scripts/calibrate.sh --local
@@ -20,6 +21,7 @@ set -euo pipefail
 
 # ======================== EDITABLE CONFIGURATION ========================
 RUN_MODE="local"                    # "local" or "slurm"
+BOUND_TYPE="${BOUND_TYPE:-upb}"     # "upb" (default) or "lpb"
 DEVICE="cuda:0"                     # Use "cpu" when no GPU is available.
 AVAILABLE_ONLY=0                    # 1 skips configurations without cached predictions.
 DRY_RUN=0                           # 1 prints commands without executing them.
@@ -43,7 +45,7 @@ ATTACKER_MODEL="qwen25_14b_instruct"
 CAL_SIZE=3000
 SEED_START=0
 SEED_END=50
-TAU_PRIOR=0.56
+TAU_PRIOR="${TAU_PRIOR:-}"
 M_UPPER_BOUND=200
 
 # Each entry is DAPRO_N1:CRC_CONTROL_SIZE.
@@ -62,8 +64,8 @@ BUDGET_PER_SAMPLE_VALUES=(
 
 # All N1/CRC methods for one dataset/model/budget share one compact directory
 # and are constructed and merged together.
-BASE_EXPERIMENT_SUFFIX="lpb_v3"
-ARCHIVE_PATH="results/lpb_merged_${BASE_EXPERIMENT_SUFFIX}.tar.gz"
+BASE_EXPERIMENT_SUFFIX="${BASE_EXPERIMENT_SUFFIX:-}"
+ARCHIVE_PATH=""
 
 SLURM_ACCOUNT="galileo"
 SLURM_PARTITION="galileo"
@@ -77,6 +79,7 @@ AUTO_EXCLUDE_INCOMPATIBLE_GPUS=1
 
 usage() {
   echo "Usage: $0 [--local | --slurm] [--cpu | --device DEVICE]"
+  echo "          [--bound-type upb|lpb]"
   echo "          [--available-only] [--parallel-jobs N] [--dry-run]"
   echo "          [--seed-end N]"
   echo
@@ -95,6 +98,14 @@ while (( $# > 0 )); do
     --cpu)
       DEVICE="cpu"
       SLURM_GRES=""
+      ;;
+    --bound-type)
+      if (( $# < 2 )); then
+        echo "--bound-type requires upb or lpb." >&2
+        exit 2
+      fi
+      BOUND_TYPE="$2"
+      shift
       ;;
     --device)
       if (( $# < 2 )); then
@@ -138,6 +149,26 @@ while (( $# > 0 )); do
   esac
   shift
 done
+
+if [[ "$BOUND_TYPE" != "lpb" && "$BOUND_TYPE" != "upb" ]]; then
+  echo "BOUND_TYPE must be either 'lpb' or 'upb'." >&2
+  exit 2
+fi
+if [[ -z "$TAU_PRIOR" ]]; then
+  if [[ "$BOUND_TYPE" == "upb" ]]; then
+    TAU_PRIOR=0.97
+  else
+    TAU_PRIOR=0.56
+  fi
+fi
+if [[ -z "$BASE_EXPERIMENT_SUFFIX" ]]; then
+  if [[ "$BOUND_TYPE" == "upb" ]]; then
+    BASE_EXPERIMENT_SUFFIX="upb_v1_soft_prefix"
+  else
+    BASE_EXPERIMENT_SUFFIX="lpb_v5_soft_prefix"
+  fi
+fi
+ARCHIVE_PATH="results/${BOUND_TYPE}_merged_${BASE_EXPERIMENT_SUFFIX}.tar.gz"
 
 if [[ "$RUN_MODE" != "local" && "$RUN_MODE" != "slurm" ]]; then
   echo "RUN_MODE must be either 'local' or 'slurm'." >&2
@@ -298,35 +329,40 @@ configure_dataset() {
 }
 
 build_methods() {
+  local oracle_name
+  if [[ "$BOUND_TYPE" == "upb" ]]; then
+    oracle_name="oracle_survival_upb_calibration"
+  else
+    oracle_name="oracle_survival_calibration"
+  fi
   METHODS=(
     # Raw prediction and infinite-observation reference.
     uncalibrated
-    oracle_survival_calibration
+    "$oracle_name"
     # Static baselines.
     calibration_optimized_allocation
     # Constant continuation with an always-follow mixture that bounds IPW;
     # CRC accounts for the mixture while controlling the expected budget.
     calibration_random_adaptive_optimized_mixture_terminal_floor_0p005_crc_allocation
+    calibration_random_schedule_power_reach_alpha_2_crc_allocation
   )
 
   DAPRO_N1_ARGS=()
-  local dapro_config dapro_n1 crc_control_size historical_n1_suffix
+  local dapro_config dapro_n1 crc_control_size
   for dapro_config in "${DAPRO_CONFIGS[@]}"; do
     IFS=: read -r dapro_n1 crc_control_size <<< "$dapro_config"
     DAPRO_N1_ARGS+=("$dapro_n1")
-    historical_n1_suffix="_n1_${dapro_n1}"
-    # Historical Target-A names omit the N1 suffix when N1=100.
-    if (( dapro_n1 == 100 )); then
-      historical_n1_suffix=""
+    if [[ "$BOUND_TYPE" == "upb" ]]; then
+      METHODS+=(
+        "calibration_dapro_soft_prefix_bins_2_upb_coverage_0p70_phase1_anchor_global_0p001_projection_margin_1p00_n1_${dapro_n1}_allocation"
+        "calibration_dapro_soft_prefix_bins_2_upb_coverage_0p70_phase1_anchor_global_0p001_budget_crc_control_${crc_control_size}_n1_${dapro_n1}_allocation"
+      )
+    else
+      METHODS+=(
+        "calibration_dapro_soft_prefix_bins_2_lpb_alpha_0p10_global_0p001_projection_margin_1p00_n1_${dapro_n1}_allocation"
+        "calibration_dapro_soft_prefix_bins_2_lpb_alpha_0p10_global_0p001_budget_crc_control_${crc_control_size}_row_cap_2p00x_budget_causal_shared_pav_v1_n1_${dapro_n1}_allocation"
+      )
     fi
-    METHODS+=(
-      "calibration_projected_optimization_direct_bins_2_prob_a_target_raw_alpha_0p10${historical_n1_suffix}_allocation"
-      "calibration_dapro_variance_aligned_bins_2_alpha_0p10_global_0p001_projection_margin_1p00_n1_${dapro_n1}_allocation"
-      "calibration_projected_optimization_direct_bins_2_prob_a_target_raw_alpha_0p10_budget_crc_control_${crc_control_size}_row_cap_2p00x_budget${historical_n1_suffix}_allocation"
-      "calibration_dapro_variance_aligned_bins_2_alpha_0p10_global_0p001_budget_crc_control_${crc_control_size}_row_cap_2p00x_budget_n1_${dapro_n1}_allocation"
-      "calibration_dapro_soft_prefix_bins_2_lpb_alpha_0p10_global_0p001_projection_margin_1p00_n1_${dapro_n1}_allocation"
-      "calibration_dapro_soft_prefix_bins_2_lpb_alpha_0p10_global_0p001_budget_crc_control_${crc_control_size}_row_cap_2p00x_budget_n1_${dapro_n1}_allocation"
-    )
   done
   METHOD_CSV="$(IFS=,; echo "${METHODS[*]}")"
 }
@@ -350,9 +386,9 @@ run_configuration() {
 
   job_key="${dataset_key}_${target_model}_b_${budget_per_sample}"
   echo
-  echo "[$dataset_key / $target_model | all DAPRO configs | budget=$budget_per_sample] construct LPBs"
+  echo "[$dataset_key / $target_model | all DAPRO configs | budget=$budget_per_sample] construct ${BOUND_TYPE^^}s"
   local common_args=(
-    --bound-type lpb
+    --bound-type "$BOUND_TYPE"
     --data-type real
     --dataset-name "$DATASET_NAME"
     --dataset-setup "$DATASET_SETUP"
@@ -380,7 +416,7 @@ run_configuration() {
     return 1
   fi
 
-  echo "[$dataset_key / $target_model | all DAPRO configs | budget=$budget_per_sample] merge LPBs"
+  echo "[$dataset_key / $target_model | all DAPRO configs | budget=$budget_per_sample] merge ${BOUND_TYPE^^}s"
   if ! run_python_module \
     src.predictive_bounds.merge_bounds_results \
     "${job_key}_merge" \
@@ -443,10 +479,15 @@ if (( DRY_RUN == 1 )); then
 fi
 
 MERGED_FILES=()
+if [[ "$BOUND_TYPE" == "upb" ]]; then
+  MERGED_RESULTS_DIR="results/merged_upb_calibration_dfs"
+else
+  MERGED_RESULTS_DIR="results/merged_calibration_dfs"
+fi
 while IFS= read -r merged_file; do
   MERGED_FILES+=("$merged_file")
 done < <(
-  find results/merged_calibration_dfs \
+  find "$MERGED_RESULTS_DIR" \
     -type f \
     -path "*_${BASE_EXPERIMENT_SUFFIX}/all_df.csv" \
     -print 2>/dev/null | sort

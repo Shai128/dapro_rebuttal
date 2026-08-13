@@ -75,9 +75,20 @@ def test_unsuffixed_lpb_result_is_not_part_of_matrix():
 
 def test_n1_dependent_method_names_have_stable_labels():
     assert method_display_name(
+        "calibration_metric_optimal_pooled_time_model_budget_allocation"
+    ) == "Pooled-Neyman schedule"
+    assert method_display_name(
+        "calibration_metric_optimal_pooled_time_crc_control_50_"
+        "row_cap_2p00x_budget_allocation"
+    ) == "Pooled-Neyman schedule + CRC"
+    assert method_display_name(
+        "calibration_metric_prefix_neyman_crc_control_50_"
+        "row_cap_2p00x_budget_allocation"
+    ) == "Prefix-Neyman + CRC"
+    assert method_display_name(
         "calibration_projected_optimization_direct_bins_2_prob_"
         "a_target_raw_alpha_0p10_budget_crc_control_25_"
-        "row_cap_2p00x_budget_n1_50_allocation"
+        "row_cap_2p00x_budget_causal_shared_pav_v1_n1_50_allocation"
     ) == "Target-A DAPRO + CRC"
     assert method_display_name(
         "calibration_dapro_variance_aligned_bins_2_alpha_0p10_"
@@ -90,7 +101,7 @@ def test_n1_dependent_method_names_have_stable_labels():
     assert method_display_name(
         "calibration_dapro_soft_prefix_bins_2_metric_horizon_200_"
         "global_0p001_budget_crc_control_25_row_cap_2p00x_budget_"
-        "n1_50_allocation"
+        "causal_shared_pav_v1_n1_50_allocation"
     ) == "Generalized DAPRO + CRC"
     assert method_display_name(
         "calibration_dapro_soft_prefix_bins_2_lpb_alpha_0p10_"
@@ -99,7 +110,7 @@ def test_n1_dependent_method_names_have_stable_labels():
     assert method_display_name(
         "calibration_dapro_soft_prefix_bins_2_lpb_alpha_0p10_"
         "global_0p001_budget_crc_control_25_row_cap_2p00x_budget_"
-        "n1_50_allocation"
+        "causal_shared_pav_v1_n1_50_allocation"
     ) == "Generalized DAPRO (soft LPB) + CRC"
     assert method_display_name(
         "calibration_oracle_split_full_budget_allocation"

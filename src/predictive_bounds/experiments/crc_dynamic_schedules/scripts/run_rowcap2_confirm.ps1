@@ -4,12 +4,12 @@ param(
     [string]$Device = $(if ($env:DEVICE) { $env:DEVICE } else { "cuda:0" }),
     [string]$SeedStart = $(if ($env:SEED_START) { $env:SEED_START } else { "0" }),
     [string]$SeedEnd = $(if ($env:SEED_END) { $env:SEED_END } else { "20" }),
-    [string]$Suffix = $(if ($env:EXPERIMENT_SUFFIX) { $env:EXPERIMENT_SUFFIX } else { "crc_rowcap2_confirm_v1" })
+    [string]$Suffix = $(if ($env:EXPERIMENT_SUFFIX) { $env:EXPERIMENT_SUFFIX } else { "crc_rowcap2_confirm_v2_causal_pav" })
 )
 $ErrorActionPreference = "Stop"
 $Methods = @(
     "calibration_dapro_variance_aligned_bins_2_alpha_0p10_global_0p001_projection_margin_1p00_n1_200_allocation",
-    "calibration_dapro_variance_aligned_bins_2_alpha_0p10_global_0p001_budget_crc_control_100_row_cap_2p00x_budget_n1_200_allocation",
+    "calibration_dapro_variance_aligned_bins_2_alpha_0p10_global_0p001_budget_crc_control_100_row_cap_2p00x_budget_causal_shared_pav_v1_n1_200_allocation",
     "calibration_random_adaptive_optimized_allocation",
     "calibration_random_adaptive_optimized_crc_allocation"
 ) -join ","

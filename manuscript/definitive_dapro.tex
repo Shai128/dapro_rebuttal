@@ -37,22 +37,33 @@ We reconsider the final DAPRO design against two alternatives: the previously
 selected projection-reserve method and a constant-continuation policy.  The
 new definitive method retains the variance-aligned two-bin allocation model,
 but separates 200 fully observed rows into 100 policy-fit and 100 independent
-budget-control rows.  A label-free per-row cost cap of twice the average
-budget tightens the loss envelope, after which conformal risk control (CRC)
+budget-control rows.  A fit-fold-only shared cumulative envelope of twice the
+average budget tightens the loss envelope, after which conformal risk control (CRC)
 selects a nested cumulative-reach contraction.  The resulting method has a
 finite-sample marginal expected-total-budget guarantee under exchangeability,
-without a projection-accuracy assumption.  In a matched 20-seed confirmation
-on five real-data settings, it lowers geometric-mean coverage variance by
-3.9\% relative to CRC constant allocation and wins on four settings.  The
+without a projection-accuracy assumption.  A historical matched 20-seed
+confirmation on five real-data settings lowered geometric-mean coverage
+variance by 3.9\% relative to CRC constant allocation and won on four settings.
+Those runs used the superseded future-path row contraction and must be rerun
+before they can validate the corrected causal method.  The
 projection-reserve version has nearly identical aggregate performance (4.2\%
 lower than CRC constant) but retains an empirically imperfect projection
-assumption.  We therefore select the CRC version: the negligible empirical
-difference is outweighed by the stronger guarantee, lower mean weights, better
-budget use, and faster fitting.  We also prove that the proposed family
+assumption.  We therefore select the CRC architecture provisionally: its
+stronger guarantee remains valid under the shared causal envelope, while the
+full LPB empirical matrix is being rerun.  We also prove that the proposed family
 $1-\lambda^{\alpha t}$ is independent of $\alpha$ after reparameterization,
 and give a Jensen argument explaining why constant allocation is difficult to
 beat when policy scores add little target-event information beyond time.
 \end{abstract}
+
+\paragraph{Causal-cap provenance.}
+The method and guarantee in this document use the shared PAV envelope defined
+below.  Result files whose allocator name lacks
+\texttt{causal\_shared\_pav\_v1} used a row-specific scale computed from the
+complete future score path.  They are retained only as historical comparisons
+and are not evidence for online deployability.  The production LPB launcher
+uses the suffix \texttt{lpb\_v4\_causal\_pav} so corrected and historical
+rows cannot be merged silently.
 
 \section{Final decision}
 
@@ -69,9 +80,10 @@ W_i=\frac{A_i+0.001}{1.001}.
 \]
 Fit a two-score-bin continuation table by minimizing
 $\sum_i W_i/\pi_i$ under the sequential expected-cost constraint.  Enforce a
-trajectory-mixture propensity floor $\epsilon=0.005$.  Using only the
-label-free prior horizon $q(x)$, contract each row so its expected cost through
-$q(x)$ is at most $K=2b$, where $b$ is the target budget per sample.  Freeze
+trajectory-mixture propensity floor $\epsilon=0.005$.  Using only policy-fit
+target masses, learn the shared causal envelope below and intersect each
+observed cumulative path with it, so every possible row cost is at most
+$K=2b$, where $b$ is the target budget per sample.  Freeze
 the resulting policy and the 401-member nested family
 \[
 R_s(x,t)=\epsilon+s\{R_{\rm cap}(x,t)-\epsilon\},
@@ -134,7 +146,7 @@ does not create a second bias term when the Phase-II policy is non-leaky and
 the Horvitz--Thompson identity holds.  For the selected LPB, policy changes can
 also move the chosen threshold; that instability is outside Proposition~1.
 
-\section{Policy fitting and the row-local cap}
+\section{Policy fitting and the causal shared-envelope cap}
 
 For row $i$, let $L_i=\min(T_i,q_i)$ be its unknown active length and let
 $p_{i,t}$ be the predictable conditional continuation probability at
@@ -157,20 +169,24 @@ afterward.  Hence $R_i(t)\ge\epsilon=0.005$, every terminal weight is at most
 200, and a reported floored mean weight above $10^5$ is impossible.
 
 The raw fitted policy can have a distribution-free cost bound equal to the
-full horizon $T_{\max}=200$.  That makes CRC unnecessarily conservative.  Let
+full horizon $T_{\max}=200$.  That makes CRC unnecessarily conservative.  Set
+$K=2b$, pool the policy-fit target masses as
+$\bar a_t=n_f^{-1}\sum_{i\in\mathcal I_f}a_{i,t}$, and solve
 \[
-h(x)=\sum_{t=1}^{q(x)}R_{\rm fit}(x,t),\qquad
-h_0(x)=\epsilon q(x),\qquad K=2b.
+\min_e\sum_{t=1}^{T_{\max}}\frac{\bar a_t}{e_t}
+\quad\text{subject to}\quad
+1\ge e_1\ge\cdots\ge e_{T_{\max}}\ge\epsilon,
+\quad \sum_te_t\le K.
 \]
-If $h(x)>K$, set
+Antitonic PAV followed by one scalar dual search gives the exact shared
+envelope $e^*$.  At a reached turn $t$, set
 \[
-\eta(x)=\frac{K-h_0(x)}{h(x)-h_0(x)},
-\qquad
-R_{\rm cap}(x,t)=\epsilon+\eta(x)
-\{R_{\rm fit}(x,t)-\epsilon\};
+R_{i,\rm cap}(t)=\min\{R_{i,\rm fit}(t),e_t^*\}.
 \]
-otherwise use $\eta(x)=1$.  This map uses only $x$, the predicted prior
-horizon, and the frozen policy.  It never uses $T$ or a Phase-II label.
+This online map uses only a frozen fit-fold envelope and prefixes observed
+through turn $t$.  It never uses $T_i$, a Phase-II label, or a future prefix.
+Computing a single row-specific contraction from the full future reach path
+would not have this predictability property and is therefore not used.
 
 \begin{proposition}[Label-free support bound]
 If $\epsilon q(x)\le K$, then for every possible event time $T$,
@@ -181,10 +197,11 @@ Every further affine contraction toward $\epsilon$ has the same bound.
 \end{proposition}
 
 \begin{proof}
-The construction makes the sum through $q(x)$ at most $K$.  All cumulative
-probabilities are nonnegative and $\min(T,q(x))\le q(x)$, so every shorter
-prefix also costs at most $K$.  Contracting toward the floor cannot increase
-the sum.
+Pointwise minimum preserves non-increasing cumulative reach and the floor.
+Moreover,
+$\sum_{t=1}^{q_i}R_{i,\rm cap}(t)\le\sum_{t=1}^{T_{\max}}e_t^*\le K$.
+Every shorter event prefix therefore also costs at most $K$, and any further
+affine contraction toward the floor cannot increase the sum.
 \end{proof}
 
 The cap is not merely a post-hoc correction.  It reduces the valid candidate
@@ -363,6 +380,14 @@ consistently surpassed constant continuation.
 
 \section{Matched empirical results}
 
+\textbf{Historical-result warning.}
+The tables in this section were generated before the causal-cap correction.
+Their DAPRO rows use the legacy future-path contraction and therefore measure
+an offline/transductive ablation, not the deployable shared-envelope method
+defined above.  They remain useful for diagnosing the objective and CRC
+tradeoffs, but all headline comparisons below are provisional until the
+versioned \texttt{lpb\_v4\_causal\_pav} matrix has been rerun.
+
 All confirmation results use calibration size 3,000, common data splits and
 acquisition uniforms, 20 seeds, and five cached real-data configurations:
 toxicity/Detoxify, AutoIF, hallucination/Qwen, and red-team data judged by
@@ -447,8 +472,9 @@ Definitive CRC-DAPRO offers the best balance requested:
 \item \textbf{Theoretical correctness:} finite-sample marginal expected-total-
 budget control without projection accuracy; predictable IPCW acquisition and
 strict positivity are preserved.
-\item \textbf{Empirical performance:} 3.9\% geometric variance reduction and
-four of five point wins versus the guarantee-matched constant policy.
+\item \textbf{Historical empirical signal:} the superseded cap obtained a
+3.9\% geometric variance reduction and four of five point wins versus the
+guarantee-matched constant policy; the corrected LPB matrix is pending.
 \item \textbf{Simplicity:} two score bins, one fixed row cap, and one scalar
 CRC contraction; no per-time projection regression.
 \item \textbf{Numerical stability:} $\pi\ge0.005$ caps every weight at 200;
@@ -458,13 +484,17 @@ are named, common acquisition randomness is stored, and Linux/PowerShell
 runners reproduce the screens and confirmation.
 \end{itemize}
 
-The defensible headline is deliberately modest:
+The historical headline was:
 \begin{quote}
 Across five 20-seed real-data settings, row-capped CRC-DAPRO had 3.9\% lower
 geometric-mean coverage variance than CRC constant allocation and won four
 point comparisons, while providing a finite-sample marginal expected-budget
 guarantee without a projection-accuracy assumption.
 \end{quote}
+This sentence must not be used as the corrected method's publication claim
+until those five settings have been rerun with an allocator name containing
+\texttt{causal\_shared\_pav\_v1}.  At present, the theorem applies to the
+corrected policy and the quoted numbers apply only to the historical policy.
 
 Do not claim that DAPRO universally dominates constant allocation.  Do not
 use mean weight as the variance objective.  Do not claim that an individual
@@ -484,7 +514,7 @@ tests/test_risk_controlled_budget.py
 tests/test_random_allocator_floor_modes.py
 \end{verbatim}
 
-The complete screen and confirmation packages are under
+The historical screen and confirmation packages are under
 \begin{verbatim}
 src/predictive_bounds/experiments/crc_dynamic_schedules/
 \end{verbatim}
@@ -496,7 +526,7 @@ outputs/crc_rowcap2_confirm/method_summary.csv
 outputs/crc_rowcap2_confirm/geometric_variance_comparison.csv
 \end{verbatim}
 
-The selected public defaults are $N_1=200$, fit/control sizes 100/100,
+The corrected production defaults are $N_1=200$, fit/control sizes 100/100,
 $\alpha_0=0.10$, global regularization $0.001$, two score bins,
 $\epsilon=0.005$, row cap $K=2b$, and 401 CRC candidates.  Alternative
 schedules, un-capped CRC, larger fit folds, and the projection-reserve method

@@ -1,0 +1,640 @@
+% This file is intended to be included from the main manuscript with \input.
+% It uses the notation, theorem, assumption, algorithm, and algorithmic
+% environments defined in the manuscript preamble.  All labels have the
+% prefix ``spgd'' so that this section can coexist with earlier drafts.
+
+\section{Soft-prefix Generalized DAPRO}
+\label{sec:spgd}
+
+This section gives a complete specification of the soft-prefix Generalized
+DAPRO allocator used in our experiments.  The same allocation architecture is
+used for LPB construction and population-level metric estimation.  The two
+tasks differ only in the target event whose acquisition variance is placed in
+the objective.  In particular, the score, the two-bin policy class, the
+optimization algorithm, the projection to deployment rows, and the optional
+CRC budget controller are shared.
+
+The central idea is simple.  Hard Target-$A$ DAPRO puts the realized binary
+target $A_i$ at the endpoint of each fully observed policy-fitting trajectory.
+Soft-prefix Generalized DAPRO instead distributes this target over the
+trajectory using the model's conditional event hazard at every observed
+prefix.  This is a model-integrated, or Rao--Blackwellized, estimate of the
+same target-specific inverse-propensity objective.  It is typically more
+stable when the policy-fitting fold is small, while remaining a causal dynamic
+policy because the decision at time $t$ uses only the prefix available at
+time $t$.
+
+\subsection{Sequential acquisition notation}
+
+For prompt $i$, let $T_i$ be its one-based event time and let $Q_i$ be the
+largest interaction that the acquisition policy may request.  We use
+\begin{equation}
+    Q_i=
+    \begin{cases}
+        \qprior(X_i)=\fhat_{\tauprior}(X_i),&\text{for LPB construction},\\
+        \maxl,&\text{for metric estimation}.
+    \end{cases}
+    \label{eq:spgd_acquisition_horizon}
+\end{equation}
+The fully observed active length is
+\begin{equation}
+    L_i:=\min\{T_i,Q_i\}.
+\end{equation}
+Immediately before acquiring interaction $t$, the evaluator has observed the
+current history $H_i(t)$ and chooses a conditional continuation probability
+$P_i(t)\in[0,1]$.  Its cumulative reach probability is
+\begin{equation}
+    \rho_i(t):=\prod_{s=1}^{t}P_i(s),
+    \qquad \rho_i(0):=1.
+    \label{eq:spgd_cumulative_reach}
+\end{equation}
+Conditional on the complete trajectory, the expected acquisition cost of a
+frozen policy is
+\begin{equation}
+    c_i(P):=\sum_{t=1}^{L_i}\rho_i(t).
+    \label{eq:spgd_row_cost}
+\end{equation}
+The allocation is predictable: $P_i(t)$ may be a function of $X_i$,
+$H_i(t)$, the training data, and the independent policy-fitting fold, but it
+may not depend on $H_i(s)$ for $s>t$ or on the unobserved value of $T_i$.
+
+\subsection{The task-specific target $A$}
+\label{sec:spgd_task_target}
+
+\paragraph{Metric estimation.}
+For unsafe-event-rate estimation through the fixed horizon $\maxl$, the target
+is
+\begin{equation}
+    A_i^{\mathrm{metric}}
+    :=\ind{T_i\leq\maxl}.
+    \label{eq:spgd_metric_target}
+\end{equation}
+The non-strict inequality is intentional: an event at interaction $\maxl$ is
+part of the metric.
+
+\paragraph{LPB construction.}
+Let $\{\tau_j\}_{j=1}^{J}$ be the ordered candidate grid, restricted to
+$\tau_j\leq\tauprior$.  For the raw-$\alpha$ implementation, freeze
+\begin{equation}
+    \tau_\star
+    :=\max\{\tau_j:\tau_j<\tautarget\},
+    \qquad \tautarget=0.10,
+    \label{eq:spgd_raw_alpha_anchor}
+\end{equation}
+where the maximum is taken in the initial candidate prefix.  In continuous
+notation one may write $\tau_\star=\tautarget$; the strict grid rule above is
+the exact implementation.  Set
+\begin{equation}
+    F_i^\star:=\fhat_{\tau_\star}(X_i),
+    \qquad
+    A_i^{\mathrm{LPB}}
+    :=\ind{T_i<F_i^\star}.
+    \label{eq:spgd_lpb_target}
+\end{equation}
+The strict inequality agrees with the LPB miscoverage convention.  The anchor
+is selected and frozen using only the policy-fitting fold before any Phase-II
+acquisition outcomes are observed.
+
+For either task, write $A_i$ for the appropriate target in
+\eqref{eq:spgd_metric_target} or \eqref{eq:spgd_lpb_target}.  If $R_i$ is the
+indicator that the acquisition process reaches the target event and
+$\pi_i$ is its recorded inclusion probability, the HT contribution is
+$R_iA_i/\pi_i$.  Conditional on the complete trajectories and a frozen
+predictable policy,
+\begin{equation}
+    \operatorname{Var}\!\left(
+      \frac{1}{N}\sum_{i=1}^{N}\frac{R_iA_i}{\pi_i}
+      \middle|\mathcal D
+    \right)
+    =\frac{1}{N^2}\sum_{i=1}^{N}
+      A_i\left(\frac{1}{\pi_i}-1\right).
+    \label{eq:spgd_exact_ht_variance}
+\end{equation}
+Thus the target-specific design objective is $A$-weighted inverse reach, not
+the unweighted mean inverse propensity.  For metric estimation,
+\eqref{eq:spgd_exact_ht_variance} is exactly the acquisition variance of the
+reported unsafe-event-rate estimator.  For an LPB, it is exact for the fixed
+anchor $F_i^\star$; it is a proxy for the complete nonlinear procedure that
+estimates an entire calibration curve and then selects a bound.
+
+\subsection{Causal prefix hazards and soft target masses}
+
+Let the separately trained prediction model return a conditional event-time
+distribution after every available prefix.  The production score and soft
+coefficient use its diagonal entry
+\begin{equation}
+    h_i(t)
+    :=\widehat{\mathbb P}
+      \bigl(T_i=t\mid T_i\geq t,H_i(t),\Dtrain\bigr).
+    \label{eq:spgd_prefix_hazard}
+\end{equation}
+In the saved conditional probability tensor, this is
+\texttt{conditional\_grid[i,t-1,t-1]}.  It is available before the draw that
+decides whether interaction $t$ is acquired.  Using a later row of the tensor
+would leak a future history and is not allowed.
+
+Define the task mask
+\begin{equation}
+    M_i(t):=
+    \begin{cases}
+      \ind{t\leq\maxl},&\text{metric estimation},\\
+      \ind{t<F_i^\star},&\text{LPB construction},
+    \end{cases}
+    \label{eq:spgd_target_mask}
+\end{equation}
+and the active-prefix mask $D_i(t):=\ind{t\leq L_i}$.  With the default global
+regularization $\delta_{\mathrm{glob}}=0.001$, the exact soft event and cost
+masses supplied to the optimizer are
+\begin{align}
+    a_i(t)
+    &:=h_i(t)D_i(t)
+      \frac{M_i(t)+\delta_{\mathrm{glob}}}
+           {1+\delta_{\mathrm{glob}}},
+      \label{eq:spgd_soft_mass}\\
+    d_i(t)&:=D_i(t).
+      \label{eq:spgd_cost_mass}
+\end{align}
+Equivalently, the numerator in \eqref{eq:spgd_soft_mass} mixes the named
+target mass $h_i(t)D_i(t)M_i(t)$ with all event mass
+$h_i(t)D_i(t)$ inside the acquisition envelope.  This small broad component
+prevents target-empty directions from receiving exactly zero importance.  In
+the metric task $Q_i=\maxl$ and $M_i(t)=1$ at every active prefix, so this
+regularization cancels algebraically and $a_i(t)=h_i(t)D_i(t)$.
+
+If the conditional hazards are correct, summing the soft masses over possible
+event times integrates the hard target $A_i$.  The replacement therefore
+reduces the label noise of putting one binary mass at the realized endpoint.
+Correct hazard calibration is an efficiency condition, not a validity
+condition: the final HT estimator remains design-unbiased under a
+misspecified score model, provided that the deployed acquisition rule is
+causal, its true propensities are recorded, and positivity holds.
+
+The hazard has two distinct roles.  First, it determines the model-integrated
+objective mass in \eqref{eq:spgd_soft_mass}.  Second, its value is the current
+prefix score used to select a continuation probability.  These roles should
+not be conflated: changing the target mask changes the objective without
+changing the policy representation, while changing the score changes which
+histories share a continuation probability.
+
+\subsection{The hazard-K2 dynamic policy class}
+\label{sec:spgd_k2}
+
+Let $\calIone^{\mathrm{fit}}$ be the fully observed policy-fitting fold.  At
+each interaction $t$, consider only rows with $L_i\geq t$ and compute the
+empirical median
+\begin{equation}
+    \kappa_t
+    :=\operatorname{Quantile}_{0.5}
+       \{h_i(t):i\in\calIone^{\mathrm{fit}},\ L_i\geq t\}.
+    \label{eq:spgd_median_cutpoint}
+\end{equation}
+The exact implementation removes duplicate cutpoints and assigns bins by
+\begin{equation}
+    b_i(t):=
+    \begin{cases}
+       0,&h_i(t)<\kappa_t,\\
+       1,&h_i(t)\geq\kappa_t.
+    \end{cases}
+    \label{eq:spgd_bin_assignment}
+\end{equation}
+Thus a score tied at the median is assigned to the high bin.  If there is no
+active policy-fitting row at time $t$, the policy uses structural probability
+one in that column.  If one of the two cells is empty because of score ties,
+its value is copied from the nearest observed cell.
+
+The raw deployable policy has one parameter per time and score bin,
+\begin{equation}
+    P_i^{\mathrm{raw}}(t)=p_{t,b_i(t)},
+    \qquad
+    0<p_{t,0}\leq p_{t,1}\leq1.
+    \label{eq:spgd_k2_policy}
+\end{equation}
+The monotonicity restriction expresses that a larger current event hazard
+cannot receive a smaller continuation probability.  K2 therefore has at most
+two \emph{raw current-score decisions} at a fixed time.  It does not reduce
+the final allocation to two trajectory propensities.  The cumulative reach
+\begin{equation}
+    \rho_i^{\mathrm{raw}}(t)
+      =\prod_{s=1}^{t}p_{s,b_i(s)}
+\end{equation}
+depends on the entire preceding sequence of low/high-bin assignments.  Two
+rows in the same current bin can consequently have different cumulative
+reach, and the cumulative projection below can also give them different
+conditional continuation probabilities.  The method is therefore dynamic
+and history-adaptive despite the deliberately low-capacity K2 response to the
+new score at each individual time.
+
+K2 is a regularization choice, not a mathematical requirement.  More bins or
+a continuous monotone score map enlarge the policy class and can reduce the
+population optimum, but they also estimate many more parameters from only
+$N_1$ fully observed rows.  The production default uses K2 because it was the
+most stable choice across small policy-fitting folds.
+
+\subsection{The fitted convex objective}
+
+Write
+\begin{equation}
+    y_{t,b}:=\log p_{t,b}\leq0,
+    \qquad
+    z_i(t):=\sum_{s=1}^{t}y_{s,b_i(s)},
+\end{equation}
+so $\rho_i^{\mathrm{raw}}(t)=\exp\{z_i(t)\}$.  For a policy-shape budget
+$\bar B_{\mathrm{shape}}$, soft-prefix Generalized DAPRO solves
+\begin{equation}
+\begin{aligned}
+    \min_{\{y_{t,b}\}}quad
+    &\frac{1}{n_f}\sum_{i\in\calIone^{\mathrm{fit}}}
+      \sum_{t=1}^{L_i}a_i(t)
+      \left[\exp\{-z_i(t)\}-1\right]\\
+    \text{subject to}\quad
+    &\frac{1}{n_f}\sum_{i\in\calIone^{\mathrm{fit}}}
+      \sum_{t=1}^{L_i}d_i(t)\exp\{z_i(t)\}
+      \leq\bar B_{\mathrm{shape}},\\
+    &y_{t,0}\leq y_{t,1}\leq0,
+      \qquad t=1,\ldots,\maxl,
+\end{aligned}
+\label{eq:spgd_optimization}
+\end{equation}
+where $n_f=|\calIone^{\mathrm{fit}}|$.  The $-1$ term is constant in the
+policy and may be omitted numerically.  Every objective term is an exponential
+of an affine function of $y$, the budget is a convex exponential sublevel
+constraint, and the score-monotonicity constraints are linear.  Hence
+\eqref{eq:spgd_optimization} is a convex program for fixed cutpoints and bin
+assignments.
+
+The objective is the soft counterpart of the exact $A$-weighted variance in
+\eqref{eq:spgd_exact_ht_variance}.  In the hard endpoint version, all row mass
+is placed at $t=L_i$, giving
+$A_i\{1/\rho_i(L_i)-1\}$.  In the soft version, the model distributes target
+mass across possible event times and the optimizer protects each mass by the
+cumulative reach needed to reveal it.
+
+\subsection{Numerical optimization by a dual search and generalized PAV}
+
+The implementation solves \eqref{eq:spgd_optimization} without fitting a
+second regression from oracle probabilities to scores.  Introduce a
+Lagrange multiplier $\lambda\geq0$ for the expected-cost constraint.  With all
+other time columns held fixed, the coordinate loss at time $t$ has the form
+\begin{equation}
+    \sum_{i:L_i\geq t}
+       \left\{\alpha_i(t)e^{-y_{t,b_i(t)}}
+             +\beta_i(t)e^{y_{t,b_i(t)}}\right\},
+    \label{eq:spgd_coordinate_loss}
+\end{equation}
+where
+\begin{align}
+    \alpha_i(t)
+    &:=\frac{e^{y_{t,b_i(t)}}}{n_f}
+      \sum_{u=t}^{L_i}a_i(u)e^{-z_i(u)},\\
+    \beta_i(t)
+    &:=\frac{\lambda e^{-y_{t,b_i(t)}}}{n_f}
+      \sum_{u=t}^{L_i}d_i(u)e^{z_i(u)}.
+\end{align}
+For any adjacent score block $\mathcal B$ tied to a common log probability,
+its unconstrained update is
+\begin{equation}
+    y_{\mathcal B}
+    =\frac12\log
+      \frac{\sum_{i\in\mathcal B}\alpha_i(t)}
+           {\sum_{i\in\mathcal B}\beta_i(t)}.
+    \label{eq:spgd_block_update}
+\end{equation}
+Generalized PAV merges adjacent score blocks whenever these updates violate
+the nondecreasing score order, and clips the final values to
+$[-700,0]$.  Because the input score is the bin identifier, all active rows
+in the same time/bin cell are tied exactly.
+
+For a fixed $\lambda$, the solver cycles over time coordinates and updates
+the suffix cumulative log reaches after every PAV update.  It uses at most
+$30$ inner sweeps and stops when the largest active log-probability change is
+smaller than $5\times10^{-4}$.  An outer geometric bisection searches
+$\lambda\in[10^{-12},10^{14}]$ for a budget-feasible solution, using at most
+$60$ iterations and relative budget tolerance $10^{-9}$.  Among numerically
+feasible candidates it retains the one with the smallest fitted objective,
+breaking objective ties by distance to the budget boundary.
+
+The resulting row-level probabilities are converted to a table by averaging
+within every observed time/bin cell.  Empty cells copy the nearest observed
+bin, and a cumulative maximum over bins restores
+$p_{t,0}\leq p_{t,1}$.  Deployment uses this table directly.  Accordingly,
+``projection'' in this version does not mean a learned Platt or isotonic
+regression: it means evaluating the frozen empirical-median bin map and its
+optimized lookup table on new prefix scores.
+
+\subsection{Cumulative projection, positivity, and the no-CRC controller}
+\label{sec:spgd_projection}
+
+Let $r_i(t)$ be the cumulative product obtained from the frozen bin table.
+One common cumulative-logit shift $\gamma$ is fitted on the policy-fitting
+rows:
+\begin{equation}
+    \widetilde\rho_i(t;\gamma)
+    :=\eps_\pi+(1-\eps_\pi)
+      \operatorname{cummin}_{u\leq t}
+      \sigma\!\left(\operatorname{logit}\{r_i(u)\}+\gamma\right),
+    \label{eq:spgd_cumulative_projection}
+\end{equation}
+where $\sigma$ is the logistic function and
+$\eps_\pi=0.005$ by default.  The cumulative minimum enforces temporal
+non-increase, and the mixture ensures
+$\widetilde\rho_i(t)\geq\eps_\pi$ on every active prefix.  A scalar bisection
+chooses the largest $\gamma$ for which
+\begin{equation}
+    \frac{1}{n_f}\sum_{i\in\calIone^{\mathrm{fit}}}
+      \sum_{t=1}^{L_i}\widetilde\rho_i(t;\gamma)
+    \leq\bar B_{\mathrm{shape}}.
+    \label{eq:spgd_projection_budget}
+\end{equation}
+Finally, cumulative reaches are converted back to conditional probabilities,
+\begin{equation}
+    \widetilde P_i(1)=\widetilde\rho_i(1),
+    \qquad
+    \widetilde P_i(t)=
+      \frac{\widetilde\rho_i(t)}{\widetilde\rho_i(t-1)}.
+    \label{eq:spgd_cumulative_to_conditional}
+\end{equation}
+
+Without CRC, all $N_1$ Phase-I rows are policy-fitting rows and are observed
+fully through $L_i$.  If the total budget is $B=N\bar B$, define the remaining
+Phase-II budget per row
+\begin{equation}
+    \bar B_{\mathrm{II}}
+    :=\frac{N\bar B-\sum_{i\in\calIone}L_i}{N-N_1}.
+\end{equation}
+The production no-CRC method reserves the fixed projection-transfer margin
+$\eta=1$ and uses
+\begin{equation}
+    \bar B_{\mathrm{shape}}:=\bar B_{\mathrm{II}}-\eta.
+    \label{eq:spgd_no_crc_shape_budget}
+\end{equation}
+Its expected-total-budget claim therefore requires the transfer condition
+that the deployment expected cost is at most the corrected policy-fitting
+cost plus $\eta$.  The scalar bisection in
+\eqref{eq:spgd_projection_budget} controls the empirical policy-fitting cost;
+by itself it does not prove that the cost transfers to new trajectories.
+
+\subsection{The optional independent CRC controller}
+\label{sec:spgd_crc}
+
+The CRC variant changes only budget control.  It does not change the target,
+soft masses, hazard score, K2 policy class, or convex objective.  Split the
+$N_1$ fully observed rows into a policy-fitting fold of size
+$n_f=N_1-n_{\mathrm{crc}}$ and an independent control fold of size
+$n_{\mathrm{crc}}$; in our experiments $n_{\mathrm{crc}}=N_1/2$.  The target
+anchor, hazards, median cutpoints, bin table, logit shift, and candidate family
+are all frozen before control-fold event times are inspected.  For fitting
+the base shape, use
+\begin{equation}
+    \bar B_{\mathrm{shape}}
+    :=\frac{N\bar B-\sum_{i\in\calIone^{\mathrm{fit}}}L_i}
+            {N-n_f},
+    \label{eq:spgd_crc_shape_budget}
+\end{equation}
+with no projection margin.
+
+To obtain a useful bounded candidate-cost envelope, set
+\begin{equation}
+    C_{\max}:=\min\{\maxl,2\bar B\}.
+    \label{eq:spgd_row_cap}
+\end{equation}
+Pool the fit-fold target masses,
+$\bar a(t)=n_f^{-1}\sum_{i\in\calIone^{\mathrm{fit}}}a_i(t)$, and solve
+\begin{equation}
+\begin{aligned}
+    \min_e\quad&\sum_{t=1}^{\maxl}\frac{\bar a(t)}{e(t)}\\
+    \text{subject to}\quad
+      &1\geq e(1)\geq\cdots\geq e(\maxl)\geq\eps_\pi,\\
+      &\sum_{t=1}^{\maxl}e(t)\leq C_{\max}.
+\end{aligned}
+\label{eq:spgd_shared_envelope}
+\end{equation}
+Antitonic PAV on $\sqrt{\bar a(t)}$, followed by one scalar dual search,
+solves \eqref{eq:spgd_shared_envelope}.  Intersect every base cumulative path
+with this frozen shared envelope,
+\begin{equation}
+    \rho_i^{\mathrm{cap}}(t)
+      :=\min\{\widetilde\rho_i(t),e(t)\}.
+    \label{eq:spgd_apply_envelope}
+\end{equation}
+This operation is causal because both quantities are available at time $t$.
+It also guarantees the pathwise support bound
+$\sum_{t=1}^{Q_i}\rho_i^{\mathrm{cap}}(t)\leq C_{\max}$.  A row-specific
+contraction computed from the row's complete future score path must not be
+used; it would make an early decision depend on an unobserved future prefix.
+
+Construct $K_{\mathrm{crc}}=401$ nested candidates with
+$1=\xi_1>\cdots>\xi_{K_{\mathrm{crc}}}=0$ equally spaced:
+\begin{equation}
+    \rho_i^{(k)}(t)
+    :=\eps_\pi+\xi_k
+      \{\rho_i^{\mathrm{cap}}(t)-\eps_\pi\}.
+    \label{eq:spgd_crc_candidates}
+\end{equation}
+For a fully observed control row, compute its pilot cost and the exact
+conditional expected cost of candidate $k$,
+\begin{equation}
+    b_i:=L_i,
+    \qquad
+    c_i(k):=\sum_{t=1}^{L_i}\rho_i^{(k)}(t).
+\end{equation}
+Let $n=n_{\mathrm{crc}}$, $m=N-N_1$, and
+$B_{\mathrm{rem}}=N\bar B-
+\sum_{i\in\calIone^{\mathrm{fit}}}L_i$.  Define
+\begin{equation}
+    \ell_i(k):=c_i(k)+\frac{n}{m}b_i,
+    \qquad
+    L_{\max}:=C_{\max}+\frac{n}{m}\maxl.
+\end{equation}
+The CRC selector chooses the first, hence most aggressive, candidate satisfying
+\begin{equation}
+    \frac{\sum_{i\in\calIone^{\mathrm{crc}}}\ell_i(k)+L_{\max}}
+         {n+1}
+    \leq\frac{B_{\mathrm{rem}}}{m}.
+    \label{eq:spgd_crc_rule}
+\end{equation}
+Under exchangeability of control and deployment rows, nesting, independence of
+the control outcomes from the frozen family, and the stated cost bounds, this
+gives marginal expected-total-budget control.  It is not a per-split or
+realized-budget guarantee.  The factor $2$ in $C_{\max}=2\bar B$ is a practical
+choice, not part of HT validity: $C_{\max}=\maxl$ is valid but creates a much
+larger finite-sample CRC correction, while $C_{\max}=\bar B$ can prevent the
+targeted policy from spending more than average on high-value rows.
+
+\subsection{Deployment and recorded propensities}
+
+For every Phase-II row, the evaluator repeats the following operation until
+an event occurs, the row is censored, or $Q_i$ is reached.  At active time
+$t$, it forms $H_i(t)$, evaluates the current hazard in
+\eqref{eq:spgd_prefix_hazard}, applies the frozen median cutpoint, obtains the
+base table value, applies the frozen cumulative projection and, when enabled,
+the shared envelope and selected CRC contraction, converts cumulative reach
+to a conditional probability, and draws the corresponding Bernoulli
+continuation variable.  The exact product of the conditional probabilities
+along the observed path is stored.  Fully observed policy-fit and control rows
+have propensity one.
+
+For the primary metric, an observed event at $T_i\leq\maxl$ has inclusion
+propensity $\pi_i=\rho_i(T_i)$ and contributes $1/\pi_i$ to the HT total.  For
+the fixed LPB candidate, an event satisfying $T_i<F_i^\star$ is treated
+analogously.  The score model may be wrong without biasing this correction;
+using the wrong propensity, allowing a Phase-II outcome to alter the frozen
+policy, or allowing a future prefix to affect an earlier decision would break
+the design argument.
+
+\subsection{Should the LPB target use $\fhat_{\tautarget}$ or
+$\fhat_{\tauprior}$?}
+\label{sec:spgd_alpha_vs_prior}
+
+Replacing the raw-$\alpha$ target by the prior bound is not a harmless
+robustification; it changes the variance functional being optimized.  For an
+ordered nested family, define
+\begin{equation}
+    A_i(\tau):=\ind{T_i<\fhat_\tau(X_i)},
+    \qquad
+    V_\tau(\rho):=\frac{1}{N^2}\sum_i
+       A_i(\tau)\left(\frac{1}{\pi_i}-1\right).
+\end{equation}
+When $\tau\leq\tauprior$ and the candidates are nested,
+$A_i(\tau)\leq A_i(\tauprior)$, and hence
+\begin{equation}
+    V_\tau(\rho)\leq V_{\tauprior}(\rho)
+    \quad\text{for every fixed policy }\rho.
+    \label{eq:spgd_prior_upper_bound}
+\end{equation}
+Thus the prior target controls a common, but potentially very loose, upper
+bound on all smaller-candidate acquisition variances.  It does not minimize
+each of them.  In particular,
+\begin{equation}
+    V_{\tauprior}(\rho)-V_{\tau_\star}(\rho)
+    =\frac{1}{N^2}\sum_i
+      \{A_i(\tauprior)-A_i(\tau_\star)\}
+      \left(\frac{1}{\pi_i}-1\right).
+    \label{eq:spgd_prior_band_cost}
+\end{equation}
+Optimizing the prior target therefore spends budget on every event in the
+wide band between the raw-$\alpha$ candidate and the prior candidate.  When
+$\tauprior$ is much larger than $\tautarget$---for example, $0.56$ versus
+$0.10$---this can dilute the allocation precisely where the calibrated LPB
+crossing is expected to occur.  There is no universal dominance theorem:
+the policy minimizing $V_{\tauprior}$ can have substantially larger
+$V_{\tau_\star}$ than the policy trained directly for $\tau_\star$.
+
+For that reason, our default recommendation is to retain the raw-$\alpha$
+target and its small broad regularizer in \eqref{eq:spgd_soft_mass}, rather
+than replacing it by $\tauprior$.  The regularizer already protects all event
+times through $Q_i$, including the prior endpoint, but gives them only weight
+$\delta_{\mathrm{glob}}=0.001$ relative to the named target.
+
+If substantial anchor misspecification is anticipated, a principled robust
+extension is a weighted multi-target objective.  Choose a fit-fold-frozen grid
+$\mathcal T_{\mathrm{rob}}\subseteq[0,\tauprior]$ and nonnegative weights
+$w_\tau$ summing to one, concentrated on plausible values of the eventual
+calibrated $\widehat\tau$.  Replace the LPB mask in
+\eqref{eq:spgd_soft_mass} by
+\begin{equation}
+    M_i^{\mathrm{rob}}(t)
+    :=\sum_{\tau\in\mathcal T_{\mathrm{rob}}}
+       w_\tau\ind{t<\fhat_\tau(X_i)}.
+    \label{eq:spgd_robust_mask}
+\end{equation}
+For hard targets this minimizes the weighted sum
+\begin{equation}
+    \sum_{\tau\in\mathcal T_{\mathrm{rob}}}w_\tau V_\tau(\rho)
+    =\frac{1}{N^2}\sum_i
+       \left\{\sum_\tau w_\tau A_i(\tau)\right\}
+       \left(\frac{1}{\pi_i}-1\right),
+    \label{eq:spgd_weighted_variances}
+\end{equation}
+so it remains exactly within the Generalized-DAPRO framework and can use the
+same hazard-K2 optimizer.  A particularly conservative two-component choice
+is
+\begin{equation}
+    M_i^{\mathrm{mix}}(t)
+      =(1-\lambda)\ind{t<F_i^\star}
+       +\lambda\ind{t<\fhat_{\tauprior}(X_i)},
+    \qquad 0<\lambda\ll1.
+    \label{eq:spgd_alpha_prior_mixture}
+\end{equation}
+Unlike wholesale replacement by $\tauprior$, this retains most effort near
+the intended LPB boundary while explicitly purchasing robustness to a larger
+calibration shift.  The weights, grid, and $\lambda$ must be selected using
+training or policy-fitting information only, never the weighted Phase-II
+calibration outcomes.
+
+If the scientific target is genuinely worst-case accuracy over every
+$\tau\in[0,\tauprior]$, one may instead solve the convex epigraph problem
+$\min_\rho\max_{\tau\in\mathcal T}V_\tau(\rho)$.  That is a different robust
+objective and requires a multi-constraint optimizer; setting
+$A=A(\tauprior)$ is only a convenient upper-bound surrogate for it.
+
+Finally, none of these fixed or weighted targets is exactly the variance of
+the hard, data-selected LPB.  A selection-aware influence objective can in
+principle target the calibration-curve crossing itself, but it must estimate
+candidate switching sensitivities and is much less stable on small Phase-I
+folds.  The raw-$\alpha$ soft-prefix objective is therefore the recommended
+default: it is task-aligned, simple, causal, and empirically more stable than
+the currently tested selection-aware alternatives.  A narrow weighted band
+around $\tautarget$, rather than the entire interval up to $\tauprior$, is the
+most defensible robustness ablation.
+
+\subsection{Implementation checklist}
+
+Algorithm~\ref{alg:spgd_exact} collects the complete implementation in one
+place.
+
+\begin{algorithm}[htbp]
+\caption{Soft-prefix Generalized DAPRO with hazard-K2}
+\label{alg:spgd_exact}
+\begin{algorithmic}[1]
+\REQUIRE Conditional prefix PMF grid; quantile grid $\{\fhat_{\tau_j}\}$;
+$\tauprior$; total budget $N\bar B$; $N_1$; task type; optional CRC;
+$\delta_{\mathrm{glob}}=0.001$; $\eps_\pi=0.005$; K2.
+\STATE Set $Q_i$ by \eqref{eq:spgd_acquisition_horizon}; sample $N_1$ Phase-I
+rows and observe each to $L_i=\min(T_i,Q_i)$.
+\IF{CRC is enabled}
+  \STATE Split Phase I into $n_f=N_1-n_{\mathrm{crc}}$ policy-fit rows and
+  $n_{\mathrm{crc}}=N_1/2$ independent control rows.
+\ELSE
+  \STATE Use all $N_1$ rows for policy fitting.
+\ENDIF
+\STATE Freeze the task target: $T\leq\maxl$ for the metric, or the raw-$\alpha$
+anchor in \eqref{eq:spgd_raw_alpha_anchor} for the LPB.
+\FOR{each active policy-fit prefix $(i,t)$}
+  \STATE Read $h_i(t)$ from the current-prefix diagonal PMF entry.
+  \STATE Form $a_i(t)$ and $d_i(t)$ by
+  \eqref{eq:spgd_soft_mass}--\eqref{eq:spgd_cost_mass}.
+\ENDFOR
+\FOR{$t=1,\ldots,\maxl$}
+  \STATE On active policy-fit rows, compute the median hazard and assign bins
+  by \eqref{eq:spgd_bin_assignment}; ties enter the high bin.
+\ENDFOR
+\STATE Set $\bar B_{\mathrm{shape}}$ by
+\eqref{eq:spgd_no_crc_shape_budget} or \eqref{eq:spgd_crc_shape_budget}.
+\STATE Solve \eqref{eq:spgd_optimization} by outer dual bisection and inner
+generalized-PAV coordinate updates; construct the direct K2 lookup table.
+\STATE Apply the shared cumulative-logit correction and propensity floor in
+\eqref{eq:spgd_cumulative_projection}.
+\IF{CRC is enabled}
+  \STATE Fit the shared causal PAV envelope in
+  \eqref{eq:spgd_shared_envelope}, form the $401$ candidates in
+  \eqref{eq:spgd_crc_candidates}, and select one using only the control fold
+  and \eqref{eq:spgd_crc_rule}.
+\ENDIF
+\STATE Freeze the target, cutpoints, table, cumulative shift, envelope, and
+selected contraction before Phase-II outcomes are acquired.
+\STATE Deploy causally.  At every reached prefix, evaluate the current hazard,
+look up its K2 continuation, and record the exact product propensity.
+\RETURN Censoring times and logged propensities for the LPB calibrator or HT
+metric estimator.
+\end{algorithmic}
+\end{algorithm}
+
+An independent implementation should additionally verify: one-based event
+and horizon conventions; strict LPB and non-strict metric masks; exclusion of
+inactive prefixes from both objective and cost; K2 cutpoints learned only on
+active policy-fit rows; monotonicity of the two table entries; non-increasing
+cumulative reach; the terminal floor; exact conversion between cumulative and
+conditional probabilities; absence of future-prefix dependence; independence
+of CRC outcomes from candidate construction; nesting and boundedness of CRC
+candidate costs; and equality between every logged propensity and the product
+of probabilities actually used by the sequential sampler.

@@ -1,7 +1,7 @@
 # Regenerate the single copy-paste-ready LaTeX table file from merged results.
 param(
     [string]$PythonExe = $(if ($env:PYTHON) { $env:PYTHON } else { "python" }),
-    [string]$Suffix = $(if ($env:EXPERIMENT_SUFFIX) { $env:EXPERIMENT_SUFFIX } else { "full_bounds_v1" }),
+    [string]$Suffix = $(if ($env:EXPERIMENT_SUFFIX) { $env:EXPERIMENT_SUFFIX } else { "full_bounds_v4_soft_upb" }),
     [switch]$AvailableOnly,
     [string[]]$ExtraArgs = @()
 )

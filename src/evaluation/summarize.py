@@ -44,6 +44,8 @@ INCLUDED_DISPLAY_METHODS = frozenset({
     "Static",
     "Constant + CRC",
     "Metric-optimal PMF",
+    "Pooled-Neyman schedule",
+    "Prefix-Neyman + CRC",
     "Generalized DAPRO (soft metric)",
     "Generalized DAPRO + CRC",
     "Full budget (calibration)",

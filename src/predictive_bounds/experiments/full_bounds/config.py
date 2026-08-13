@@ -1,9 +1,8 @@
 """Immutable experiment and display configuration for the full comparison.
 
-The matrix mirrors the manuscript: every LPB uses 90% target coverage;
-toxicity, AutoIF, and Qwen-judged red-team use budget 20; hallucination and
-Llama-Guard red-team use budget 10.  AutoIF UPB uses 70% target coverage and
-budget 30.  Every configuration uses calibration size 3,000 and horizon 200.
+The matrix contains matching LPB and UPB experiments for every benchmark and
+target model.  LPBs use 90% coverage and UPBs use 70% coverage.  UPB value
+201 denotes infinity/no event through the 200-turn acquisition horizon.
 """
 
 from __future__ import annotations
@@ -66,6 +65,20 @@ DATASET_SPECS = (
         "display_name": "Toxicity",
     },
     {
+        "key": "toxicity_upb",
+        "dataset_name": "dataset_toxicity",
+        "setup": (
+            "attack_toxic_attack_qwen25_14b_instruct_lm_target_{target}_"
+            "judge_detoxify"
+        ),
+        "bound_type": "upb",
+        "budget": 20.0,
+        "tau_prior": 0.97,
+        "target_coverage": 0.70,
+        "figure_name": "toxicity_upb",
+        "display_name": "Toxicity (UPB)",
+    },
+    {
         "key": "red_team_qwen",
         "dataset_name": "dataset_red_team",
         "setup": (
@@ -78,6 +91,20 @@ DATASET_SPECS = (
         "target_coverage": 0.90,
         "figure_name": "red_team_qwen",
         "display_name": "Red Team (Qwen judge)",
+    },
+    {
+        "key": "red_team_qwen_upb",
+        "dataset_name": "dataset_red_team",
+        "setup": (
+            "attack_default_attack_qwen25_14b_instruct_lm_target_{target}_"
+            "judge_llm-judge_qwen25_14b_instruct"
+        ),
+        "bound_type": "upb",
+        "budget": 20.0,
+        "tau_prior": 0.97,
+        "target_coverage": 0.70,
+        "figure_name": "red_team_qwen_upb",
+        "display_name": "Red Team (Qwen judge, UPB)",
     },
     {
         "key": "red_team_llama_guard",
@@ -94,6 +121,20 @@ DATASET_SPECS = (
         "display_name": "Red Team (Llama-Guard)",
     },
     {
+        "key": "red_team_llama_guard_upb",
+        "dataset_name": "dataset_red_team",
+        "setup": (
+            "attack_default_attack_qwen25_14b_instruct_lm_target_{target}_"
+            "judge_llama_guard"
+        ),
+        "bound_type": "upb",
+        "budget": 10.0,
+        "tau_prior": 0.97,
+        "target_coverage": 0.70,
+        "figure_name": "red_team_llama_guard_upb",
+        "display_name": "Red Team (Llama-Guard, UPB)",
+    },
+    {
         "key": "hallucination3",
         "dataset_name": "dataset_hallucination3",
         "setup": (
@@ -106,6 +147,20 @@ DATASET_SPECS = (
         "target_coverage": 0.90,
         "figure_name": "hallucination3",
         "display_name": "Hallucination",
+    },
+    {
+        "key": "hallucination3_upb",
+        "dataset_name": "dataset_hallucination3",
+        "setup": (
+            "attack_hallucination_attack_qwen25_14b_instruct_lm_target_"
+            "{target}_judge_llm-judge_qwen25_14b_instruct"
+        ),
+        "bound_type": "upb",
+        "budget": 10.0,
+        "tau_prior": 0.97,
+        "target_coverage": 0.70,
+        "figure_name": "hallucination3_upb",
+        "display_name": "Hallucination (UPB)",
     },
     {
         "key": "autoif",
@@ -161,16 +216,18 @@ PROJECTION_DAPRO = (
 )
 LEGACY_CRC_DAPRO = (
     "calibration_projected_optimization_direct_bins_2_prob_budget_crc_"
-    "control_100_row_cap_2p00x_budget_n1_200_allocation"
+    "control_100_row_cap_2p00x_budget_causal_shared_pav_v1_n1_200_"
+    "allocation"
 )
 TARGET_A_CRC_DAPRO = (
     "calibration_projected_optimization_direct_bins_2_prob_a_target_raw_"
-    "alpha_0p10_budget_crc_control_100_row_cap_2p00x_budget_n1_200_"
-    "allocation"
+    "alpha_0p10_budget_crc_control_100_row_cap_2p00x_budget_"
+    "causal_shared_pav_v1_n1_200_allocation"
 )
 LPB_DAPRO = (
     "calibration_dapro_variance_aligned_bins_2_alpha_0p10_global_0p001_"
-    "budget_crc_control_100_row_cap_2p00x_budget_n1_200_allocation"
+    "budget_crc_control_100_row_cap_2p00x_budget_causal_shared_pav_v1_"
+    "n1_200_allocation"
 )
 GENERALIZED_LPB_DAPRO = (
     "calibration_dapro_soft_prefix_bins_2_lpb_alpha_0p10_global_0p001_"
@@ -178,11 +235,20 @@ GENERALIZED_LPB_DAPRO = (
 )
 GENERALIZED_LPB_CRC_DAPRO = (
     "calibration_dapro_soft_prefix_bins_2_lpb_alpha_0p10_global_0p001_"
-    "budget_crc_control_100_row_cap_2p00x_budget_n1_200_allocation"
+    "budget_crc_control_100_row_cap_2p00x_budget_causal_shared_pav_v1_"
+    "n1_200_allocation"
 )
 UPB_DAPRO = (
-    "calibration_dapro_upb_variance_aligned_bins_2_alpha_0p70_global_0p001_"
-    "budget_crc_control_100_row_cap_2p00x_budget_n1_200_allocation"
+    "calibration_dapro_soft_prefix_bins_2_upb_coverage_0p70_phase1_anchor_global_0p001_"
+    "budget_crc_control_100_n1_200_allocation"
+)
+GENERALIZED_UPB_DAPRO = (
+    "calibration_dapro_soft_prefix_bins_2_upb_coverage_0p70_phase1_anchor_global_0p001_"
+    "projection_margin_1p00_n1_200_allocation"
+)
+GENERALIZED_UPB_CRC_DAPRO = (
+    "calibration_dapro_soft_prefix_bins_2_upb_coverage_0p70_phase1_anchor_global_0p001_"
+    "budget_crc_control_100_n1_200_allocation"
 )
 SPLIT_DAPRO_ORACLE = (
     "calibration_oracle_target_a_dapro_alpha_0p10_n1_200_allocation"
@@ -209,6 +275,8 @@ METHOD_ORDER = (
     "DAPRO + CRC",
     "Generalized DAPRO (soft LPB)",
     "Generalized DAPRO (soft LPB) + CRC",
+    "Generalized DAPRO (soft UPB)",
+    "Generalized DAPRO (soft UPB) + CRC",
     "DAPRO Oracle (split)",
     "DAPRO Oracle + CRC",
     "DAPRO Oracle (global)",
@@ -231,7 +299,8 @@ METHOD_DISPLAY = {
     LPB_DAPRO: "DAPRO + CRC",
     GENERALIZED_LPB_DAPRO: "Generalized DAPRO (soft LPB)",
     GENERALIZED_LPB_CRC_DAPRO: "Generalized DAPRO (soft LPB) + CRC",
-    UPB_DAPRO: "DAPRO + CRC",
+    GENERALIZED_UPB_DAPRO: "Generalized DAPRO (soft UPB)",
+    GENERALIZED_UPB_CRC_DAPRO: "Generalized DAPRO (soft UPB) + CRC",
     SPLIT_DAPRO_ORACLE: "DAPRO Oracle (split)",
     CRC_DAPRO_ORACLE: "DAPRO Oracle + CRC",
     GLOBAL_DAPRO_ORACLE: "DAPRO Oracle (global)",
@@ -251,6 +320,8 @@ METHOD_COLORS = {
     "DAPRO + CRC": "#006d2c",
     "Generalized DAPRO (soft LPB)": "#665191",
     "Generalized DAPRO (soft LPB) + CRC": "#d45087",
+    "Generalized DAPRO (soft UPB)": "#665191",
+    "Generalized DAPRO (soft UPB) + CRC": "#d45087",
     "DAPRO Oracle (split)": "#e377c2",
     "DAPRO Oracle + CRC": "#7f3c8d",
     "DAPRO Oracle (global)": "#11a579",
@@ -261,23 +332,23 @@ METHOD_COLORS = {
 def calibration_names(bound_type: str) -> tuple[str, ...]:
     if bound_type not in {"lpb", "upb"}:
         raise ValueError(f"Unknown bound type: {bound_type!r}.")
-    dapro = LPB_DAPRO if bound_type == "lpb" else UPB_DAPRO
     oracle = LPB_ORACLE if bound_type == "lpb" else UPB_ORACLE
     methods = [
         UNCALIBRATED,
         STATIC,
         CONSTANT,
         POWER_REACH,
-        dapro,
         oracle,
     ]
     if bound_type == "lpb":
         methods[-1:-1] = [
             GENERALIZED_LPB_DAPRO,
             GENERALIZED_LPB_CRC_DAPRO,
-            SPLIT_DAPRO_ORACLE,
-            CRC_DAPRO_ORACLE,
-            GLOBAL_DAPRO_ORACLE,
+        ]
+    else:
+        methods[-1:-1] = [
+            GENERALIZED_UPB_DAPRO,
+            GENERALIZED_UPB_CRC_DAPRO,
         ]
     return tuple(methods)
 
@@ -308,6 +379,7 @@ def select_configs(
         *,
         keys: set[str] | None = None,
         target_models: set[str] | None = None,
+        bound_types: set[str] | None = None,
         available_only: bool = False,
 ) -> tuple[ExperimentConfig, ...]:
     configs = all_experiment_configs()
@@ -318,6 +390,14 @@ def select_configs(
             config
             for config in configs
             if config.target_model.key in target_models
+        )
+    if bound_types:
+        unknown = set(bound_types) - {"lpb", "upb"}
+        if unknown:
+            raise ValueError(f"Unknown bound types: {sorted(unknown)}")
+        configs = tuple(
+            config for config in configs
+            if config.bound_type in bound_types
         )
     if available_only:
         configs = tuple(

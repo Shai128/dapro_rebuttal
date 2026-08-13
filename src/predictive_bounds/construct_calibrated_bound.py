@@ -57,7 +57,9 @@ from src.predictive_bounds.calibration.survival_upb_calibration_with_known_weigh
 from src.train_model.models.utils import SurvivalModelPrediction
 
 from src.predictive_bounds.utils.get_calibration_methods_utils import (
-    get_baseline_calibrations as get_registered_baseline_calibrations, is_budget_sufficient_for_split,
+    get_baseline_calibrations as get_registered_baseline_calibrations,
+    get_upb_calibrations as get_registered_upb_calibrations,
+    is_budget_sufficient_for_split,
 )
 from src.predictive_bounds.utils.utils import (
     split_data,
@@ -65,6 +67,7 @@ from src.predictive_bounds.utils.utils import (
     get_tmp_upb_calibration_result_path,
     get_calibration_experiment_name,
     make_lpb_tau_grid,
+    make_upb_tau_grid,
     resolve_m_upper_bound,
     setup_experiment_data
 )
@@ -125,11 +128,16 @@ def _make_common_acquisition_uniforms(
     return selected
 
 
+UPB_INFINITY_VALUE = 201
+
+
 def compute_metrics_bound(bound: torch.Tensor, t_tilde: torch.Tensor, bound_type: str):
     if bound_type == 'lpb':
         coverage_rate = (t_tilde.unsqueeze(1) >= bound).float().mean(dim=0)
     elif bound_type == 'upb':
-        coverage_rate = ((t_tilde.unsqueeze(1) <= bound) | (bound == 200)).float().mean(dim=0)
+        # Times 1,...,200 are genuine event times.  Only 201 denotes the
+        # no-event/infinite UPB value, and T<=201 already gives coverage one.
+        coverage_rate = (t_tilde.unsqueeze(1) <= bound).float().mean(dim=0)
     else:
         raise ValueError("Invalid bound_type. Must be 'lpb' or 'upb'")
 
@@ -258,6 +266,12 @@ def run_one_experiment(experiments_name, seed, calibration, x_cal, t_tilde_cal, 
             "coverage": coverage_rate,
             "size": length,
         })
+        if bound_type == "upb":
+            bound_metrics.update(indexed_tensor_metrics({
+                "infinite_bound_rate": (
+                    calibrated_test_bound == UPB_INFINITY_VALUE
+                ).to(torch.float32).mean(dim=0),
+            }))
         all_metrics = {
             'seed': seed,
             'calibration_name': calibration.name,
@@ -303,7 +317,8 @@ def run_experiments(cal_size, is_real, device, dataset_name, data_setup, experim
                     dapro_n1_values=(200,100, 50),
                     definitive_dapro_margins=(1.0,)):
     max_time, t_tilde_cal_test, quantile_est_cal_test, probability_est, conditional_grid, test_size = setup_experiment_data(
-        cal_size, is_real, device, dataset_name, data_setup, taus_range, m_upper_bound
+        cal_size, is_real, device, dataset_name, data_setup, taus_range,
+        m_upper_bound, bound_type=bound_type,
     )
     source_fingerprint = _predictive_bounds_source_fingerprint()
     execution_device = str(conditional_grid.device)
@@ -453,6 +468,17 @@ def get_baseline_calibrations(conditional_grid, budget_per_sample, taus_range, t
             OracleSurvivalCalibration(taus_range, tau_prior),
         )
         return calibrations
+
+    return get_registered_upb_calibrations(
+        conditional_grid,
+        budget_per_sample,
+        taus_range,
+        tau_prior,
+        m_upper_bound,
+        dapro_n1_values=dapro_n1_values,
+        projection_budget_margin=float(definitive_dapro_margins[0]),
+        target_coverage=0.70,
+    )
 
     basic_allocation = BasicBudgetAllocator(budget_per_sample, taus_range, tau_prior)
     trimmed_allocation = TrimmedBudgetAllocator(budget_per_sample, taus_range, tau_prior, m_upper_bound)
@@ -1143,7 +1169,6 @@ def main():
     else:
         tau_prior = args.tau_prior if args.tau_prior is not None else 0.98
         target_taus_list = 1 - np.arange(0.01, 0.5, 0.01)
-        num_taus = 3000
 
     device = (
         args.device
@@ -1157,7 +1182,7 @@ def main():
     if bound_type == 'lpb':
         taus_range = make_lpb_tau_grid(device=device)
     else:
-        taus_range = torch.tensor(np.linspace(0.5, 0.95, num_taus)).to(device)
+        taus_range = make_upb_tau_grid(device=device)
 
     budget_per_sample = args.budget_per_sample
 

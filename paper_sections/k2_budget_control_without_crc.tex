@@ -1,0 +1,912 @@
+% This file is intended to be included from the main manuscript with \input.
+% It uses the notation and theorem environments defined in the manuscript.
+% Labels use the prefix ``k2bc'' to avoid collisions with earlier drafts.
+
+\subsection{Can two-bin DAPRO control the budget without CRC?}
+\label{sec:k2bc}
+
+The direct two-bin construction removes an important source of error from the
+legacy DAPRO analysis.  There is no longer a high-dimensional oracle policy
+followed by a separately fitted Platt or isotonic projection.  At every time,
+the deployable low/high lookup values are optimized directly.  It is therefore
+reasonable to expect the Phase-I-to-Phase-II cost gap to be smaller.
+Nevertheless, two bins alone do not imply expected-budget validity.  They
+reduce the complexity of the learned policy; they do not make the empirical
+cost of a data-adaptive policy equal to its population cost.
+
+This section separates three statements that should not be conflated:
+\begin{enumerate}
+    \item the bin table has no additional oracle-to-regression projection
+    error;
+    \item the fitted table has small empirical-to-population cost error; and
+    \item the expected total acquisition cost is bounded by the nominal
+    budget.
+\end{enumerate}
+The first statement holds by construction.  The second is an empirical or
+statistical-generalization claim.  The third requires either a quantified
+version of the second statement, an independent budget-control sample, or a
+pathwise robust constraint.
+
+\subsubsection{Why the legacy projection proof does not establish validity}
+
+The earlier proof compares an estimated coordinate-wise map
+$M_t(S(t);\Dcalone)$ with an oracle map $M_t^*(S(t);\Bbar)$ and assumes that
+all mixed products of their errors have zero conditional expectation.  Its
+conclusion is correct under those assumptions, but those assumptions do most
+of the work and are not consequences of median binning.
+
+There are four mismatches with the current soft-prefix hazard-K2 method.
+First, the oracle assumption already requires the oracle map to satisfy a
+population budget constraint.  Fitting the empirical budget exactly does not
+prove that premise.  Second, the required cross-time cancellation is much
+stronger than having only two score cells: all bin levels and cutpoints are
+learned from the same trajectories, and the score histories and active lengths
+are strongly dependent across time.  Third, the current cumulative-logit
+correction makes the final continuation at time $t$ a function of the entire
+observed bin prefix, not solely a coordinate-wise function of $S(t)$.  Fourth,
+the cost depends jointly on the score path, event time, and acquisition
+horizon.  Its population expectation must therefore be taken over the full
+trajectory, not merely the marginal distribution of one score coordinate.
+
+The legacy consistency discussion also uses, without an independence
+condition, a product-of-marginal-$L_1$ bound for products of projection
+errors.  That inequality is not valid in general.  Since every error is
+bounded by one, consistency can still make each mixed product vanish through
+the valid bound
+\begin{equation}
+    \E\!\left[\prod_{j\in A}|\varepsilon_j|\right]
+    \leq \min_{k\in A}\E|\varepsilon_k|,
+\end{equation}
+but this yields only an asymptotic statement under an explicit consistency
+assumption.  It is not a finite-sample theorem obtained from K2.
+
+\subsubsection{A counterexample: even one bin can overrun in expectation}
+
+The following elementary construction shows that no distribution-free
+expected-budget theorem follows from using two bins and matching the Phase-I
+cost.
+
+\begin{proposition}[Empirical K2 cost matching is insufficient]
+\label{prop:k2bc_counterexample}
+There exists an i.i.d. two-interaction problem and a time-only policy, which is
+a subclass of hazard-K2, whose empirical Phase-I expected cost is at most the
+target but whose deployment expected cost exceeds the target, both
+conditionally on some policy-fitting samples and after averaging over the
+policy-fitting sample.
+\end{proposition}
+
+\begin{proof}
+Let $Q=2$, let the active length satisfy
+$\mathbb P(L=2)=q\in(0,1)$ and $\mathbb P(L=1)=1-q$, and set the Phase-II
+target cost to one.  Consider the following empirical rule.  It always sets
+$P(1)=1$.  If at least one of the $n$ policy-fitting trajectories reaches time
+two, set $P(2)=0$; otherwise set the unconstrained structural value $P(2)=1$.
+For every policy-fitting sample, its empirical expected cost is one.
+
+Let $E$ be the event that all $n$ fitting trajectories have length one.
+Then $\mathbb P(E)=(1-q)^n>0$.  Conditional on $E$, the deployment expected
+cost is $1+q>1$.  Averaging over the fitting sample gives
+\begin{equation}
+    \E[c_{\mathrm{deploy}}]
+    =1+q(1-q)^n>1.
+\end{equation}
+The policy does not use a score at all, so it belongs to the one-bin subclass
+of every K2 policy class.  Hence restricting a policy to two median bins cannot
+by itself rule out the failure.  A positive propensity floor gives the same
+construction after increasing the nominal target by the unavoidable floor
+cost.
+\end{proof}
+
+The mechanism in Proposition~\ref{prop:k2bc_counterexample} is population
+transfer, not oracle-to-bin projection.  A Phase-I sample can contain too few
+long trajectories or too few particular bin histories, causing their cost to
+be underestimated.  The same issue remains when the table is obtained by a
+convex DAPRO optimization rather than by the simple rule in the proof.
+
+\subsubsection{Why median-rank symmetry does not repair the problem}
+
+There is a tempting argument specific to K2.  Suppose that $n_t=2r+1$
+active Phase-I scores are i.i.d. from a continuous distribution and that the
+cutpoint is the order-statistic median.  With the implementation convention
+that a score equal to the cutpoint enters the high bin, the fitting high-bin
+fraction is $(r+1)/(2r+1)$, whereas an independent score enters the high bin
+with marginal probability $1/2$.  More generally, if the cutpoint is the
+$k$th order statistic, these two probabilities are
+$(n_t-k+1)/n_t$ and $(n_t-k+1)/(n_t+1)$, respectively.  Thus, for a
+\emph{fixed} monotone two-level table learned independently of these scores,
+the empirical high-bin occupancy has a small conservative rank correction.
+
+This observation is not a budget theorem for DAPRO.  The two table values
+are optimized from the same score order statistics, target coefficients, and
+active lengths.  Rank symmetry controls a bin count; it does not make the
+adaptively selected cost independent of the cutpoint.  The following
+one-decision construction makes the distinction explicit.
+
+\begin{proposition}[Median symmetry is insufficient]
+\label{prop:k2bc_median_counterexample}
+Let $n=2r+1$, $S\sim\operatorname{Unif}(0,1)$, and let $c$ be the sample
+median.  Fix $0\leq\eps<b$ and
+\begin{equation}
+    w_H:=\frac{r+1}{2r+1},
+    \qquad b\leq \eps+w_H(1-\eps).
+\end{equation}
+There is a data-dependent monotone K2 table with probabilities at least
+$\eps$ whose empirical cost equals $b$ for every fitting sample but whose
+marginal fresh-sample expected cost is strictly larger than $b$.
+\end{proposition}
+
+\begin{proof}
+Conditional on $c$, let $R(c)=\mathbb P(S_{\rm new}\geq c)=1-c$.  If
+$R(c)\leq w_H$, set $p_L=p_H=b$.  Otherwise set
+\begin{equation}
+    p_L=\eps,
+    \qquad
+    p_H=\eps+\frac{b-\eps}{w_H}.
+\end{equation}
+The table is monotone and lies in $[\eps,1]$.  Its empirical cost is $b$ in
+both branches because the empirical high-bin fraction is exactly $w_H$.
+In the second branch, however, its fresh-sample conditional cost is
+\begin{equation}
+    \eps+R(c)\frac{b-\eps}{w_H}>b.
+\end{equation}
+The event $R(c)>w_H$ has positive probability under the beta law of the
+sample median.  Averaging over $c$ therefore gives a strict marginal budget
+violation.
+\end{proof}
+
+This is not merely an adversarial lookup-table phenomenon.  The exact
+one-step DAPRO optimizer itself provides a counterexample.
+
+\begin{proposition}[The median-K2 DAPRO KKT policy can overrun]
+\label{prop:k2bc_kkt_counterexample}
+Let $S_1,\ldots,S_5\stackrel{\mathrm{i.i.d.}}{\sim}
+\operatorname{Unif}(0,1)$, let $c=S_{(3)}$, and put
+$B_i=\mathbb{I}\{S_i\geq c\}$.  Define
+\begin{equation}
+ a(S)=\mathbb{I}\{S>1/5\},\qquad
+ A_k=\frac{1}{5}\sum_{i=1}^5a(S_i)\mathbb{I}\{B_i=k\},qquad
+ (D_0,D_1)=(2/5,3/5).
+\end{equation}
+For $0<b<3/5$, fit the exact two-cell DAPRO policy
+\begin{equation}
+ \min_{0\leq p_0\leq p_1\leq1}
+ \left\{\frac{A_0}{p_0}+\frac{A_1}{p_1}\right\}
+ \quad\text{subject to}\quad D_0p_0+D_1p_1\leq b,
+ \label{eq:k2bc_exact_kkt_problem}
+\end{equation}
+using the uniform budget-filling solution when both target masses vanish.
+Its empirical cost equals $b$ for every fitting sample, but
+\begin{equation}
+ \frac{\E[c_{\rm new}]}{b}
+ =\frac{1921+1280r_\star}{3125}
+ =1.0080132589\ldots>1,
+ \qquad
+ r_\star:=\frac{13/\sqrt2+12}{5(2/\sqrt2+3)}.
+ \label{eq:k2bc_exact_kkt_ratio}
+\end{equation}
+\end{proposition}
+
+\begin{proof}
+Let $J=\sum_i\mathbb{I}\{S_i\leq1/5\}$.  Then
+\begin{equation}
+ 3125\,\mathbb P(J=j)=(1024,1280,640,160,20,1)_j.
+\end{equation}
+For $j=0,ldots,5$, the target counts in the low and high median cells are
+\begin{equation}
+ (m_0,m_1)={(2,3),(1,3),(0,3),(0,2),(0,1),(0,0)\},
+ \label{eq:k2bc_kkt_counts}
+\end{equation}
+and elementary order-statistic calculations give
+\begin{equation}
+ \E[c\mid J=j]
+ =\left(\frac35,\frac{13}{25},\frac25,
+         \frac3{20},\frac3{25},\frac1{10}\right)_j.
+ \label{eq:k2bc_kkt_medians}
+\end{equation}
+For nonzero cell risks $r_k=A_k/D_k$, the KKT equations for
+\eqref{eq:k2bc_exact_kkt_problem} give
+\begin{equation}
+ p_k=\frac{b\sqrt{r_k}}{D_0\sqrt{r_0}+D_1\sqrt{r_1}};
+ \label{eq:k2bc_kkt_solution}
+\end{equation}
+if $r_0=0<r_1$, they give $p_0=0,p_1=5b/3$.  Conditional on the fitting
+median, a fresh score has cost $cp_0+(1-c)p_1$.  Substituting
+\eqref{eq:k2bc_kkt_counts}--\eqref{eq:k2bc_kkt_solution} and averaging over
+the conditional median laws gives the six fresh-to-fit cost ratios
+\begin{equation}
+ (1,r_\star,1,17/12,22/15,1)_j.
+\end{equation}
+Weighting them by the binomial probabilities proves
+\eqref{eq:k2bc_exact_kkt_ratio}.  The strict inequality is exact:
+$r_\star>301/320$ is equivalent after cross multiplication to
+$1/\sqrt2>27/46$.
+\end{proof}
+
+The strict gap persists under every sufficiently small positive floor and
+global regularization by continuity.  It also persists at the exact
+production values.  Replace the two cell risks in case $j$ by
+\begin{equation}
+ r_0(j;\delta)=\frac{m_0(j)+2\delta}{2(1+\delta)},
+ \qquad
+ r_1(j;\delta)=\frac{m_1(j)+3\delta}{3(1+\delta)},
+\end{equation}
+use~\eqref{eq:k2bc_kkt_solution}, and apply
+\begin{equation}
+ \phi_\gamma(p)=\eps+(1-\eps)
+ \sigma\{\operatorname{logit}(p)+\gamma\},
+ \qquad
+ \frac25\phi_\gamma(p_0)+\frac35\phi_\gamma(p_1)=b.
+\end{equation}
+Exact enumeration of the same six cases at
+$\delta=0.001$, $\eps=0.005$, and $b=0.2$ gives
+\begin{equation}
+    \widehat c_{\rm fit}=0.2
+    \quad\hbox{for every sample},
+    \qquad
+    \E[c_{\rm new}]=0.2012423238>0.2.
+    \label{eq:k2bc_exact_kkt_counterexample}
+\end{equation}
+Hence no theorem whose premises are only i.i.d. sampling, a median split,
+monotonicity, positivity, and exact empirical DAPRO feasibility can conclude
+finite-sample expected-budget validity.
+
+When the active count is even, the current NumPy median is a linear
+interpolation between two order statistics, so even the clean $1/2$ fresh-bin
+identity above no longer holds exactly.  Score atoms and deterministic tie
+handling can make cell occupancy still more uneven.  These details strengthen,
+rather than weaken, Proposition~\ref{prop:k2bc_median_counterexample}.
+
+\subsubsection{Why the scalar exchangeability proof cannot be reused raw}
+
+The single-parameter risk-control proof in the earlier appendix is sound for
+a different architecture.  Conditional on an independently learned policy
+shape, suppose that $K_i(\lambda)$ is the \emph{same} fixed, bounded, nested
+loss family for every exchangeable row.  A selector of the form
+\begin{equation}
+ \widehat\lambda=\inf\left\{\lambda:
+ \frac{\sum_{i=1}^{n}K_i(\lambda)+K_{\max}}{n+1}\leq a\right\}
+ \label{eq:k2bc_scalar_crc}
+\end{equation}
+can be compared with the symmetric selector obtained after adding the fresh
+row.  Exchangeability then bounds the expected fresh loss.  This is precisely
+the conformal-risk-control argument.
+
+In raw direct-bin DAPRO, however, both the $\maxl$ cutpoints and the $2\maxl$
+table values are learned on the same rows used in the constraint.  If the
+shape $g_{\Dcalone}$ is kept fixed when the fresh row is appended, that row is
+the unique observation excluded from shape fitting and the augmented selector
+is not symmetric.  If one refits the symmetric shape
+$g_{\Dcalone\cup\{j\}}$, the monotone comparison underlying
+\eqref{eq:k2bc_scalar_crc} fails because the two selectors traverse different
+families.  The maximum-loss correction does not repair this mismatch.
+Thus the scalar proof becomes applicable only after learning the K2 shape on
+independent data and calibrating one scalar on a separate sample---which is a
+form of CRC or sample splitting, not a proof for raw same-sample K2.
+
+\subsubsection{A positive, but asymptotic, theorem for unchanged K2}
+
+There is a clean statement that does not use an oracle map or a numerical
+projection-error assumption.  For fixed finite $M$ and $K=2$, let
+$\Pi_{M,2}$ contain all monotone threshold/table policies and define the
+bounded full-trajectory cost
+\begin{equation}
+ C_\pi(Z)=\sum_{t\leq L(Z)}\prod_{s\leq t}
+ p_{s,b_s(Z)}.
+\end{equation}
+This finite-dimensional VC-subgraph class is Glivenko--Cantelli.  Therefore,
+if an arbitrary measurable empirical optimizer $\widehat\pi_n$ satisfies
+$\mathbb P_nC_{\widehat\pi_n}\leq b_n$ and $b_n\to b$ in $L_1$, then
+\begin{equation}
+ \limsup_{n\to\infty}\E\bigl[\mathbb P
+ C_{\widehat\pi_n}\bigr]\leq b.
+ \label{eq:k2bc_gc_limit}
+\end{equation}
+Indeed,
+\begin{equation}
+ \mathbb PC_{\widehat\pi_n}
+ \leq \mathbb P_nC_{\widehat\pi_n}
+ +\sup_{\pi\in\Pi_{M,2}}|\mathbb PC_\pi-\mathbb P_nC_\pi|,
+\end{equation}
+and the final term converges to zero in $L_1$.
+
+Equation~\eqref{eq:k2bc_gc_limit} is the strongest assumption-light theorem
+for the unchanged raw method.  It is asymptotic with fixed $M$; it does not
+give the finite-sample inequality $\E C\leq b$.  Generic complexity reserves
+for a sequential class with roughly $3M$ learned quantities are vacuous when
+$M=200$ and $n\in\{50,100,200\}$.  K2 makes generalization more plausible,
+but it cannot turn this limiting theorem into an exact finite-sample one.
+
+\subsubsection{What can be proved from a projection reserve}
+
+Let $\widehat c_f$ be the corrected expected cost of the frozen policy on the
+policy-fitting fold, and let
+\begin{equation}
+    c(P):=\E_{W\sim\mathcal P}
+       \left[\sum_{t=1}^{L(W)}\rho_P(W,t)\right]
+\end{equation}
+be its deployment-population expected cost, where $W$ denotes the complete
+latent trajectory.  Suppose the optimizer enforces
+\begin{equation}
+    \widehat c_f\leq\bar B_2-\eta.
+\end{equation}
+Then
+\begin{equation}
+    \E_{\Dcalone}[c(P_{\Dcalone})]
+    \leq\bar B_2
+\end{equation}
+follows if one separately proves or assumes
+\begin{equation}
+    \E_{\Dcalone}
+      [c(P_{\Dcalone})-\widehat c_f]
+    \leq\eta.
+    \label{eq:k2bc_expected_transfer_assumption}
+\end{equation}
+This is a valid expected-budget theorem, but
+\eqref{eq:k2bc_expected_transfer_assumption} is its substantive premise.
+K2 makes the premise more plausible than a high-capacity projection; it does
+not prove it.
+
+A standard learning-theoretic version makes the missing quantity explicit.
+Let $\mathcal C_2$ be the class of full-trajectory cost functions induced by
+all admissible hazard-K2 tables and let
+\begin{equation}
+    \mathfrak G_{n_f}(\mathcal C_2)
+    :=\E\!\left[
+      \sup_{c\in\mathcal C_2}
+      \{\mathbb Pc-\mathbb P_{n_f}c\}
+    \right]
+\end{equation}
+be its expected one-sided generalization gap.  Any empirical optimizer obeys
+\begin{equation}
+    \E[c(P_{\Dcalone})]
+    \leq \E[\widehat c_f]
+       +\mathfrak G_{n_f}(\mathcal C_2).
+    \label{eq:k2bc_uniform_gap}
+\end{equation}
+Consequently, reserving a certified upper bound on
+$\mathfrak G_{n_f}(\mathcal C_2)$ would give expected-budget control without
+CRC.  The difficulty is quantitative.  K2 still contains approximately two
+continuation levels and one data-dependent cutpoint at each of up to
+$\maxl=200$ times.  A generic uniform-convergence bound therefore scales with
+the complexity of the whole sequential table, not with the number two alone,
+and is typically vacuous for $n_f\in\{50,100,200\}$.  The fact that the
+optimizer often pools the two bins in observed experiments can improve
+empirical stability, but it does not reduce the worst-case class used in a
+distribution-free proof.
+
+Thus the existing one-turn reserve is properly described as an
+assumption-based controller.  Its empirical success in mean can support a
+sensitivity analysis, but not a finite-sample theorem unless
+\eqref{eq:k2bc_expected_transfer_assumption} is stated explicitly.
+
+\subsubsection{A CRC-free, distribution-free K2 guarantee}
+\label{sec:k2bc_worst_path}
+
+K2 does permit a different rigorous controller.  It exploits score
+monotonicity rather than claiming that projection error is negligible.  Let
+$p_{t,0}\leq p_{t,1}$ be the frozen low/high raw continuation table.  The
+all-high score path dominates every possible bin path.  Therefore it is enough
+to control that single worst path.
+
+We state the result in a form that includes the cumulative-logit correction.
+For a raw cumulative path $r=(r(1),\ldots,r(\maxl))$, define
+\begin{equation}
+    \Psi_\gamma(r)(t)
+    :=\eps_\pi+(1-\eps_\pi)
+      \min_{u\leq t}
+      \sigma\!\left(\operatorname{logit}\{r(u)\}+\gamma\right).
+    \label{eq:k2bc_isotone_projection}
+\end{equation}
+This map is coordinate-wise nondecreasing: if $r(t)\leq r'(t)$ for every
+$t$, then $\Psi_\gamma(r)(t)\leq\Psi_\gamma(r')(t)$ for every $t$.
+
+Before any response is generated, the first-prefix hazard and hence the first
+bin $b_i(1)$ are known for every deployment prompt.  Define the worst future
+raw path conditional on this known first bin by
+\begin{equation}
+    r_i^+(t)
+    :=p_{1,b_i(1)}\prod_{s=2}^{t}p_{s,1},
+    \qquad t=1,\ldots,Q_i,
+    \label{eq:k2bc_worst_raw_path}
+\end{equation}
+with the empty product equal to one.  If one does not wish to use the known
+first score, replace $p_{1,b_i(1)}$ by $p_{1,1}$.
+
+\begin{theorem}[Worst-path K2 expected-budget validity]
+\label{thm:k2bc_worst_path}
+Let $B_1=\sum_{i\in\calIone}L_i$ be the realized Phase-I cost and let
+$B_{\mathrm{rem}}=B-B_1$.  Suppose the K2 table is score-monotone,
+$p_{t,0}\leq p_{t,1}$, the deployment horizons $Q_i$ and first bins $b_i(1)$
+are known before acquisition, and a common shift $\widehat\gamma$ is chosen so
+that
+\begin{equation}
+    \sum_{i\in\calItwo}\sum_{t=1}^{Q_i}
+      \Psi_{\widehat\gamma}(r_i^+)(t)
+    \leq B_{\mathrm{rem}}.
+    \label{eq:k2bc_worst_path_constraint}
+\end{equation}
+Then, for every collection of future score paths and event times,
+\begin{equation}
+    \E_R\!\left[
+       \sum_{i\in\calI}\Ttilde_i
+       \middle|
+       \Dcalone,\{X_i\}_{i\in\calItwo},
+       \text{complete latent trajectories}
+    \right]
+    \leq B.
+    \label{eq:k2bc_conditional_budget}
+\end{equation}
+In particular, the same inequality holds after averaging over trajectories,
+the calibration split, and acquisition randomness.  No CRC fold, i.i.d.
+generalization argument, correct hazard model, or projection-accuracy
+assumption is required.
+\end{theorem}
+
+\begin{proof}
+Fix a deployment row and its realized bin sequence $b_i(1),b_i(2),\ldots$.
+By score monotonicity,
+\begin{equation}
+    p_{1,b_i(1)}\prod_{s=2}^{t}p_{s,b_i(s)}
+    \leq p_{1,b_i(1)}\prod_{s=2}^{t}p_{s,1}
+    =r_i^+(t)
+\end{equation}
+at every time.  The map $\Psi_{\widehat\gamma}$ is isotone, so the deployed
+cumulative reach $\rho_i(t)$ is at most
+$\Psi_{\widehat\gamma}(r_i^+)(t)$.  Moreover,
+$L_i\leq Q_i$.  Conditional on the complete trajectory, the expected number
+of acquired interactions is therefore
+\begin{equation}
+    \E_R[\Ttilde_i]
+    =\sum_{t=1}^{L_i}\rho_i(t)
+    \leq\sum_{t=1}^{Q_i}
+      \Psi_{\widehat\gamma}(r_i^+)(t).
+\end{equation}
+Summing over Phase II and applying
+\eqref{eq:k2bc_worst_path_constraint} gives expected Phase-II cost at most
+$B-B_1$.  The Phase-I cost is exactly $B_1$, proving
+\eqref{eq:k2bc_conditional_budget}.
+\end{proof}
+
+The scalar $\widehat\gamma$ can be found by the same monotone bisection already
+used for the cumulative-logit correction; only its cost oracle changes.  The
+current implementation evaluates the correction on realized policy-fitting
+paths.  The worst-path controller evaluates the left side of
+\eqref{eq:k2bc_worst_path_constraint} instead.  Feasibility requires
+\begin{equation}
+    \eps_\pi\sum_{i\in\calItwo}Q_i\leq B-B_1,
+\end{equation}
+which is the unavoidable cost of the positivity floor.
+
+The same guarantee may be imposed directly inside the raw log-probability
+optimization.  If $y_{t,1}=\log p_{t,1}$, the all-high constraint without the
+logit post-processing is
+\begin{equation}
+    \sum_{i\in\calItwo}\sum_{t=1}^{Q_i}
+      \exp\!\left\{y_{1,b_i(1)}+
+                   \sum_{s=2}^{t}y_{s,1}\right\}
+    \leq B-B_1.
+    \label{eq:k2bc_convex_worst_path}
+\end{equation}
+This is a convex exponential sublevel constraint.  Hence worst-path validity
+does not destroy the convexity of the soft-prefix Generalized-DAPRO fit.
+
+\subsubsection{A less conservative exact controller: the predictable budget
+compensator}
+\label{sec:k2bc_online_compensator}
+
+The all-high constraint is the strongest clean option when the deployment
+policy must be frozen row by row.  It need not be the best option when the
+evaluator processes the active conversations as a cohort.  At every turn, the
+set of active rows and their current K2 probabilities have already been
+observed.  We can therefore control the \emph{predictable compensator} of the
+token count online instead of upper-bounding every unobserved future path.
+
+Fit the soft-prefix hazard-K2 table on all $N_1$ Phase-I rows, without using a
+CRC fold.  From Phase I, freeze a strictly positive time-spend profile
+$v_1,\ldots,v_{\maxl}$.  One convenient implementation uses the raw fitted
+expected spend at every time and adds an arbitrarily small positive value at
+otherwise empty times.  Let $R_1=B_{\rm rem}$ be the Phase-II credit.  Just
+before the acquisition decisions at time $t$, let $\mathcal H_t$ be the
+currently active rows and let $q_{it}\in(0,1]$ be row $i$'s raw K2
+continuation, computed from its currently observed prefix.  Define the
+tranche
+\begin{equation}
+    d_t=R_t\frac{v_t}{\sum_{s=t}^{\maxl}v_s}.
+    \label{eq:k2bc_tranche}
+\end{equation}
+Choose a common scalar $\gamma_t$ by bisection and set
+\begin{equation}
+ p_{it}=\sigma\!\left\{\operatorname{logit}(q_{it})+\gamma_t\right\},
+ \qquad i\in\mathcal H_t,
+ \label{eq:k2bc_online_logit}
+\end{equation}
+so that
+\begin{equation}
+ c_t:=\sum_{i\in\mathcal H_t}p_{it}
+ \leq \min\{d_t,|\mathcal H_t|\}.
+ \label{eq:k2bc_online_spend}
+\end{equation}
+When $d_t\geq|\mathcal H_t|$, set all active probabilities to one.  Update
+$R_{t+1}=R_t-c_t$; thus unused credit is carried to later turns.  At the final
+possible time, the remaining credit is offered to the remaining active rows.
+The score, median cutpoints, K2 table, and task-specific DAPRO objective are
+unchanged.  The only addition is the one-dimensional causal intercept in
+\eqref{eq:k2bc_online_logit}.
+
+\begin{theorem}[CRC-free predictable-compensator budget validity]
+\label{thm:k2bc_online_budget}
+Let $\mathcal F_{t-1}$ contain the policy fit, all prefixes, active sets, and
+acquisition coins observed before the decisions at time $t$.  Suppose
+$\mathcal H_t$, $q_{it}$, $v_t$, and $R_t$ are
+$\mathcal F_{t-1}$-measurable, and conditional on $\mathcal F_{t-1}$ the
+active acquisition coins are independent Bernoulli variables with means
+$p_{it}$ from~\eqref{eq:k2bc_online_logit}.  If the ledger update satisfies
+\eqref{eq:k2bc_online_spend}, then
+\begin{equation}
+ \E_R[C_{\rm II}\mid\Dcalone,\text{complete latent trajectories}]
+ \leq B_{\rm rem}.
+ \label{eq:k2bc_online_expected_budget}
+\end{equation}
+Consequently, expected total cost is at most $B$.  Moreover, for every
+$\delta\in(0,1)$, with $x=\log(1/\delta)$,
+\begin{equation}
+ \mathbb P_R\!\left{
+ C_{\rm II}>B_{\rm rem}+\sqrt{2B_{\rm rem}x}+\frac{x}{3}
+ \middle|\Dcalone,\text{latent trajectories}\right}
+ \leq\delta.
+ \label{eq:k2bc_freedman}
+\end{equation}
+No projection-error, score-calibration, i.i.d.-transfer, or CRC assumption is
+used.
+\end{theorem}
+
+\begin{proof}
+Let $Z_{it}$ be the acquisition coin for an active row and let
+$X_{it}=\mathbb{I}\{i\in\mathcal H_t\}Z_{it}$.  Predictability gives
+\begin{equation}
+ \E[X_{it}\mid\mathcal F_{t-1}]
+ =\mathbb{I}\{i\in\mathcal H_t\}p_{it}.
+\end{equation}
+The recursion in~\eqref{eq:k2bc_tranche}--\eqref{eq:k2bc_online_spend}
+never spends more credit than remains, so on every realized history
+$\sum_tc_t\leq B_{\rm rem}$.  The tower property now yields
+\begin{equation}
+ \E[C_{\rm II}]
+ =\E\!\left[\sum_t\sum_{i\in\mathcal H_t}Z_{it}\right]
+ =\E\!\left[\sum_tc_t\right]\leq B_{\rm rem}.
+\end{equation}
+For the second statement, order the offered Bernoulli decisions in any
+predictable order.  Their centered differences are bounded above by one and
+their predictable quadratic variation is no larger than
+$\sum_tc_t\leq B_{\rm rem}$.  Freedman's inequality gives
+\eqref{eq:k2bc_freedman}.
+\end{proof}
+
+The online theorem is stronger than the desired marginal statement: it
+conditions on the complete benchmark trajectories.  It also uses information
+that the static theorem deliberately discards.  Rows that stop or reveal an
+event release credit to the rows still active, rather than forcing every row
+to reserve budget for an all-high, full-horizon future.
+
+\paragraph{HT validity and variance under the shared ledger.}
+The common ledger couples the rows, but it does not bias a fixed-target HT
+estimate.  Let $R_i$ indicate that row $i$'s required endpoint is reached and
+let $\Pi_i$ be the product of the actual predictable probabilities recorded
+along that endpoint path.  Provided every offered probability is strictly
+positive,
+\begin{equation}
+ W_i:=\frac{R_i}{\Pi_i},
+ \qquad
+ \E_R[W_i\mid\text{latent trajectories}]=1.
+ \label{eq:k2bc_adaptive_ht}
+\end{equation}
+Repeated tower conditioning proves~\eqref{eq:k2bc_adaptive_ht}.  Conditional
+independence of the same-round coins also gives
+$\E_R[W_iW_j]=1$ for $i\ne j$: the rowwise likelihood-ratio martingales have
+zero cross-variation even though later probabilities depend on the joint past.
+Thus rowwise HT contributions remain uncorrelated.
+
+The familiar retrospective formula $A_i(1/\Pi_i-1)$ treats $\Pi_i$ as fixed
+and is not directly estimable from one adaptive-ledger run.  The correct
+observed-only design-unbiased acquisition-variance estimator is
+\begin{equation}
+ \widehat V_{\rm acq}
+ =\frac{1}{N^2}\sum_i A_iR_i
+   \frac{1-\Pi_i}{\Pi_i^2}.
+ \label{eq:k2bc_online_variance}
+\end{equation}
+Indeed, each summand is $A_i(W_i^2-W_i)$, whose expectation is the
+corresponding row variance, and the cross-row covariances vanish.
+
+For LPB construction, every fixed candidate's weighted miscoverage estimate
+remains unbiased by the same argument.  The finite-sample LPB theorem in the
+current manuscript, however, factors a product MGF using mutual independence
+of rowwise censoring.  That proof does not apply verbatim to a shared ledger.
+The following replacement uses the weaker cross-moment identity above.  Its
+dependence on $\delta$ is polynomial rather than logarithmic, but it gives a
+complete finite-sample statement without falsely assuming independent rows.
+
+For a fixed candidate $\tau$, write
+\begin{equation}
+ A_{\tau i}:=\mathbb{I}\{T_i<\fhat_\tau(X_i)\},\qquad
+ Y_{\tau i}:=A_{\tau i}\frac{R_{\tau i}}{\Pi_{\tau i}},
+ \label{eq:k2bc_lpb_ht_row}
+\end{equation}
+where $R_{\tau i}$ indicates that the information required to resolve
+$A_{\tau i}$ was acquired and $\Pi_{\tau i}$ is its logged cumulative
+propensity.  On a fully observed Phase-I row, set $Y_{\tau i}=A_{\tau i}$.
+
+\begin{theorem}[LPB coverage under a shared predictable ledger]
+\label{thm:k2bc_shared_lpb}
+Condition on $\Dtrain$ and suppose the full calibration rows and a test row
+are i.i.d.  Assume $\fhat_\tau$ is nondecreasing and continuous in $\tau$,
+the shared-ledger policy is predictable and strictly positive, and, for all
+distinct Phase-II rows $i\ne j$ and every complete collection of latent
+trajectories,
+\begin{equation}
+ \E_R\!\left[\frac{R_{\tau i}}{\Pi_{\tau i}}\right]=1,
+ \qquad
+ \E_R\!\left[
+   \frac{R_{\tau i}}{\Pi_{\tau i}}
+   \frac{R_{\tau j}}{\Pi_{\tau j}}
+ \right]=1.
+ \label{eq:k2bc_lpb_cross_moment}
+\end{equation}
+Suppose also that a constant $\bar v\geq1$, which may depend on $\Dtrain$
+but not on the Phase-I sample, satisfies almost surely
+\begin{equation}
+ \E\!\left[Y_{\tau i}^{,2}\mid\Dcalone,\Dtrain\right]
+ \leq\bar v
+ \quad\text{for every Phase-II row $i$ and candidate $\tau$.}
+ \label{eq:k2bc_lpb_second_moment}
+\end{equation}
+Let $N=N_1+N_2$ and let $\widehat\tau$ be the same strict-initial-prefix
+selector used by the main LPB algorithm, based on
+$N^{-1}\sum_iY_{\tau i}\leq\alpha$.  Define
+\begin{equation}
+ \Delta_{\rm ledger}
+ :=\sqrt{\frac{(1-\delta)\bar v}{\delta N}}.
+ \label{eq:k2bc_lpb_gap}
+\end{equation}
+Then, with probability at least $1-\delta$ over calibration trajectories and
+acquisition randomness,
+\begin{equation}
+ \mathbb P\!\left[
+   \Ttest\geq\fhat_{\widehat\tau}(\Xtest)
+   \middle|\Dtrain,\Dcal,\text{acquisition}
+ \right]
+ \geq1-\alpha-\Delta_{\rm ledger}.
+ \label{eq:k2bc_lpb_coverage}
+\end{equation}
+\end{theorem}
+
+\begin{proof}
+Let $P_\tau:=\mathbb P\{T<\fhat_\tau(X)\mid\Dtrain\}$ and
+$S_\tau:=\sum_iY_{\tau i}$.  The first identity in
+\eqref{eq:k2bc_lpb_cross_moment} gives
+$\E[S_\tau]=NP_\tau$.  The second identity, followed by averaging over the
+independent latent rows, gives
+$\E[Y_{\tau i}Y_{\tau j}]=P_\tau^2$ for $i\ne j$ in Phase II.  Thus their
+HT contributions are uncorrelated even though they are not independent.
+Moreover,
+$\E[\sum_{i\in\calItwo}Y_{\tau i}\mid\Dcalone,\Dtrain]=N_2P_\tau$;
+hence the Phase-I and Phase-II sums are uncorrelated.  It follows from
+\eqref{eq:k2bc_lpb_second_moment} that
+\begin{equation}
+ \Var(S_\tau)
+ \leq N_1P_\tau(1-P_\tau)
+      +N_2(\bar v-P_\tau^2)
+ \leq N\bar v.
+ \label{eq:k2bc_lpb_variance_bound}
+\end{equation}
+Cantelli's inequality therefore yields, for every $u>0$,
+\begin{equation}
+ \mathbb P\!\left\{S_\tau/N\leq P_\tau-u\right\}
+ \leq\frac{N\bar v}{N\bar v+N^2u^2}.
+ \label{eq:k2bc_lpb_cantelli}
+\end{equation}
+At $u=\Delta_{\rm ledger}$ the right side equals $\delta$.  If the selected
+bound has population miscoverage above $\alpha+u$, continuity and
+monotonicity provide a deterministic boundary candidate $\tau_u$ with
+$P_{\tau_u}=\alpha+u$.  Feasibility of the strict initial prefix then implies
+$S_{\tau_u}/N\leq\alpha=P_{\tau_u}-u$, an event bounded by
+\eqref{eq:k2bc_lpb_cantelli}.  Outside that event, selected miscoverage is at
+most $\alpha+u$, which is equivalent to
+\eqref{eq:k2bc_lpb_coverage}.
+\end{proof}
+
+Theorem~\ref{thm:k2bc_shared_lpb} shows that row independence is not
+fundamental: pairwise HT cross-moment preservation is enough.  Its
+$O\{(N\delta)^{-1/2}\}$ gap is looser than the original Bernstein gap
+$O\{\sqrt{\log(1/\delta)/N}\}$.  A deterministic maximum-weight bound would
+permit a sharper martingale-Bernstein result.  The online controller does not
+currently impose a useful uniform terminal-propensity floor, so
+\eqref{eq:k2bc_lpb_second_moment} remains an explicit propensity-moment
+condition, analogous to the original manuscript's bounded-mean-weight
+condition.  Accordingly, the online method has an assumption-free budget
+theorem and a valid LPB theorem under~\eqref{eq:k2bc_lpb_second_moment}; the
+static all-high controller additionally preserves the original independent-
+row proof architecture.
+
+\subsubsection{Why the median, and whether another quantile is better}
+\label{sec:k2bc_cutpoint}
+
+The median is a stability choice, not a consequence of the DAPRO objective.
+If $n_t$ fitting histories are active at time $t$, a $q$-quantile split
+places approximately $n_tq$ and $n_t(1-q)$ observations in its two cells.
+The median uniquely maximizes
+\begin{equation}
+    \min\{n_tq,n_t(1-q)\},
+\end{equation}
+and is therefore minimax for the smaller cell size.  This is valuable when
+$N_1$ is small and the late-time risk sets are sparse.  It also makes the bin
+assignments invariant to every strictly increasing recalibration of the
+hazard score.  None of these properties makes the median variance-optimal or
+budget-valid.
+
+The distinction is transparent in a one-decision approximation.  For a
+threshold $c$, let
+\begin{equation}
+ A_b(c)=\E[a(S)\mathbb{I}\{B_c(S)=b\}],\qquad
+ D_b(c)=\E[d(S)\mathbb{I}\{B_c(S)=b\}],\quad b\in\{0,1\}.
+\end{equation}
+Before clipping at one, minimizing $\sum_bA_b/p_b$ subject to
+$\sum_bD_bp_b\leq C$ gives
+\begin{equation}
+ p_b\propto\sqrt{\frac{A_b(c)}{D_b(c)}},
+ \qquad
+ J^*(c)=\frac{
+  \{\sqrt{A_0(c)D_0(c)}+\sqrt{A_1(c)D_1(c)}\}^2}{C}.
+ \label{eq:k2bc_optimal_cut}
+\end{equation}
+Thus the population-optimal threshold minimizes the expression in braces,
+not the occupancy imbalance.  If $r(s)=a(s)/d(s)$ is continuous and monotone,
+an interior optimum obeys
+\begin{equation}
+ r(c)=\sqrt{r_0(c)r_1(c)},
+ \qquad r_b(c)=A_b(c)/D_b(c),
+\end{equation}
+which need not be a median condition.
+
+We tested one common quantile
+$q\in\{0.1,0.2,\ldots,0.9\}$ at every time on four real setups, five
+common calibration--test splits, both tasks, $N_1=50$, $B/N=20$, and
+$\maxl=200$---360 fitted policies in total.  The response was the exact
+fixed-target acquisition variance under the frozen no-CRC policy.  Relative
+to the median:
+\begin{center}
+\begin{tabular}{lccc}
+\toprule
+Task & best stable fixed $q$ & mean variance change & wins/losses\\
+\midrule
+Metric estimation & $0.6$ & $-0.20\%$ & $11/9$\\
+LPB fixed target & $0.7$ & $-1.65\%$ & $9/2$\; (six ties)\\
+\bottomrule
+\end{tabular}
+\end{center}
+For metric estimation, the setup-wise optima were $0.5,0.8,0.3,$ and $0.7$;
+there was no universal improvement.  For LPB, $q=0.9$ improved the mean by
+$2.72\%$, but the gain was largely toxicity-driven, it lost on five
+nondegenerate split/setup pairs, and its worst split was $4.19\%$ worse.
+Changing $q$ did not change the selected LPB candidate or coverage on any of
+the twenty outer splits; it changed only the small acquisition component.
+
+Selecting $q$ on the same Phase-I sample by minimizing the fitted soft-prefix
+objective was worse: the selected policy's exact variance was $0.65\%$ above
+the median for metric estimation and $5.74\%$ above it for LPB.  The within-
+split Spearman correlations between the fit proxy and deployment variance
+were only $0.102$ and $-0.006$.  Searching the cutpoint enlarges the adaptive
+policy class and introduces selection optimism.  At $N_1=50$, the median
+should remain the metric default; a predeclared $q=0.7$ is a reasonable LPB
+ablation.  An adaptively optimized cutpoint should use independent historical
+data or a separate tuning fold and minimum-cell constraints.  Under either
+Theorem~\ref{thm:k2bc_worst_path} or
+Theorem~\ref{thm:k2bc_online_budget}, the cutpoint affects efficiency but not
+the budget proof.
+
+\subsubsection{Empirical comparison of the CRC-free controllers}
+\label{sec:k2bc_experiments}
+
+First, the existing production no-CRC matrix directly rejects the claim that
+the one-turn projection reserve is a splitwise guarantee.  After de-duplicating
+shared LPB rows by setup, method, and seed, the fractions of splits whose
+conditional expected total cost did not exceed the configured budget were:
+\begin{center}
+\begin{tabular}{lccc}
+\toprule
+Task and budget & $N_1=50$ & $N_1=100$ & $N_1=200$\\
+\midrule
+LPB, $\bar B=5$  & $96.4\%$ & $99.6\%$ & $100.0\%$\\
+LPB, $\bar B=10$ & $93.1\%$ & $95.6\%$ & $97.5\%$\\
+LPB, $\bar B=20$ & $86.5\%$ & $92.0\%$ & $96.1\%$\\
+Metric, $\bar B=10$ & $89.8\%$ & $96.2\%$ & $98.5\%$\\
+Metric, $\bar B=20$ & $75.1\%$ & $82.2\%$ & $89.3\%$\\
+\bottomrule
+\end{tabular}
+\end{center}
+At $\bar B=20$, maximum expected costs were approximately
+$33.16,25.43,22.91$ for LPB and $28.21,24.23,22.82$ for metric estimation at
+$N_1=50,100,200$.  The mean can remain below budget while individual split
+policies transfer badly.  In a separate hallucination metric screen at
+$B/N=20$, every tested quantile had mean expected cost between $23.29$ and
+$23.57$ and maxima near $30$.
+
+We next kept the soft-prefix target, hazard score, median K2 table, and DAPRO
+optimizer fixed and changed only the budget controller.  The screening study
+used four real setups, five matched splits, and $N_1=50$.  Budgets were $20$
+for toxicity, red team, and AutoIF and $10$ for hallucination.  The metric
+results averaged over setups were:
+\begin{center}
+\begin{tabular}{lrrrr}
+\toprule
+Controller & expected cost & valid splits & variance & median max weight\\
+\midrule
+Online compensator & $17.24$ & $100\%$ & $7.02$ & $11.7$\\
+K2 + independent CRC & $15.62$ & $85\%^{\dagger}$ & $10.05$ & $35.4$\\
+Raw K2 + one-turn reserve & $17.11$ & $70\%$ & $10.39$ & $15.5$\\
+All-high envelope & $7.94$ & $100\%$ & $33.37$ & $41.3$\\
+\bottomrule
+\end{tabular}
+\end{center}
+Here variance is the sample variance in squared percentage points across the
+five random splits and is correspondingly noisy.  The daggered CRC column
+reports the stronger per-realized-split population-cost diagnostic; CRC's
+theorem is marginal over its independent control draw, so $85\%$ is not a
+violation of that theorem.  The online controller's mean absolute log-change
+to an active K2 probability was only $0.003$--$0.007$.  It was best on the
+hallucination and AutoIF screens, while raw no-CRC was best on toxicity and
+CRC was best on red team; the small study does not establish universal
+dominance.
+
+For a sharper design check, we froze three toxicity and three red-team
+policies and repeated acquisition fifty times.  The online metric variances
+were $6.58$ and $8.16$ squared percentage points; the means of the unbiased
+estimator~\eqref{eq:k2bc_online_variance} were $6.97$ and $10.18$.  The
+agreement is consistent with fifty-draw Monte Carlo error.  The corresponding
+within-split LPB coverage variances were $0$ and $0.058$ squared percentage
+points.  Across the four five-split LPB screens, the online controller used
+$17.40$ expected queries on average and satisfied the budget on every split;
+its selected-bound coverage variance matched raw K2 and the all-high
+controller because their candidate selections were usually identical.
+
+The static all-high theorem is exact and preserves independent rows, but it
+used roughly half the available metric budget and suffered a large variance
+penalty.  A per-row online ledger also preserves independence, but is worse:
+if one requires $\sum_{t=1}^{M}p_{it}\leq b_i$ on every row path, AM--GM gives
+\begin{equation}
+ \Pi_i(M)\leq (b_i/M)^M.
+\end{equation}
+At $b_i=20,M=200$, this permits terminal probabilities of order $10^{-200}$.
+The diagnostic indeed used only $1.9$--$2.4$ queries per metric row and
+produced maximum weights in the hundreds or thousands.  Per-row pathwise
+accounts should therefore be rejected.
+
+\paragraph{Conclusion and recommended claim.}
+The requested raw-K2 theorem does not exist: K2 removes the separate
+projection regression but not adaptive empirical-to-population transfer, and
+Propositions~\ref{prop:k2bc_counterexample}--
+\ref{prop:k2bc_median_counterexample} rule out the desired conclusion under
+the proposed premises.  There are instead four defensible statements:
+\begin{enumerate}
+    \item \emph{Raw median K2:} efficient and design-valid after freezing,
+    but budget control is assumption-based in finite samples.  It has the
+    asymptotic guarantee~\eqref{eq:k2bc_gc_limit} for fixed horizon.
+    \item \emph{Static all-high K2:} no CRC and a distribution-free,
+    conditional expected-budget guarantee while preserving the current
+    independent-row LPB proof; empirically too conservative for the main
+    method.
+    \item \emph{Online-compensator K2:} no CRC, exact conditional expected-
+    budget control, near-complete budget utilization, valid fixed-target HT,
+    and promising metric variance.  This is the recommended CRC-free metric
+    method.  Theorem~\ref{thm:k2bc_shared_lpb} supplies an LPB extension under
+    an explicit second-moment condition, with a looser confidence dependence
+    than the independent-row theorem.
+    \item \emph{K2 + independent CRC:} the clean current choice when the
+    original LPB PAC proof and a finite-sample marginal budget theorem are both
+    required without developing the shared-ledger martingale theory.
+\end{enumerate}
+Two bins make the online scalar correction particularly simple and make raw
+transfer empirically more stable.  They do not make CRC mathematically
+redundant.  The successful way to omit CRC is to control the predictable
+expected spend directly, not to assume that the remaining projection error is
+small.

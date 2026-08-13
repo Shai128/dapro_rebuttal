@@ -11,6 +11,7 @@ from src.predictive_bounds.calibration.calibration_utils import (
     get_prior,
     indexed_tensor_metrics,
     select_calibration_positions,
+    select_upb_calibration_positions,
 )
 from src.train_model.models.utils import ModelPrediction, SurvivalModelPrediction
 
@@ -185,6 +186,7 @@ class OracleSurvivalUPBCalibration(SurvivalUPBCalibration):
         super().__init__()
         self.taus_range = taus_range
         self.tau_prior = tau_prior
+        self.coverage = None
         self.miscoverage = None
         self.allocation_result = None
         self.t_cal = None
@@ -223,20 +225,19 @@ class OracleSurvivalUPBCalibration(SurvivalUPBCalibration):
             },
         )
         self.t_cal = t_cal
-        self.miscoverage = (
-            (t_cal.reshape(-1, 1).to(f.device) > f)
-            & (f != 200)
+        # 201 is the no-event/infinite value.  Since every stored event time
+        # lies in 1,...,201, the ordinary comparison already assigns it
+        # deterministic coverage one while preserving event time 200 as real.
+        self.coverage = (
+            t_cal.reshape(-1, 1).to(f.device) <= f
         ).to(f.dtype).mean(dim=0)
+        self.miscoverage = 1.0 - self.coverage
 
     def _selected_positions(self, target_coverages: torch.Tensor) -> torch.Tensor:
-        target_coverages = target_coverages.to(
-            device=self.miscoverage.device,
-            dtype=self.miscoverage.dtype,
+        return select_upb_calibration_positions(
+            self.coverage,
+            target_coverages,
         )
-        valid = self.miscoverage[:, None] <= (
-            1.0 - target_coverages
-        )[None, :]
-        return valid.float().argmax(dim=0)
 
     def get_calibrated_upb(
             self,
@@ -258,9 +259,10 @@ class OracleSurvivalUPBCalibration(SurvivalUPBCalibration):
         f = self.allocation_result.f
         positions = self._selected_positions(target_taus)
         selected_f = f[:, positions]
+        infinite = selected_f == 201
         latent_a = (
-            (t.reshape(-1, 1) > selected_f)
-            & (selected_f != 200)
+            (t.reshape(-1, 1) <= selected_f)
+            & ~infinite
         )
         a_weight = latent_a.to(torch.float64)
         indexed_metrics = indexed_tensor_metrics({
@@ -278,6 +280,8 @@ class OracleSurvivalUPBCalibration(SurvivalUPBCalibration):
             ),
             "all_observed_both": latent_a.to(f.dtype).sum(dim=0),
             "alpha_hat_per_tau": self.miscoverage[positions],
+            "coverage_hat_per_tau": self.coverage[positions],
+            "selected_infinite_bound_rate": infinite.to(f.dtype).mean(dim=0),
         })
         extra = dict(self.allocation_result.additional_metrics or {})
         return {

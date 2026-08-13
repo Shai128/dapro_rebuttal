@@ -45,13 +45,16 @@ def test_metric_registry_contains_exact_requested_comparison():
         "optimized",
         "random_adaptive_optimized_mixture_terminal_floor_0p005_crc",
         "metric_optimal_pmf_model_budget",
+        "metric_optimal_pooled_time_model_budget",
+        "metric_prefix_neyman_crc_control_100_row_cap_2p00x_budget",
         (
             "dapro_soft_prefix_bins_2_metric_horizon_200_global_0p001_"
             "projection_margin_1p00_n1_200"
         ),
         (
             "dapro_soft_prefix_bins_2_metric_horizon_200_global_0p001_budget_"
-            "crc_control_100_row_cap_2p00x_budget_n1_200"
+            "crc_control_100_row_cap_2p00x_budget_causal_shared_pav_v1_"
+            "n1_200"
         ),
         "oracle_split_full_budget",
         "oracle_full_budget",
@@ -88,10 +91,10 @@ def test_legacy_registry_flags_do_not_change_the_production_matrix():
 
 def test_metric_experiment_name_normalizes_integer_budget():
     assert metric_experiment_name("data", "setup", 5.0, 200, 100, "v1") == (
-        "data_setup_5_metric_estimation_v1"
+        "data_setup_5_m_v1"
     )
     assert metric_experiment_name("data", "setup", 5, 50, 25, "v1") == (
-        "data_setup_5_metric_estimation_v1"
+        "data_setup_5_m_v1"
     )
 
 

@@ -73,6 +73,16 @@ BOX_METRICS = {
         "ylabel": "Absolute coverage difference (pp)",
         "group": "core",
     },
+    "size": {
+        "filename": "bound-value.jpg",
+        "ylabel": "Mean predictive-bound value",
+        "group": "core",
+    },
+    "infinite_bound_rate_pct": {
+        "filename": "infinite-upb-rate.jpg",
+        "ylabel": "UPBs equal to 201 (infinity, %)",
+        "group": "core",
+    },
     "budget_used_per_sample": {
         "filename": "realized-budget.jpg",
         "ylabel": "Budget used per sample",
@@ -159,6 +169,8 @@ PLOT_COLUMNS = {
     "a_weighted_effective_sample_size",
     "method_runtime_seconds",
     "configured_cal_size",
+    "size",
+    "infinite_bound_rate",
 }
 
 _METHOD_N1_RE = re.compile(r"(?:^|_)n1_(?P<n1>\d+)(?:_|$)")
@@ -506,6 +518,9 @@ def load_lpb_matrix(input_dir: Path) -> tuple[pd.DataFrame, pd.DataFrame]:
         pd.concat(frames, ignore_index=True),
         pd.DataFrame(inventory_rows),
     )
+    frame["infinite_bound_rate_pct"] = (
+        100 * frame["infinite_bound_rate"]
+    )
 
 
 def coverage_variance_frame(frame: pd.DataFrame) -> pd.DataFrame:
@@ -730,6 +745,8 @@ def generate_all_figures(
             "dataset_key", sort=False, observed=True
     ):
         for metric, specification in BOX_METRICS.items():
+            if metric not in dataset_frame or not dataset_frame[metric].notna().any():
+                continue
             group = specification["group"]
             path = output_dir / dataset_key / group / specification["filename"]
             _plot_box_metric(

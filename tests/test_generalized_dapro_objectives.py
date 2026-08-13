@@ -4,6 +4,7 @@ import torch
 from src.predictive_bounds.budget_allocators.DAPRO import (
     SoftTargetCRCDAPRO,
     SoftTargetDAPRO,
+    _mean_soft_mass_variance_proxy,
 )
 from src.predictive_bounds.budget_allocators.dapro_objectives import (
     history_soft_objective_coefficients,
@@ -41,6 +42,26 @@ def test_terminal_weights_and_equivalent_prefix_masses_solve_identically():
         verbose=False,
     )
     np.testing.assert_allclose(generalized, hard, atol=1e-8, rtol=1e-8)
+
+
+def test_soft_mass_variance_proxy_matches_direct_manual_calculation():
+    masses = np.array([
+        [0.2, 0.3, 0.0],
+        [0.4, 0.1, 0.5],
+    ], dtype=np.float64)
+    conditionals = np.array([
+        [0.5, 0.8, 1.0],
+        [0.25, 0.5, 0.5],
+    ], dtype=np.float64)
+    cumulative_reach = np.cumprod(conditionals, axis=1)
+    manual = np.mean(np.sum(
+        masses * (1.0 / cumulative_reach - 1.0),
+        axis=1,
+    ))
+
+    calculated = _mean_soft_mass_variance_proxy(masses, conditionals)
+
+    np.testing.assert_allclose(calculated, manual, rtol=0, atol=1e-12)
 
 
 def test_prefix_mass_solver_matches_two_turn_cumulative_optimum():
@@ -143,6 +164,24 @@ def test_soft_target_dapro_runs_for_metric_and_lpb_targets():
         assert result.additional_metrics[
             "generalized_dapro_uses_current_prefix_x_it"
         ] == 1
+        diagnostics = result.additional_metrics
+        assert diagnostics["soft_mass_variance_proxy_available"] == 1
+        assert diagnostics[
+            "soft_mass_phase1_raw_policy_fit_sample_count"
+        ] == 20
+        assert diagnostics[
+            "soft_mass_phase1_selected_full_fold_sample_count"
+        ] == 20
+        assert diagnostics[
+            "soft_mass_phase2_frozen_policy_sample_count"
+        ] == 60
+        for key in [
+            "soft_mass_phase1_raw_policy_fit_mean_variance_proxy",
+            "soft_mass_phase1_selected_full_fold_mean_variance_proxy",
+            "soft_mass_phase2_frozen_policy_mean_variance_proxy",
+        ]:
+            assert np.isfinite(diagnostics[key])
+            assert diagnostics[key] >= 0
         if metric_horizon is None:
             assert "lpb_alpha" in allocator.name
         else:
@@ -223,6 +262,17 @@ def test_soft_target_crc_runs_for_metric_and_lpb_targets():
         assert result.additional_metrics[
             "risk_budget_maximum_candidate_cost_per_sample"
         ] == 16.0
+        diagnostics = result.additional_metrics
+        assert diagnostics["soft_mass_variance_proxy_available"] == 1
+        assert diagnostics[
+            "soft_mass_phase1_raw_policy_fit_sample_count"
+        ] == 50
+        assert diagnostics[
+            "soft_mass_phase1_selected_full_fold_sample_count"
+        ] == 100
+        assert diagnostics[
+            "soft_mass_phase2_frozen_policy_sample_count"
+        ] == 900
         if metric_horizon is None:
             assert "lpb_alpha" in allocator.name
         else:

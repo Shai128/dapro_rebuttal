@@ -39,7 +39,9 @@ policy class, but replace the hard Phase-I endpoint target by model-integrated
 event mass at every observed prefix. With no metric horizon configured, they
 target the raw-alpha LPB miscoverage event. The first method uses the
 projection-margin budget controller; the second uses an independent CRC fold
-of size `N1 // 2` and the row cap `2 * budget_per_sample`.
+of size `N1 // 2` and a causal shared-PAV row cap of
+`2 * budget_per_sample`.  The cap is evaluated prefix by prefix, so an early
+continuation decision never depends on a future interaction.
 
 The production LPB matrix, including both soft-prefix variants for
 `N1={200,100,50}` and budgets `{5,10,20}`, can be constructed and merged on a

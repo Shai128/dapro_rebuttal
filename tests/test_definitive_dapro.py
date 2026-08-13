@@ -9,7 +9,11 @@ from src.predictive_bounds.budget_allocators.DAPRO import (
     DefinitiveCRCUPBDAPRO,
     DefinitiveDAPRO,
     LegacyMeanWeightDAPRO,
+    SoftTargetCRCDAPRO,
     TargetAWeightedDAPRO,
+    _apply_causal_cumulative_row_cost_cap,
+    _apply_shared_cumulative_row_cost_envelope,
+    _solve_shared_causal_row_cap_envelope,
 )
 from src.utils.utils import set_seeds
 
@@ -61,6 +65,7 @@ def test_definitive_dapro_configuration_is_fixed_and_auditable():
     assert "bins_2" in allocator.name
     assert "budget_crc" in allocator.name
     assert "row_cap_2p00x_budget" in allocator.name
+    assert "causal_shared_pav_v1" in allocator.name
     assert allocator.name.endswith("n1_200")
 
 
@@ -99,8 +104,48 @@ def test_generic_crc_dapro_names_do_not_collide_with_uncontrolled_variants():
 
     assert legacy.name != legacy_crc.name
     assert target.name != target_crc.name
-    assert "budget_crc_control_100_row_cap_2p00x_budget" in legacy_crc.name
-    assert "budget_crc_control_100_row_cap_2p00x_budget" in target_crc.name
+    expected_cap = (
+        "budget_crc_control_100_row_cap_2p00x_budget_"
+        "causal_shared_pav_v1"
+    )
+    assert expected_cap in legacy_crc.name
+    assert expected_cap in target_crc.name
+
+
+def test_every_production_row_capped_crc_dapro_name_carries_policy_version():
+    grid, taus, _, _, _ = _inputs(n=220)
+    common = {
+        "conditional_grid": grid,
+        "budget_per_sample": 3.0,
+        "taus_range": taus,
+        "tau_prior": 0.50,
+        "m_upper_bound": 4,
+        "n1": 200,
+        "budget_control_size": 100,
+    }
+    capped = [
+        DefinitiveCRCDAPRO(**common, row_cost_cap_multiplier=2.0),
+        SoftTargetCRCDAPRO(**common, row_cost_cap_multiplier=2.0),
+        DefinitiveCRCUPBDAPRO(
+            **{
+                **common,
+                "taus_range": torch.tensor([0.50, 0.70, 0.90]),
+                "tau_prior": 0.90,
+            },
+            row_cost_cap_multiplier=2.0,
+        ),
+    ]
+    for allocator in capped:
+        assert "_row_cap_2p00x_budget_causal_shared_pav_v1_n1_200" in (
+            allocator.name
+        )
+
+    uncapped = DefinitiveCRCDAPRO(
+        **common,
+        row_cost_cap_multiplier=None,
+    )
+    assert "row_cap" not in uncapped.name
+    assert "causal_shared_pav_v1" not in uncapped.name
 
 
 def test_projection_margin_implies_expected_total_budget_bound():
@@ -155,6 +200,20 @@ def test_projection_margin_implies_expected_total_budget_bound():
     )
     assert metrics["projection_transfer_assumption_satisfied"] == int(
         transfer_error <= 1.0 + 1e-7
+    )
+
+    assert metrics["soft_mass_variance_proxy_available"] == 0
+    assert metrics["soft_mass_phase1_raw_policy_fit_available"] == 0
+    assert metrics["soft_mass_phase1_selected_full_fold_available"] == 0
+    assert metrics["soft_mass_phase2_frozen_policy_available"] == 0
+    assert np.isnan(
+        metrics["soft_mass_phase1_raw_policy_fit_mean_variance_proxy"]
+    )
+    assert np.isnan(
+        metrics["soft_mass_phase1_selected_full_fold_mean_variance_proxy"]
+    )
+    assert np.isnan(
+        metrics["soft_mass_phase2_frozen_policy_mean_variance_proxy"]
     )
 
     assert 0 <= metrics["phase2_focus_a_rate"] <= 1
@@ -227,6 +286,12 @@ def test_crc_dapro_row_cap_reduces_the_distribution_free_envelope():
         ).additional_metrics
 
     assert results["capped"]["risk_budget_row_cost_cap_enabled"] == 1
+    assert results["capped"]["risk_budget_row_cost_cap_policy_version"] == (
+        "causal_shared_pav_v1"
+    )
+    assert results["uncapped"]["risk_budget_row_cost_cap_policy_version"] == (
+        "none"
+    )
     assert results["capped"]["risk_budget_row_cost_cap_per_sample"] == 3.0
     assert (
         results["capped"]["risk_budget_maximum_candidate_cost_per_sample"]
@@ -236,6 +301,122 @@ def test_crc_dapro_row_cap_reduces_the_distribution_free_envelope():
         results["capped"]["risk_budget_correction_per_sample"]
         < results["uncapped"]["risk_budget_correction_per_sample"]
     )
+
+
+def test_crc_row_cap_is_causal_and_pathwise_bounded():
+    # The rows have the same cumulative reach through turn two but different
+    # future score paths.  A deployable cap must therefore make the same two
+    # decisions before those paths diverge.
+    base_cumulative = torch.tensor(
+        [
+            [0.90, 0.81, 0.729, 0.6561],
+            [0.90, 0.81, 0.081, 0.0081],
+        ],
+        dtype=torch.float64,
+    )
+    previous = torch.cat(
+        [torch.ones((2, 1), dtype=torch.float64), base_cumulative[:, :-1]],
+        dim=1,
+    )
+    base_conditionals = base_cumulative / previous
+
+    capped_conditionals, changed = (
+        _apply_causal_cumulative_row_cost_cap(
+            base_conditionals,
+            torch.full((2,), 4),
+            row_cost_cap=2.0,
+            terminal_pi_min=0.005,
+        )
+    )
+    capped = capped_conditionals.cumprod(dim=1)
+
+    torch.testing.assert_close(capped[0, :2], capped[1, :2])
+    assert bool(changed[0])
+    assert not bool(changed[1])
+    assert bool((capped.sum(dim=1) <= 2.0 + 1e-12).all())
+    assert bool((capped >= 0.005 - 1e-12).all())
+    assert bool((capped <= base_cumulative + 1e-12).all())
+    assert bool((capped[:, 1:] <= capped[:, :-1] + 1e-12).all())
+
+    # The existing CRC family is an affine contraction of this frozen base.
+    # It therefore remains nested and inherits the same pathwise cap.
+    alphas = torch.tensor([1.0, 0.5, 0.0], dtype=torch.float64)
+    candidates = 0.005 + alphas[:, None, None] * (capped[None] - 0.005)
+    candidate_costs = candidates.sum(dim=2)
+    assert bool((candidate_costs <= 2.0 + 1e-12).all())
+    assert bool((candidate_costs[1:] <= candidate_costs[:-1] + 1e-12).all())
+
+
+def test_crc_row_cap_handles_row_horizons_and_rejects_bad_floor_paths():
+    base = torch.tensor(
+        [[0.8, 1.0, 1.0], [0.8, 0.5, 0.5]],
+        dtype=torch.float64,
+    )
+    capped_conditionals, _ = _apply_causal_cumulative_row_cost_cap(
+        base,
+        torch.tensor([1, 3]),
+        row_cost_cap=1.5,
+        terminal_pi_min=0.1,
+    )
+    capped = capped_conditionals.cumprod(dim=1)
+    assert capped_conditionals[0, 1:].tolist() == [1.0, 1.0]
+    assert capped[0, 0] <= 1.5
+    assert capped[1].sum() <= 1.5 + 1e-12
+
+    with np.testing.assert_raises_regex(ValueError, "terminal floor"):
+        _apply_causal_cumulative_row_cost_cap(
+            torch.tensor([[0.05, 1.0]], dtype=torch.float64),
+            torch.tensor([2]),
+            row_cost_cap=1.0,
+            terminal_pi_min=0.1,
+        )
+
+
+def test_target_pav_cap_preserves_late_objective_better_than_greedy_cap():
+    base_cumulative = torch.tensor(
+        [[0.90, 0.81, 0.729, 0.6561]],
+        dtype=torch.float64,
+    )
+    base_conditionals = torch.cat(
+        [
+            base_cumulative[:, :1],
+            base_cumulative[:, 1:] / base_cumulative[:, :-1],
+        ],
+        dim=1,
+    )
+    masses = torch.tensor(
+        [[0.0, 0.0, 0.0, 1.0]],
+        dtype=torch.float64,
+    )
+    envelope, diagnostics = _solve_shared_causal_row_cap_envelope(
+        torch.tensor([4]),
+        row_cost_cap=2.0,
+        terminal_pi_min=0.05,
+        width=4,
+        objective_masses=masses,
+    )
+    pav_conditionals, _ = _apply_shared_cumulative_row_cost_envelope(
+        base_conditionals,
+        torch.tensor([4]),
+        envelope,
+    )
+    token_conditionals, _ = _apply_causal_cumulative_row_cost_cap(
+        base_conditionals,
+        torch.tensor([4]),
+        row_cost_cap=2.0,
+        terminal_pi_min=0.05,
+    )
+    pav_cumulative = pav_conditionals.cumprod(dim=1)
+    token_cumulative = token_conditionals.cumprod(dim=1)
+
+    torch.testing.assert_close(
+        envelope,
+        torch.full((4,), 0.5, dtype=torch.float64),
+    )
+    assert diagnostics["risk_budget_row_cost_cap_envelope_horizon_cost"] <= 2
+    assert pav_cumulative.sum() <= 2 + 1e-12
+    assert token_cumulative.sum() <= 2 + 1e-12
+    assert pav_cumulative[0, -1] > token_cumulative[0, -1]
 
 
 def test_definitive_upb_dapro_uses_the_upper_tail_target_event():

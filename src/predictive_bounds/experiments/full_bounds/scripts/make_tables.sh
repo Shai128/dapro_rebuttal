@@ -3,7 +3,7 @@
 set -euo pipefail
 
 PYTHON_EXE="${PYTHON:-python}"
-SUFFIX_VALUE="${EXPERIMENT_SUFFIX:-full_bounds_v1}"
+SUFFIX_VALUE="${EXPERIMENT_SUFFIX:-full_bounds_v4_soft_upb}"
 extra=()
 if [[ "${AVAILABLE_ONLY:-0}" == "1" ]]; then
   extra+=(--available-only)
@@ -13,4 +13,3 @@ fi
   --suffix "$SUFFIX_VALUE" \
   "${extra[@]}" \
   "$@"
-

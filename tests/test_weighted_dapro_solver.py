@@ -5,8 +5,11 @@ from types import SimpleNamespace
 
 from src.predictive_bounds.budget_allocators.DAPRO import (
     BandRegularizedTargetAWeightedDAPRO,
+    DefinitiveDAPRO,
+    RandomAnchoredTargetAWeightedDAPRO,
     RegularizedTargetAWeightedDAPRO,
     RobustTargetAWeightedDAPRO,
+    SoftTargetDAPRO,
     TargetAWeightedDAPRO,
 )
 from src.predictive_bounds.budget_allocators.optimization_solver_utils import (
@@ -103,6 +106,55 @@ def test_target_alpha_must_be_inside_prior_envelope():
         _make_target_allocator("raw_alpha", 0.56)
 
 
+def test_every_crc_capable_name_override_preserves_cap_provenance():
+    common = dict(
+        conditional_grid=torch.ones(100, 5, 5),
+        budget_per_sample=2.0,
+        taus_range=torch.tensor([0.05, 0.10, 0.56]),
+        tau_prior=0.56,
+        m_upper_bound=5,
+        n1=100,
+        budget_control_mode="crc",
+        budget_control_size=50,
+        risk_candidate_row_cost_cap=4.0,
+        projection_budget_margin=0.0,
+    )
+    projected = dict(projection="direct_time", score="prob")
+    allocators = [
+        RandomAnchoredTargetAWeightedDAPRO(
+            **common,
+            **projected,
+            target_alpha=0.10,
+            target_policy_fraction=0.50,
+        ),
+        RobustTargetAWeightedDAPRO(
+            **common,
+            **projected,
+            target_alpha=0.10,
+            robustness_weight=0.10,
+        ),
+        RegularizedTargetAWeightedDAPRO(
+            **common,
+            **projected,
+            target_alpha=0.10,
+            global_regularization=0.001,
+        ),
+        BandRegularizedTargetAWeightedDAPRO(
+            **common,
+            **projected,
+            target_alphas=(0.07, 0.13),
+            global_regularization=0.001,
+        ),
+        DefinitiveDAPRO(**common),
+        SoftTargetDAPRO(**common),
+    ]
+    for allocator in allocators:
+        assert (
+            "_budget_crc_control_50_row_cap_2p00x_budget_"
+            "causal_shared_pav_v1"
+        ) in allocator.name
+
+
 def test_construct_registers_all_a_weighted_lpb_variants():
     conditional_grid = torch.ones(101, 1, 1)
     taus = torch.tensor([0.10, 0.56])
@@ -181,6 +233,7 @@ def test_construct_registers_all_a_weighted_lpb_variants():
     assert (
         "calibration_dapro_soft_prefix_bins_2_lpb_alpha_0p10_"
         "global_0p001_budget_crc_control_50_row_cap_2p00x_budget_"
+        "causal_shared_pav_v1_"
         "n1_100_allocation"
         in names
     )

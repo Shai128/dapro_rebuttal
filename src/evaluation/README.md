@@ -33,6 +33,14 @@ expected budget diagnostics, the estimated UER and RMTTU and their absolute
 errors, inverse-probability weight diagnostics, metric-event-weighted weights,
 observed-event and resolved-trajectory counts, and effective sample size.
 
+The production matrix includes the intentional weighted/unweighted Uniform
+pair, naive under-cost Static, Constant+CRC, personalized Metric-optimal PMF,
+the no-split shared Pooled-Neyman schedule, the closed-form current-prefix
+Prefix-Neyman+CRC rule, Generalized DAPRO with and without CRC, and both
+full-budget oracle scopes. Prefix-Neyman learns no bins and runs no DAPRO
+optimization: it applies a square-root remaining-event/remaining-cost index
+at each observed prefix and uses CRC only to choose a global scale.
+
 Shared baselines and oracles are stored once per seed. N1-dependent methods
 are stored separately, with explicit `configured_dapro_n1` and
 `configured_crc_control_size` columns. The plotting code expands a shared
@@ -45,7 +53,7 @@ no duplicate baseline observations.
 python -m src.evaluation.summarize
 python -m src.evaluation.summarize --experiment NAME
 python -m src.evaluation.summarize \
-  --experiment-suffix generalized_dapro_metric_v1 --quality high
+  --experiment-suffix metric_v2 --quality high
 ```
 
 The figures include only the production metric methods. Variance bars are the

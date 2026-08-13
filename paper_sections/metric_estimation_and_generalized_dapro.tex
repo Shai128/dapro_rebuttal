@@ -216,6 +216,140 @@ implementation, whereas the variance reported in our experiments is the
 empirical variance of the final metric estimates across random
 calibration--test splits.
 
+\subsection{Sequential augmentation and information-gain DAPRO}
+\label{sec:sequential_augmented_ht}
+
+The event-supported estimator in~\eqref{eq:uer_ht} is model-free, but it uses
+the predictive model only to decide where to spend budget.  The same model
+can also serve as a zero-cost control variate.  This does not require trusting
+its probabilities as the answer: a sequential HT correction removes the
+model error in expectation.
+
+For the metric horizon, set $L_i:=\min(T_i,\maxl)$.  Let
+$m_i(0),\ldots,m_i(L_i)$ be any frozen prediction process adapted to the
+successively revealed history, with terminal value $m_i(L_i)=A_i$.  Thus,
+$m_i(t-1)$ is available before interaction $t$ is acquired and $m_i(t)$ is
+available afterward.  Define
+\begin{equation}
+    \Delta_i(t):=m_i(t)-m_i(t-1),
+    \qquad
+    R_i(t):=\prod_{s=1}^{t}Z_i(s),
+    \qquad
+    \rho_i(t):=\prod_{s=1}^{t}P_i(s),
+\end{equation}
+with $R_i(0)=\rho_i(0)=1$.  The sequential augmented HT contribution and
+benchmark mean are
+\begin{equation}
+    \widehat A_i^{\mathrm{AHT}}
+    :=m_i(0)+\sum_{t=1}^{L_i}
+      \frac{R_i(t)}{\rho_i(t)}\Delta_i(t),
+    \qquad
+    \widehat{\ttuer}_{\mathrm{AHT}}
+    :=\frac{1}{N}\sum_{i\in\calI}\widehat A_i^{\mathrm{AHT}}.
+    \label{eq:sequential_aht_estimator}
+\end{equation}
+Only increments whose interaction is reached are evaluated in practice.  A
+convenient initial value is
+$m_i(0)=\widehat{\mathbb P}(T_i\leq\maxl\mid X_{i0})$, but neither the
+validity statement nor the finite-sample variance identity below assumes
+that this probability is calibrated.
+
+\begin{theorem}[Validity and exact variance of sequential augmentation]
+\label{thm:sequential_aht_variance}
+Under the causal-acquisition conditions of
+Assumption~\ref{assump:metric_causal_positive}, additionally suppose that
+$\rho_i(t)>0$ for every active increment.  Conditional on the complete
+trajectories, the frozen prediction process, and the fitted acquisition
+policy,
+\begin{equation}
+    \E_R[\widehat A_i^{\mathrm{AHT}}]=A_i
+\end{equation}
+and
+\begin{equation}
+    \operatorname{Var}_R(\widehat A_i^{\mathrm{AHT}})
+    =\sum_{u=1}^{L_i}
+      \left\{\frac{1}{\rho_i(u)}-
+      \frac{1}{\rho_i(u-1)}\right\}
+      \{A_i-m_i(u-1)\}^2.
+    \label{eq:sequential_aht_exact_variance}
+\end{equation}
+Consequently, row-independent acquisition gives
+\begin{equation}
+    \operatorname{Var}_R(\widehat{\ttuer}_{\mathrm{AHT}})
+    =\frac{1}{N^2}\sum_{i\in\calI}
+      \operatorname{Var}_R(\widehat A_i^{\mathrm{AHT}}).
+\end{equation}
+\end{theorem}
+
+\begin{proof}
+For every $t$, the sequential tower property gives
+$\E_R[R_i(t)/\rho_i(t)]=1$.  Telescoping the increments therefore proves
+unbiasedness.  For $s\leq t$, nested acquisition implies
+\begin{equation}
+    \operatorname{Cov}_R\!\left(
+      \frac{R_i(s)}{\rho_i(s)},
+      \frac{R_i(t)}{\rho_i(t)}
+    \right)=\frac{1}{\rho_i(s)}-1.
+\end{equation}
+Expanding the variance of the weighted increment sum and collecting the
+coefficient of
+$\rho_i(u)^{-1}-\rho_i(u-1)^{-1}$ gives the squared tail sum
+$\{\sum_{t\geq u}\Delta_i(t)\}^2
+=\{A_i-m_i(u-1)\}^2$, proving
+\eqref{eq:sequential_aht_exact_variance}.
+\end{proof}
+
+The ordinary one-update augmented estimator is the special case that keeps
+$m_i(t)=m_i(0)$ until the endpoint.  Its variance replaces the event weight
+$A_i$ in~\eqref{eq:uer_variance} by the squared prediction residual
+$(A_i-m_i(0))^2$.  Sequential augmentation can do better because an
+informative response may correct the prediction long before the endpoint.
+Unlike the event-supported estimator, augmentation can assign a nonzero
+terminal correction to a safe row; its allocation must therefore balance the
+cost of resolving both outcomes against the reduction in residual variance.
+Equation~\eqref{eq:sequential_aht_exact_variance} also yields the always-valid
+upper bound
+\begin{equation}
+    \operatorname{Var}_R(\widehat A_i^{\mathrm{AHT}})
+    \leq\sum_{u=1}^{L_i}
+      \{A_i-m_i(u-1)\}^2
+      \left\{\frac{1}{\rho_i(u)}-1\right\}.
+    \label{eq:sequential_aht_residual_bound}
+\end{equation}
+
+The variance-optimal soft mass has an especially clean form when $m_i(t)$ is
+the true Doob martingale $\mathbb E[A_i\mid\mathcal F_i(t)]$, where
+$\mathcal F_i(t)$ is the complete history available immediately after
+interaction $t$.  Its increments are orthogonal,
+and averaging~\eqref{eq:sequential_aht_exact_variance} over trajectories gives
+\begin{equation}
+    \E\!\left[
+      \operatorname{Var}_R(\widehat A_i^{\mathrm{AHT}})
+    \right]
+    =\sum_{t=1}^{\maxl}
+      \E\!\left[
+        \Delta_i(t)^2
+        \left\{\frac{1}{\rho_i(t)}-1\right\}
+      \right].
+    \label{eq:sequential_aht_information_identity}
+\end{equation}
+Hence the natural Generalized-DAPRO coefficient is not the instantaneous
+event hazard but the predicted squared update
+\begin{equation}
+    a_i^{\mathrm{IG}}(t)
+    :=\widehat\E\!\left[
+      \Delta_i(t)^2\mid T_i\geq t,H_i(t),\Dtrain
+    \right],
+    \label{eq:information_gain_mass}
+\end{equation}
+which measures the information gained by acquiring the next response about
+the final metric contribution.  A misspecified frozen martingale model leaves
+the design unbiasedness of~\eqref{eq:sequential_aht_estimator} intact; it can
+only make the allocation or control variate inefficient.  This
+\emph{information-gain DAPRO} is therefore a metric instantiation of the same
+event-mass/cost-mass problem introduced below, rather than a separate budget
+allocation framework.
+
 \subsection{Acquisition variance versus split variance}
 
 Our experiments repeatedly draw a calibration subset from a fixed
@@ -409,6 +543,164 @@ Empty fitting bins copy the nearest observed bin, and the resulting table is
 made nondecreasing in the score bin.  Thus, a larger estimated event hazard
 never receives a smaller continuation probability at the same time.
 
+\subsection{What score binning approximates}
+\label{sec:dapro_score_quantization}
+
+The two-bin construction is intentionally low dimensional, but it is not
+information preserving.  Conditional on the current time, it retains only
+whether the score is below or above its empirical median.  The raw lookup
+table therefore contains at most two continuation probabilities per time.
+This does not imply that the final cumulative propensity has only two values:
+different rows traverse different sequences of bins, so their products
+$\rho_i(t)=\prod_{s\leq t}p_{s,k_i(s)}$ may take many values.  The precise
+restriction is that the policy can react to the \emph{new} score at time $t$
+in only two ways.
+
+The cost of this quantization can be stated exactly in a one-stage version of
+the allocation problem.  Let $a\geq0$ denote target-influence mass, let
+$d\geq0$ denote acquisition-cost mass, and let $\mathcal P$ be a partition of
+the score space.  For a cell $G\in\mathcal P$, write
+\begin{equation}
+    A_G:=\E[a\ind{S\in G}],
+    \qquad
+    D_G:=\E[d\ind{S\in G}].
+\end{equation}
+Suppose that the reach probability is constant within each cell and ignore
+the probability bounds for the moment.  Then
+\begin{equation}
+\begin{split}
+    \min_{\{\rho_G>0\}}
+    &\quad \sum_{G\in\mathcal P}\frac{A_G}{\rho_G}
+    \qquad
+    \text{subject to}\qquad
+    \sum_{G\in\mathcal P}D_G\rho_G\leq \bar B
+\end{split}
+\label{eq:quantized_neyman_problem}
+\end{equation}
+has solution
+\begin{equation}
+    \rho_G^*=\sqrt{\frac{A_G}{\lambda D_G}},
+    \qquad
+    J_{\mathcal P}^*
+    =\frac{\left(\sum_{G\in\mathcal P}\sqrt{A_GD_G}\right)^2}
+    {\bar B}.
+    \label{eq:quantization_regret_identity}
+\end{equation}
+If $\mathcal P'$ refines $\mathcal P$, Cauchy--Schwarz gives
+$J_{\mathcal P'}^*\leq J_{\mathcal P}^*$.  Thus, at the population level and
+with the same constraints, refining the score partition cannot make the
+optimal variance objective worse.  This statement concerns approximation
+error only.  A richer table has more parameters and can have larger Phase-I
+estimation and transfer error, especially when only $N_1/2$ rows remain for
+policy fitting after the CRC split.
+
+Median binning can be arbitrarily inefficient even when the score ranking is
+perfect.  For example, suppose a fraction $\eta<1/2$ of rows have all the
+target mass and are perfectly separated at the top of the score distribution,
+while $d=1$.  The upper median cell mixes those $\eta$ rows with
+$1/2-\eta$ zero-mass rows.  Equation~\eqref{eq:quantization_regret_identity}
+then gives
+\begin{equation}
+    \frac{J_{mathrm{two\ bins}}^*}{J_{mathrm{oracle\ partition}}^*}
+    =\frac{1}{2\eta}.
+\end{equation}
+The two-bin policy is exact only when the optimal benefit--cost ratio is
+constant inside its two cells, or when the probability bounds pool the finer
+solution back to the same two levels.
+
+Empirical quantiles also require care in the presence of ties.  If the score
+has an atom at zero and the median is zero, assigning equality to the upper
+cell can leave the lower cell empty and collapse that time step to a time-only
+policy.  A tie-aware implementation should place cutpoints strictly between
+adjacent distinct score values, subject to a minimum cell size, or optimize
+the cutpoints under the same variance objective.  Equal-frequency cutpoints
+have no variance-optimality property.
+
+\subsection{Value scores and continuous Basis-DAPRO}
+\label{sec:basis_dapro}
+
+The instantaneous hazard in~\eqref{eq:causal_hazard_score} is a natural but
+generally insufficient ordering statistic.  Holding the downstream policy
+fixed, the contribution of one continuation decision at a prefix $u$ has the
+coordinate form
+\begin{equation}
+    \frac{R_u}{p_u}+\lambda C_u p_u,
+\end{equation}
+where $R_u$ is the downstream squared-influence mass protected by continuing
+from that prefix and $C_u$ is the corresponding downstream expected cost.
+The unconstrained coordinate optimum is therefore
+\begin{equation}
+    p_u^*=\min\left\{1,\sqrt{\frac{R_u}{\lambda C_u}}\right\}.
+    \label{eq:dapro_value_index}
+\end{equation}
+Instantaneous hazard orders prefixes correctly only when $R_u/C_u$ is a
+monotone function of that hazard.  A causal plug-in value score is instead
+\begin{equation}
+\begin{split}
+    R_i(t)&:=\widehat\E\!\left[
+      \phi_i(T_i)^2\ind{t\leq T_i\leq Q_i}
+      \mid T_i\geq t,H_i(t)\right],\\
+    C_i(t)&:=\widehat\E\!\left[
+      \text{remaining active interactions}
+      \mid T_i\geq t,H_i(t)\right],\\
+    V_i(t)&:=\log R_i(t)-\log C_i(t),
+\end{split}
+\label{eq:dapro_value_score}
+\end{equation}
+with numerical clipping when either term is very small.  Here $\phi_i(T)$ is
+the target influence: for fixed unsafe-event-rate estimation it is the event
+indicator, while for an LPB it may represent the local influence of the
+calibration-curve crossing.  Equation~\eqref{eq:dapro_value_index} makes the
+$R/C$ ranking exact for a block decision that either acquires the remaining
+trajectory or stops.  In a fully sequential policy it remains a principled
+approximation because future scores can update the decision again.
+
+The score need not be quantized.  Let $U_i(t)$ be a bounded rank transform of
+$V_i(t)$ computed from the policy-fitting fold, and let
+$I_1,\ldots,I_L$ be fixed nondecreasing basis functions.  Define
+\begin{equation}
+    y_i(t):=\log P_i(t)
+    =\alpha_t+\sum_{\ell=1}^L\beta_{t\ell}I_\ell(U_i(t)),
+    \qquad
+    \beta_{t\ell}\geq0,
+    \qquad
+    \alpha_t+\sum_\ell\beta_{t\ell}\leq0.
+    \label{eq:basis_dapro_policy}
+\end{equation}
+The inequalities make continuation nondecreasing in the value score and keep
+$P_i(t)\leq1$.  With the score, knots, and basis frozen before optimization,
+write $z_i(t)=\sum_{s\leq t}y_i(s)$.  The generalized empirical objective and
+cost are
+\begin{equation}
+    \sum_{i,t}a_i(t)e^{-z_i(t)}+\Omega(\theta),
+    \qquad
+    \sum_{i,t}d_i(t)e^{z_i(t)}\leq n\bar B_{mathrm{fit}},
+    \label{eq:basis_dapro_convex_program}
+\end{equation}
+where $\theta$ collects the basis coefficients and $\Omega$ is any convex
+temporal regularizer.  Both expressions are convex in $\theta$, and all
+monotonicity and probability restrictions above are linear.  Hence the
+fixed-basis problem is a globally solvable convex program.  Two-bin DAPRO is
+the special case with the single step basis
+$I_1(u)=\ind{u>1/2}$; $K$ bins use $K-1$ step bases; a low-dimensional linear
+rank or monotone spline basis retains score resolution while sharing strength
+over time.
+
+This gives a strict generalization rather than a separate metric-specific
+method.  Target-$A$, Definitive, and soft Generalized DAPRO differ in the
+choice of $a_i(t)$; Pivotal and smooth Influence-DAPRO use selection-sensitive
+LPB masses; information-gain DAPRO uses the squared prediction updates in
+\eqref{eq:information_gain_mass}; and metric and LPB variants differ only in
+the downstream influence being protected.  The current two-bin table and
+continuous Basis-DAPRO differ only in the policy basis.  Thus the target
+coefficient, causal score, deployable representation, and budget controller
+remain four separate axes of one method family.
+For $N_1\in\{50,100,200\}$, the statistically conservative implementation is
+a temporally pooled linear-rank model with roughly $10$--$16$ total
+coefficients, followed by the same positivity construction and independent
+CRC controller.  A separate coefficient at every time and spline knot would
+defeat the regularization that made the two-bin method stable.
+
 \subsection{Target-$A$ DAPRO}
 
 Target-$A$ DAPRO aligns the hard Phase-I objective with a fixed binary target.
@@ -461,6 +753,251 @@ The target anchor must be fixed using Phase I before Phase-II acquisition.
 Selecting it after observing the weighted Phase-II outcomes would feed the
 acquisition realization back into the target and invalidate the simple
 design-based argument.
+
+\subsection{A fixed LPB anchor versus the selected bound}
+\label{sec:lpb_influence_dapro}
+
+For a fixed candidate bound, the hard Target-$A$ objective is exact
+acquisition-variance minimization, just as it is for the fixed-horizon metric.
+The word ``proxy'' becomes appropriate only when this one-candidate objective
+is used for the complete LPB procedure, which estimates an entire calibration
+curve and selects a candidate from that noisy curve.
+
+To make the distinction precise, let
+$A_{ij}:=\ind{T_i<\fhat_{\tau_j}(X_i)}$ for ordered, nested candidates and
+let $\widehat m_j$ be their HT calibration-rate estimates under one frozen
+policy.  Conditional on the complete trajectories,
+\begin{equation}
+    \operatorname{Cov}(\widehat m_j,\widehat m_k\mid\mathcal D)
+    =\frac{1}{n^2}\sum_{i=1}^n
+      A_{i,\min(j,k)}\left(\frac{1}{\pi_i}-1\right).
+    \label{eq:lpb_curve_covariance}
+\end{equation}
+Thus the noise of a nested calibration curve has a particularly simple
+structure: the errors in disjoint candidate bands are independent conditional
+on the trajectories, and each candidate error is their cumulative sum.
+
+This covariance identity is not yet the variance of the selected bound.  Let
+the strict-prefix selector and its complete-test coverage be
+\begin{equation}
+    \widehat K:=\max\{j:\widehat m_j<\tautarget\},
+    \qquad
+    Y:=c_{\widehat K},
+    \label{eq:lpb_hard_selector}
+\end{equation}
+where endpoint sentinels make the maximum well defined and $c_j$ is the fixed
+complete-test coverage of candidate $j$.  Put
+\begin{equation}
+    d_j:=c_j-c_{j-1},
+    \qquad
+    I_j:=\ind{\widehat m_j<\tautarget},
+    \qquad
+    F_j:=\mathbb P_R(\widehat m_j<\tautarget).
+    \label{eq:lpb_crossing_probability}
+\end{equation}
+
+\begin{theorem}[Exact acquisition variance of selected LPB coverage]
+\label{thm:exact_selected_lpb_variance}
+Conditional on the complete calibration and test trajectories and on a
+frozen predictable policy,
+\begin{equation}
+    \E_R[Y]=c_0+\sum_{j=1}^Jd_jF_j
+    \label{eq:lpb_selected_coverage_mean}
+\end{equation}
+and
+\begin{equation}
+\begin{split}
+    \operatorname{Var}_R(Y)
+    ={}&\sum_{j=1}^Jd_j^2F_j(1-F_j)\\
+      &+2\sum_{1\leq j<k\leq J}
+        d_jd_kF_k(1-F_j).
+    \label{eq:exact_selected_lpb_variance}
+\end{split}
+\end{equation}
+Thus the exact nonlinear variance requires only the marginal crossing
+probabilities $F_j$, not their full joint distribution.
+\end{theorem}
+
+\begin{proof}
+Pathwise monotonicity of the HT calibration curve gives
+\begin{equation}
+    Y=c_0+\sum_{j=1}^Jd_jI_j.
+\end{equation}
+For $j<k$, $I_k\leq I_j$, so
+\begin{equation}
+    \operatorname{Cov}_R(I_j,I_k)=F_k-F_jF_k=F_k(1-F_j).
+\end{equation}
+Expanding the variance of the preceding sum proves
+\eqref{eq:exact_selected_lpb_variance}.
+\end{proof}
+
+Each $F_j$ is the CDF at $\tautarget$ of a weighted Poisson--binomial sum.
+It can be evaluated, up to Monte Carlo error, by drawing common row-level
+acquisition coins and recomputing the original selector.  A Gaussian
+approximation substitutes
+\begin{equation}
+    F_j\approx\Phi\!\left(
+      \frac{\tautarget-m_j}{\sqrt{V_j}}
+    \right),
+    \qquad
+    V_j:=\frac{1}{n^2}\sum_i
+      A_{ij}\left(\frac{1}{\pi_i}-1\right).
+    \label{eq:lpb_gaussian_crossing}
+\end{equation}
+The exact functional in
+Theorem~\ref{thm:exact_selected_lpb_variance} is an informative diagnostic,
+but it is generally a nonconvex allocation objective.  In particular,
+increasing one $V_j$ can move $F_j$ either toward or away from $1/2$, so a
+local derivative with respect to $V_j$ need not be nonnegative.  Such signed
+coefficients cannot be inserted directly into the nonnegative event-mass
+problem~\eqref{eq:generalized_dapro_problem}.
+
+\paragraph{Pivotal Selection-DAPRO.}
+The hard selector admits a rigorous nonnegative alternative.  View $Y$ as a
+function of the independent row-inclusion indicators.  Let $Y_i(z)$ denote
+the output after forcing the $i$-th indicator to $z\in\{0,1\}$ while leaving
+all other indicators random, and define
+\begin{equation}
+    q_i:=\E_{-i}\!\left[
+      \{Y_i(1)-Y_i(0)\}^2
+    \right].
+\end{equation}
+The Efron--Stein inequality gives
+\begin{equation}
+    \operatorname{Var}_R(Y)
+    \leq\sum_{i=1}^n\pi_i(1-\pi_i)q_i.
+    \label{eq:pivotal_selection_bound}
+\end{equation}
+At a reference policy $\pi_i^0$, estimate $q_i^0$ by common-random-number
+simulation and freeze
+\begin{equation}
+    w_i^0:=(n\pi_i^0)^2q_i^0.
+    \label{eq:pivotal_selection_weight}
+\end{equation}
+Then the $i$-th ordinary DAPRO term at the reference policy satisfies
+\begin{equation}
+    \frac{w_i^0}{n^2}
+      \left(\frac{1}{\pi_i^0}-1\right)
+    =\pi_i^0(1-\pi_i^0)q_i^0.
+\end{equation}
+Freezing this normalized sensitivity converts a local approximation to the
+pivotal upper bound into an ordinary nonnegative DAPRO objective, with exact
+agreement at the reference policy.  A causal soft implementation replaces
+the hard endpoint weight by its conditional event-time mass at each observed
+prefix.  The pivotal weights must be learned and frozen on the policy-fitting
+fold.  Because they are reference-policy finite differences, they provide no
+global descent guarantee after large policy updates; at small pilot sizes
+they can also be sparse and discontinuous.
+
+\paragraph{A rigorous but loose margin surrogate.}
+There is a simulation-free upper bound when the complete-data candidate rates
+$m_j$ are separated from the target.  Let
+\begin{equation}
+    \delta_j:=|\tautarget-m_j|>0,
+    \qquad
+    D_c:=\sum_{j=1}^J|d_j|.
+\end{equation}
+Weighted Cauchy--Schwarz and one-sided Cantelli give
+\begin{equation}
+\begin{split}
+    \operatorname{Var}_R(Y)
+    &\leq D_c\sum_{j=1}^J|d_j|
+      \frac{V_j}{V_j+\delta_j^2}\\
+    &\leq D_c\sum_{j=1}^J|d_j|
+      \frac{V_j}{\delta_j^2}.
+    \label{eq:lpb_margin_variance_bound}
+\end{split}
+\end{equation}
+Up to the common factor $D_c$, the final expression is a DAPRO objective with
+row weight
+\begin{equation}
+    w_i^{\mathrm{margin}}
+    :=\sum_{j=1}^J
+      \frac{|d_j|A_{ij}}{\delta_j^2}.
+    \label{eq:lpb_margin_weight}
+\end{equation}
+This naive margin construction is a rigorous upper bound, but it was
+empirically loose in our policy-fitting diagnostic.  It adds candidatewise
+deviations after discarding the strong nested covariance and cancellation in
+\eqref{eq:exact_selected_lpb_variance}, and it becomes unstable when a pilot
+candidate lies at the target.  We therefore use it as a diagnostic rather
+than as the recommended allocator; a zero robust margin should be routed to
+the pivotal construction rather than regularized into an artificial
+guarantee.
+
+\paragraph{Smooth-selection Influence-DAPRO.}
+A more stable deployable surrogate smooths the crossing itself.  Let
+$\mathcal K$ be a smooth CDF with density $k$ and bandwidth $h>0$, and define
+\begin{equation}
+    g_h(m):=c_0+\sum_{j=1}^Jd_j
+      \mathcal K\!\left(
+        \frac{\tautarget-m_j}{h}
+      \right).
+    \label{eq:smooth_lpb_selector}
+\end{equation}
+Its gradient has entries
+\begin{equation}
+    \gamma_j
+    =-\frac{d_j}{h}
+      k\!\left(\frac{\tautarget-m_j}{h}\right).
+\end{equation}
+More generally, suppose that the downstream LPB output can be represented
+locally by a differentiable functional $g(m_1,\ldots,m_J)$ and let
+$\gamma=\nabla g(m)$.  Its first-order row influence is
+\begin{equation}
+    \phi_i:=\sum_{j=1}^J\gamma_jA_{ij}.
+\end{equation}
+Combining this definition with~\eqref{eq:lpb_curve_covariance} gives
+\begin{equation}
+    \operatorname{Var}\{g(\widehat m)\mid\mathcal D\}
+    =\frac{1}{n^2}\sum_{i=1}^n
+      \phi_i^2\left(\frac{1}{\pi_i}-1\right)
+      +o(n^{-1}).
+    \label{eq:influence_dapro_variance}
+\end{equation}
+This motivates \emph{Influence-DAPRO}: replace the one-anchor coefficient by
+the squared local influence $\phi_i^2$.  Ordinary Target-$A$ DAPRO is the
+special case in which $\gamma$ selects one coordinate.  It is first-order
+aligned with the final LPB only when that coordinate is the candidate at the
+actual calibration crossing and candidate switching is locally negligible.
+
+The influence in~\eqref{eq:influence_dapro_variance} is deliberately
+\emph{uncentered}.  Conditional on a fixed finite calibration population, the
+acquisition perturbation is
+\begin{equation}
+    \frac{1}{n}\sum_i
+      \left(\frac{R_i}{\pi_i}-1\right)
+      \sum_j\gamma_jA_{ij},
+\end{equation}
+so its design variance contains
+$\{\sum_j\gamma_jA_{ij}\}^2$.  The centered expression
+$\sum_j\gamma_j(A_{ij}-m_j)$ is the familiar superpopulation influence for
+random calibration-split variation; it is not the ordinary-HT acquisition
+influence and must not replace $\phi_i$ in this fixed-population objective.
+Centering becomes appropriate only after changing the estimating equation,
+for example by introducing a valid augmented estimator with a corresponding
+control variate.
+
+The bandwidth should be at least the sampling-noise scale; otherwise the
+smooth influence inherits the hard selector's nonregularity.  Unlike the
+margin sum, $\phi_i^2$ preserves cancellation across candidate bands and
+automatically ignores flat output regions through $d_j=0$.  Unlike Pivotal
+Selection-DAPRO, it is a first-order approximation rather than a finite-sample
+upper bound.  These are complementary instantiations: pivotal weights target
+the discontinuous selector rigorously but can be noisy, whereas smooth
+influence weights trade exactness for stable estimation and optimization.  In
+either construction, candidate coverages, crossing weights, and bandwidths
+must be estimated without test leakage and frozen before Phase-II acquisition.
+
+These selection-aware variants are presently experimental rather than
+established production improvements.  In an isolated real-data pilot,
+correcting a centered influence implementation to the uncentered design
+influence reduced that variant's fixed-policy variance diagnostic by $91.9\%$,
+but the hard $N_1=50$ fit still had an effective target sample size of only
+about eight and underperformed the soft-anchor reference.  This result favors
+the smooth, Rao--Blackwellized construction and larger independent fitting
+sets; it does not justify replacing the current allocator before a fully
+paired validation.
 
 \subsection{Definitive DAPRO: regularization and direct deployment}
 
@@ -546,6 +1083,38 @@ $a_i(t)=A_i\ind{t=L_i}$, Generalized DAPRO reduces exactly to the hard
 Target-$A$ objective.  In this precise sense, the hard Target-$A$ and
 Definitive objectives are special cases of the generalized event-mass
 formulation.
+
+This replacement is exact in population only for the true conditional
+hazard.  Let $h_i^0(t)$ denote that hazard and let $\rho_i(t)$ be any frozen,
+predictable cumulative-reach policy.  Iterated expectation gives
+\begin{equation}
+\begin{split}
+    \E\!\left[
+      A_i\left\{\frac{1}{\rho_i(T_i)}-1\right\}
+    \right]
+    =\E\!\left[
+      \sum_{t\leq L_i}h_i^0(t)\ind{t\ \text{is a target endpoint}}
+      \left\{\frac{1}{\rho_i(t)}-1\right\}
+    \right].
+    \label{eq:soft_hazard_exact_identity}
+\end{split}
+\end{equation}
+Consequently, replacing $h_i^0$ by $\widehat h_i$ introduces objective error
+bounded by
+\begin{equation}
+    \E\!\left[
+      \sum_{t\leq L_i}
+      |\widehat h_i(t)-h_i^0(t)|
+      \left\{\frac{1}{\rho_i(t)}-1\right\}
+    \right].
+    \label{eq:soft_hazard_error_bound}
+\end{equation}
+The inverse-reach factor makes calibration errors at rarely acquired prefixes
+especially costly; the positivity floor bounds it by
+$\eps_\pi^{-1}-1$.  Importantly, misspecification in
+\eqref{eq:soft_hazard_error_bound} changes allocation efficiency, not the
+design validity of the final HT estimator, which uses the logged acquisition
+propensity rather than $\widehat h_i$.
 
 \subsection{Solving the score-monotone sequential problem}
 
@@ -658,14 +1227,38 @@ we optionally cap each row's label-free horizon cost by
 \begin{equation}
     C_{\max}:=\min(\maxl,2\bar B).
 \end{equation}
-If $\sum_{t=1}^{Q_i}\bar\rho_i(t)>C_{\max}$, mix that row toward the floor:
+The cap must itself be predictable.  In particular, computing one affine
+contraction from $\sum_t\bar\rho_i(t)$ would inspect scores at future prefixes
+and could make the first-turn decision depend on an interaction that has not
+yet occurred.  We instead freeze one shared, target-adaptive envelope using
+only the policy-fitting fold.  Let
+\begin{equation}
+    \bar a(t):=\frac{1}{|\calIone^{\mathrm{fit}}|}
+    \sum_{i\in\calIone^{\mathrm{fit}}}a_i(t),
+\end{equation}
+where hard endpoint DAPRO places its row weight at the observed endpoint.
+Compute
+\begin{equation}
+\begin{split}
+    e^*\in\argmin_e\;&\sum_{t=1}^{\maxl}\frac{\bar a(t)}{e(t)}\\
+    \text{subject to }\;&1\geq e(1)\geq\cdots\geq e(\maxl)
+       \geq\eps_\pi,
+       \qquad \sum_{t=1}^{\maxl}e(t)\leq C_{\max}.
+\end{split}
+\label{eq:dapro_causal_row_cap}
+\end{equation}
+This one-dimensional convex problem is solved by antitonic PAV on
+$\sqrt{\bar a(t)}$ followed by a scalar dual search.  On every row, set
 \begin{equation}
     \bar\rho_i^{\mathrm{cap}}(t)
-    =\eps_\pi+\kappa_i
-      (\bar\rho_i(t)-\eps_\pi),
+    :=\min\{\bar\rho_i(t),e^*(t)\}.
 \end{equation}
-where $\kappa_i\in[0,1]$ is the largest value whose horizon cost does not
-exceed $C_{\max}$.  This cap is label-free because it uses $Q_i$, not $T_i$.
+Both arguments of the minimum are available at prefix $t$, so the capped
+decision is predictable.  The minimum of two non-increasing cumulative paths
+is non-increasing, remains above the floor, and satisfies
+$\sum_{t=1}^{Q_i}\bar\rho_i^{\mathrm{cap}}(t)
+\leq\sum_{t=1}^{\maxl}e^*(t)\leq C_{\max}$ on every possible future path.
+The envelope is frozen before the CRC fold is inspected and never uses $T_i$.
 It is not the target average budget.  Its purpose is to tighten the bounded
 loss envelope required by CRC while still permitting the policy to spend more
 than the average budget on a high-risk row.
@@ -898,7 +1491,9 @@ empty bins from the nearest observed bin.
     floor, and fit one Phase-I budget intercept; deploy the frozen table and
     intercept on $\calItwo$.
 \ELSE
-    \STATE Apply the row-local horizon cap $C_{\max}=\min(\maxl,2\bar B)$.
+    \STATE Apply the causal shared-PAV row cap in
+    \eqref{eq:dapro_causal_row_cap}, with
+    $C_{\max}=\min(\maxl,2\bar B)$.
     \STATE Form the $401$ nested cumulative policies in
     \eqref{eq:dapro_crc_family}; evaluate $b_i$ and $c_i(k)$ only on the CRC
     fold; select $\widehat k$ by~\eqref{eq:dapro_crc_selector}.

@@ -64,7 +64,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--seed-start", type=int, default=0)
     parser.add_argument("--seed-end", type=int, default=50)
     parser.add_argument("--device", default="cuda:0")
-    parser.add_argument("--suffix", default="full_bounds_v2")
+    parser.add_argument("--suffix", default="full_bounds_v4_soft_upb")
     parser.add_argument(
         "--quality", choices=["high", "low"], default="low"
     )
@@ -86,6 +86,15 @@ def _parse_args() -> argparse.Namespace:
         choices=[model.key for model in TARGET_MODELS],
     )
     parser.add_argument(
+        "--bound-type",
+        action="append",
+        choices=["lpb", "upb"],
+        help=(
+            "Run only the requested bound type; repeat to request both. "
+            "The dedicated UPB shell launcher passes --bound-type upb."
+        ),
+    )
+    parser.add_argument(
         "--available-only",
         action="store_true",
         help="Run only configurations whose prediction cache exists locally.",
@@ -103,6 +112,7 @@ def main() -> None:
         ROOT,
         keys=set(args.configs or []),
         target_models=set(args.target_model or []),
+        bound_types=set(args.bound_type or []),
         available_only=args.available_only,
     )
     if not configs:
