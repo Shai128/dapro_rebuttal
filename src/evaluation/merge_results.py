@@ -72,6 +72,7 @@ def merge_results(
         exclude_legacy_dapro=False,
         exclude_locally_adaptive=False,
         allocator_names=None,
+        method_suite="legacy",
 ):
     all_dfs = []
     num_cpus = os.cpu_count()
@@ -96,6 +97,7 @@ def merge_results(
             crc_control_size=config_crc,
             include_legacy_dapro=not exclude_legacy_dapro,
             include_locally_adaptive=not exclude_locally_adaptive,
+            method_suite=method_suite,
         )
         for calibration in calibrations:
             entry = calibrations_by_name.setdefault(
@@ -209,6 +211,9 @@ def main():
         ),
     )
     parser.add_argument('--experiment-suffix', type=str, default='')
+    parser.add_argument(
+        '--method-suite', choices=['legacy', 'unified_aht'], default='legacy'
+    )
     parser.add_argument('--exclude-legacy-dapro', action='store_true')
     parser.add_argument('--exclude-locally-adaptive', action='store_true')
     parser.add_argument(
@@ -264,6 +269,7 @@ def main():
         exclude_legacy_dapro=args.exclude_legacy_dapro,
         exclude_locally_adaptive=args.exclude_locally_adaptive,
         allocator_names=args.allocator_names,
+        method_suite=args.method_suite,
     )
 
 

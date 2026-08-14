@@ -621,6 +621,16 @@ class LegacyMeanWeightDAPRO(BudgetAllocator):
     def objective_metadata(self) -> dict:
         return {}
 
+    def policy_scores(
+            self,
+            quantile_est: torch.Tensor,
+    ) -> torch.Tensor:
+        """Return the predictable scalar score available at every prefix."""
+        del quantile_est
+        width = self.conditional_grid.shape[1]
+        step = torch.arange(width, device=self.conditional_grid.device)
+        return self.conditional_grid[:, step, step]
+
     def allocate_budget(self, probability_est: torch.Tensor, x: torch.Tensor, t: torch.Tensor,
                         quantile_est: torch.Tensor) -> BudgetAllocationResult:
         device = self.conditional_grid.device
@@ -631,7 +641,7 @@ class LegacyMeanWeightDAPRO(BudgetAllocator):
             quantile_est, self.taus_range, self.tau_prior
         ).clamp(max=T_max_curr)
         if self.score == 'prob':
-            scores = self.conditional_grid[:, torch.arange(0, T_max_curr), torch.arange(0, T_max_curr)]
+            scores = self.policy_scores(quantile_est)
         elif self.score == 'quantile':
             quantile_counts = quantiles_to_interaction_counts(
                 compute_quantile_survival_time(
@@ -2153,6 +2163,7 @@ class LegacyMeanWeightDAPRO(BudgetAllocator):
             total_budget_used,
             additional_metrics=additional_metrics,
             candidate_C_probs=candidate_C_probs,
+            continuation_probabilities=all_conditionals,
         )
 
 
@@ -3222,18 +3233,255 @@ class SoftTargetCRCDAPRO(SoftTargetDAPRO):
         return metadata
 
 
+def _conditional_lower_target_probability(
+        pmf: torch.Tensor,
+        horizons: torch.Tensor,
+        *,
+        strict: bool,
+) -> torch.Tensor:
+    """Evaluate a row-specific lower-event probability from a PMF row."""
+    values = pmf.to(torch.float64).clamp_min(0.0)
+    values = values / values.sum(dim=1, keepdim=True).clamp_min(1e-15)
+    h = horizons.to(device=values.device, dtype=torch.long).reshape(-1)
+    outcome = torch.arange(1, values.shape[1] + 1, device=values.device)
+    mask = outcome[None, :] < h[:, None] if strict else outcome[None, :] <= h[:, None]
+    return (values * mask.to(values.dtype)).sum(dim=1)
+
+
+class _LowerTargetSequentialAHTDAPRO(SoftTargetDAPRO):
+    """Shared dynamic schedule for LPB and metric sequential AHT."""
+
+    aht_estimator_kind = "sequential"
+    schedule_objective = "information_gain"
+
+    def _target_horizons(
+            self,
+            event_times: torch.Tensor,
+            quantile_est: torch.Tensor,
+    ) -> tuple[torch.Tensor, bool, str]:
+        if self.metric_estimation_horizon is not None:
+            return (
+                torch.full(
+                    (len(event_times),),
+                    int(self.metric_estimation_horizon),
+                    dtype=torch.long,
+                    device=event_times.device,
+                ),
+                False,
+                "metric",
+            )
+        if self._target_anchor_index is None:
+            self._select_target_anchor(event_times, quantile_est)
+        return (
+            quantile_est[:, self._target_anchor_index].to(torch.long),
+            True,
+            "lpb",
+        )
+
+    def _schedule_masses(
+            self,
+            event_times: torch.Tensor,
+            prior_q: torch.Tensor,
+            quantile_est: torch.Tensor,
+            conditional_grid: torch.Tensor,
+    ) -> torch.Tensor:
+        grid = conditional_grid.to(torch.float64)
+        n, width, _ = grid.shape
+        times = event_times.reshape(-1).to(device=grid.device, dtype=torch.long)
+        prior = prior_q.reshape(-1).to(device=grid.device, dtype=torch.long)
+        horizons, strict, _ = self._target_horizons(times, quantile_est)
+        horizons = horizons.to(grid.device)
+        target = (
+            times < horizons if strict else times <= horizons
+        ).to(torch.float64)
+        previous = _conditional_lower_target_probability(
+            grid[:, 0, :], horizons, strict=strict
+        )
+        masses = torch.zeros((n, width), dtype=torch.float64, device=grid.device)
+        for turn in range(1, width + 1):
+            active = (turn <= times) & (turn <= prior)
+            if not torch.any(active):
+                break
+            if self.schedule_objective == "residual":
+                masses[active, turn - 1] = (
+                    target[active] - previous[active]
+                ).square()
+            post = previous.clone()
+            event_now = active & (times == turn)
+            post[event_now] = target[event_now]
+            survived = active & (times > turn)
+            if torch.any(survived):
+                if turn < width:
+                    next_probability = _conditional_lower_target_probability(
+                        grid[:, turn, :], horizons, strict=strict
+                    )
+                    post[survived] = next_probability[survived]
+                else:
+                    post[survived] = target[survived]
+            if self.schedule_objective == "information_gain":
+                masses[active, turn - 1] = (
+                    post[active] - previous[active]
+                ).square()
+            previous[active] = post[active]
+
+        if self.global_regularization > 0:
+            active_lengths = torch.minimum(times, prior)
+            exploration = history_soft_objective_coefficients(
+                conditional_grid,
+                active_lengths,
+                width,
+                strict=False,
+                target_kind="all_observable_events",
+                global_regularization=0.0,
+            ).event_mass
+            masses = (
+                masses
+                + self.global_regularization * torch.as_tensor(
+                    exploration, dtype=torch.float64, device=grid.device
+                )
+            ) / (1.0 + self.global_regularization)
+        return masses
+
+    def phase1_objective_masses(
+            self,
+            event_times: torch.Tensor,
+            prior_q: torch.Tensor,
+            quantile_est: torch.Tensor,
+            conditional_grid: torch.Tensor,
+    ) -> torch.Tensor:
+        return self._schedule_masses(
+            event_times, prior_q, quantile_est, conditional_grid
+        )
+
+    def policy_scores(self, quantile_est: torch.Tensor) -> torch.Tensor:
+        """Causal target residual variance per predicted remaining cost."""
+        grid = self.conditional_grid.to(torch.float64)
+        n, width, _ = grid.shape
+        dummy_times = torch.full(
+            (n,), width, dtype=torch.long, device=grid.device
+        )
+        horizons, strict, _ = self._target_horizons(dummy_times, quantile_est)
+        horizons = horizons.to(grid.device).clamp(min=1, max=width)
+        scores = torch.zeros((n, width), dtype=torch.float64, device=grid.device)
+        row = torch.arange(n, device=grid.device)
+        for current in range(width):
+            pmf = grid[:, current, :].clamp_min(0.0)
+            pmf = pmf / pmf.sum(dim=1, keepdim=True).clamp_min(1e-15)
+            probability = _conditional_lower_target_probability(
+                pmf, horizons, strict=strict
+            )
+            tail = torch.flip(
+                torch.cumsum(torch.flip(pmf, dims=(1,)), dim=1), dims=(1,)
+            )[:, :width]
+            prefix = torch.cumsum(tail, dim=1)
+            endpoint = horizons - 1
+            endpoint_cost = prefix[row, endpoint]
+            past_cost = (
+                prefix[:, current - 1]
+                if current > 0
+                else torch.zeros(n, dtype=prefix.dtype, device=prefix.device)
+            )
+            remaining = (endpoint_cost - past_cost).clamp_min(1e-12)
+            unresolved = horizons > current
+            scores[:, current] = torch.where(
+                unresolved,
+                torch.sqrt(probability * (1.0 - probability) / remaining),
+                torch.zeros_like(probability),
+            )
+        return scores
+
+    @property
+    def name(self) -> str:
+        target = (
+            f"metric_m{self.metric_estimation_horizon}"
+            if self.metric_estimation_horizon is not None
+            else f"lpb_c{1.0 - self.target_alpha:.2f}".replace(".", "p")
+        )
+        margin = self._format_parameter(self.projection_budget_margin, 2)
+        base = (
+            f"dapro_{self.schedule_objective}_sequential_aht_"
+            f"{target}_bins_{self.score_bin_count}_raw_margin_{margin}"
+        )
+        base += self.budget_control_name_suffix
+        return f"{base}_n1_{self.n1}"
+
+    @property
+    def objective_kind(self) -> str:
+        return f"dynamic_{self.schedule_objective}_schedule_sequential_aht"
+
+    def objective_metadata(self) -> dict:
+        metadata = super().objective_metadata()
+        metadata.update({
+            "aht_estimator_kind": "sequential",
+            "dynamic_schedule_objective": self.schedule_objective,
+            "dynamic_schedule_score": "target_residual_variance_per_remaining_cost",
+        })
+        return metadata
+
+
+class InformationGainDAPRO(_LowerTargetSequentialAHTDAPRO):
+    """K2 history-adaptive schedule fitted to squared prediction updates."""
+
+    schedule_objective = "information_gain"
+
+
+class ResidualDAPRO(_LowerTargetSequentialAHTDAPRO):
+    """K2 history-adaptive schedule fitted to squared remaining residuals."""
+
+    schedule_objective = "residual"
+
+
+class _SequentialAHTCRCMixin:
+    """Independent CRC constructor shared by the sequential AHT schedules."""
+
+    def __init__(
+            self, *args, n1: int = 200, budget_control_size: int = 100,
+            row_cost_cap_multiplier: float | None = 2.0, **kwargs,
+    ):
+        kwargs.pop("projection_budget_margin", None)
+        cap = (
+            None
+            if row_cost_cap_multiplier is None
+            else float(row_cost_cap_multiplier) * float(args[1] if len(args) > 1 else kwargs["budget_per_sample"])
+        )
+        super().__init__(
+            *args,
+            n1=n1,
+            projection_budget_margin=0.0,
+            budget_control_mode="crc",
+            budget_control_size=budget_control_size,
+            risk_candidate_row_cost_cap=cap,
+            **kwargs,
+        )
+
+
+class InformationGainCRCDAPRO(_SequentialAHTCRCMixin, InformationGainDAPRO):
+    pass
+
+
+class ResidualCRCDAPRO(_SequentialAHTCRCMixin, ResidualDAPRO):
+    pass
+
+
 class SoftTargetUPBDAPRO(SoftTargetDAPRO):
     """Soft-prefix Generalized DAPRO for upper-bound coverage.
 
-    At the frozen nominal UPB anchor ``f_c`` the stochastic calibration
-    contribution is ``A_i=1{T_i<=f_c(X_i), f_c(X_i)<201}``.  Rows assigned
-    201 are already covered deterministically and therefore carry no target
-    acquisition variance.  The hard indicator is Rao--Blackwellized into
-    causal prefix-hazard mass before fitting the usual two-bin policy.
+    At the frozen UPB anchor ``f_c`` the stochastic calibration target is the
+    miscoverage event ``A_i=1{T_i>f_c(X_i), f_c(X_i)<201}``.  It is resolved
+    by reaching the candidate bound itself.  Conditional on being at risk at
+    that endpoint, its Rao--Blackwellized mass is one minus the current event
+    hazard.  Rows assigned 201 have deterministic zero miscoverage and carry
+    no target acquisition variance.  For this endpoint target the efficient
+    soft-prefix action is a block reveal: sample at ``X_0`` and, if selected,
+    follow through the candidate.  The K2 score map is therefore the
+    endpoint/block specialization of the same Generalized-DAPRO objective,
+    rather than a generic per-turn policy whose propensities decay before the
+    only informative endpoint.
     """
 
     DEFAULT_TARGET_COVERAGE = 0.70
     requires_unclipped_upb_quantiles = True
+    upb_endpoint_block_action = True
 
     def __init__(
             self,
@@ -3265,28 +3513,342 @@ class SoftTargetUPBDAPRO(SoftTargetDAPRO):
             event_times: torch.Tensor,
             quantile_est: torch.Tensor,
     ) -> None:
+        del event_times
         prior_index = int(
             torch.abs(self.taus_range - self.tau_prior).argmin().item()
         )
         candidates = quantile_est[:, :prior_index + 1]
-        # The nominal model quantile can be badly miscalibrated.  Select the
-        # UPB target on policy-fit outcomes, then freeze it before projection,
-        # the CRC fold, and Phase II.  This aligns the optimized A with the
-        # candidate the final UPB calibrator is likely to choose.
-        phase1_coverages = (
-            event_times.reshape(-1, 1).to(candidates.device) <= candidates
-        ).to(torch.float64).mean(dim=0)
+        pmf = self.conditional_grid[:, 0, :].to(torch.float64).clamp_min(0.0)
+        pmf = pmf / pmf.sum(dim=1, keepdim=True).clamp_min(1e-15)
+        tail = torch.flip(
+            torch.cumsum(torch.flip(pmf, dims=(1,)), dim=1), dims=(1,)
+        )
+        width = self.conditional_grid.shape[1]
+        finite = candidates <= width
+        indices = candidates.to(torch.long).clamp(min=1, max=width)
+        model_miscoverage = tail.gather(1, indices)
+        model_miscoverage = torch.where(
+            finite, model_miscoverage, torch.zeros_like(model_miscoverage)
+        )
+        # The entire target is a frozen function of X_0 and the pretrained
+        # conditional PMF.  No trajectory label is spent to fit the UPB policy.
+        # This is the Rao--Blackwellized soft-prefix counterpart of choosing a
+        # hard Phase-I anchor, and avoids injecting an unnecessary random split
+        # into the final calibrated UPB.
+        model_coverages = 1.0 - model_miscoverage.mean(dim=0)
         selected = select_upb_calibration_positions(
-            phase1_coverages,
+            model_coverages,
             torch.tensor(
                 [self.target_coverage],
-                dtype=phase1_coverages.dtype,
-                device=phase1_coverages.device,
+                dtype=model_coverages.dtype,
+                device=model_coverages.device,
             ),
         )
         self._target_anchor_index = int(selected.item())
         self._target_anchor_selection_miscoverage = float(
-            1.0 - phase1_coverages[self._target_anchor_index].item()
+            model_miscoverage[:, self._target_anchor_index].mean().item()
+        )
+
+    def policy_scores(
+            self,
+            quantile_est: torch.Tensor,
+    ) -> torch.Tensor:
+        """Causal probability of the UPB miscoverage event at each prefix.
+
+        The score horizon is the fixed nominal target-coverage quantile, so it
+        is chosen without Phase-I or Phase-II labels.  At prefix ``X_it`` the
+        score sums the conditional PMF beyond that row-specific horizon.  A
+        larger score therefore means a larger chance of ``T>f`` and correctly
+        receives weakly larger K2 continuation probability.
+        """
+        target_index = int(
+            torch.abs(
+                self.taus_range - self.target_coverage
+            ).argmin().item()
+        )
+        horizons = quantile_est[:, target_index].to(torch.long)
+        n, width, _ = self.conditional_grid.shape
+        scores = torch.zeros(
+            (n, width),
+            dtype=self.conditional_grid.dtype,
+            device=self.conditional_grid.device,
+        )
+        for horizon in torch.unique(horizons).tolist():
+            rows = horizons == int(horizon)
+            if 1 <= horizon <= width:
+                # PMF outcome index h is T=h+1, hence indices h,... are T>h.
+                scores[rows] = self.conditional_grid[rows, :, int(horizon):].sum(
+                    dim=-1
+                )
+            # f=201 has deterministic zero miscoverage and retains score zero.
+        return scores.clamp(0.0, 1.0)
+
+    def _initial_upb_risk_and_cost(
+            self,
+            quantile_est: torch.Tensor,
+            prior_q: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        if self._target_anchor_index is None:
+            raise RuntimeError("The UPB target anchor must be frozen first.")
+        pmf = self.conditional_grid[:, 0, :].to(torch.float64)
+        pmf = pmf.clamp_min(0.0)
+        pmf = pmf / pmf.sum(dim=1, keepdim=True).clamp_min(1e-15)
+        anchor = quantile_est[:, self._target_anchor_index].to(torch.long)
+        width = self.conditional_grid.shape[1]
+        tail = torch.flip(
+            torch.cumsum(torch.flip(pmf, dims=(1,)), dim=1), dims=(1,)
+        )
+        finite_anchor = (anchor >= 1) & (anchor <= width)
+        anchor_index = anchor.clamp(min=1, max=width)
+        miscoverage_probability = tail.gather(
+            1, anchor_index[:, None]
+        ).squeeze(1)
+        miscoverage_probability = torch.where(
+            finite_anchor,
+            miscoverage_probability,
+            torch.zeros_like(miscoverage_probability),
+        )
+        # The augmented-HT UPB estimator weights the residual A-m rather than
+        # the raw indicator A.  Under the fitted Bernoulli model its expected
+        # squared residual is m(1-m), the exact soft target for acquisition
+        # variance.  Misspecification cannot affect design unbiasedness.
+        risk = miscoverage_probability * (1.0 - miscoverage_probability)
+        time = torch.arange(width, device=pmf.device).unsqueeze(0)
+        at_risk = tail[:, :width]
+        predicted_cost = (
+            at_risk * (time < prior_q.to(torch.long)[:, None])
+        ).sum(dim=1)
+        value_score = torch.sqrt(
+            risk / predicted_cost.clamp_min(1e-12)
+        )
+        return risk, predicted_cost, value_score
+
+    @staticmethod
+    def _k2_base_probabilities(
+            fit_risk: torch.Tensor,
+            fit_cost: torch.Tensor,
+            fit_score: torch.Tensor,
+            all_score: torch.Tensor,
+    ) -> tuple[torch.Tensor, float, torch.Tensor]:
+        threshold = float(torch.median(fit_score).item())
+        fit_high = fit_score >= threshold
+        all_high = all_score >= threshold
+        bases = []
+        for mask in (~fit_high, fit_high):
+            if not torch.any(mask):
+                bases.append(torch.tensor(0.0, dtype=torch.float64, device=fit_score.device))
+                continue
+            a = fit_risk[mask].sum()
+            d = fit_cost[mask].sum().clamp_min(1e-12)
+            bases.append(torch.sqrt(a / d))
+        base = torch.stack(bases)
+        # Enforce the K2 monotone score map.  Pool a reversed pair exactly as
+        # the generalized-PAV step in ordinary DAPRO would.
+        if base[0] > base[1]:
+            pooled = torch.sqrt(
+                fit_risk.sum() / fit_cost.sum().clamp_min(1e-12)
+            )
+            base[:] = pooled
+        row_base = torch.where(all_high, base[1], base[0])
+        if row_base.max() <= 0:
+            row_base = torch.ones_like(row_base)
+        else:
+            row_base = row_base / row_base.max()
+        return row_base, threshold, base
+
+    def allocate_budget(
+            self,
+            probability_est: torch.Tensor,
+            x: torch.Tensor,
+            t: torch.Tensor,
+            quantile_est: torch.Tensor,
+    ) -> BudgetAllocationResult:
+        """Fit the exact K2 endpoint/block-action UPB specialization.
+
+        A finite UPB miscoverage indicator is revealed only by reaching its
+        endpoint.  Conditional partial trajectories have no direct HT
+        contribution, so the block policy samples once at ``X_i0`` and then
+        follows selected trajectories to the event or q_prior.  This avoids
+        the exponential propensity decay of a generic turn-by-turn policy.
+        """
+        del probability_est, x
+        device = self.conditional_grid.device
+        n, width, _ = self.conditional_grid.shape
+        prior_q = get_prior(
+            quantile_est, self.taus_range, self.tau_prior
+        ).to(torch.long).clamp(min=1, max=width)
+        permutation = np.random.permutation(n)
+        control = self.budget_control_size if self.budget_control_mode else 0
+        control_rows = permutation[:control]
+        phase2 = permutation[control:]
+        phase1 = control_rows
+        if len(phase2) <= 0:
+            raise ValueError("UPB DAPRO needs a non-empty deployment fold.")
+
+        self._select_target_anchor(t, quantile_est)
+        risk, predicted_cost, value_score = self._initial_upb_risk_and_cost(
+            quantile_est, prior_q
+        )
+        regularized_risk = (
+            risk + self.global_regularization * risk.mean()
+        ) / (1.0 + self.global_regularization)
+        row_base, threshold, bin_bases = self._k2_base_probabilities(
+            regularized_risk,
+            predicted_cost,
+            value_score,
+            value_score,
+        )
+        lengths = torch.minimum(
+            t.reshape(-1).to(torch.long), prior_q
+        ).to(torch.float64)
+        phase1_cost = float(lengths[control_rows].sum().item())
+        total_budget = float(self.budget_per_sample * n)
+        epsilon = float(self.terminal_pi_min or 0.005)
+        row_base = row_base.clamp(min=epsilon, max=1.0)
+        if total_budget <= phase1_cost:
+            raise ValueError("Fully observed UPB Phase I exhausts the budget.")
+
+        selector_metrics = {}
+        if self.budget_control_mode is None:
+            target = (
+                (total_budget - phase1_cost) / len(phase2)
+                - self.projection_budget_margin
+            )
+            if target < epsilon * predicted_cost[phase2].mean().item():
+                raise ValueError("UPB DAPRO positivity floor is budget-infeasible.")
+
+            def probabilities(scale: float) -> torch.Tensor:
+                return torch.clamp(scale * row_base, min=epsilon, max=1.0)
+
+            low, high = 0.0, 1.0
+            while (
+                (probabilities(high)[phase2] * predicted_cost[phase2]).mean().item()
+                < target and high < 1e8
+            ):
+                high *= 2.0
+            for _ in range(80):
+                middle = (low + high) / 2.0
+                cost = (
+                    probabilities(middle)[phase2] * predicted_cost[phase2]
+                ).mean().item()
+                if cost <= target:
+                    low = middle
+                else:
+                    high = middle
+            selected_probabilities = probabilities(low)
+            selector_metrics = {
+                "upb_block_model_budget_scale": low,
+                "expected_budget_guarantee_kind": "projection_transfer_assumption",
+                "expected_budget_guarantee_requires_projection_accuracy": 1,
+                "expected_budget_guarantee_is_marginal_finite_sample": 0,
+            }
+        else:
+            alpha = torch.linspace(
+                1.0, 0.0, self.budget_candidate_count,
+                dtype=torch.float64, device=device,
+            )
+            base = row_base[:, None]
+            family = epsilon + alpha[None, :] * (base - epsilon)
+            control_costs = (
+                lengths[control_rows, None] * family[control_rows]
+            ).detach().cpu().numpy()
+            selection = select_crc_budget_candidate(
+                control_costs,
+                lengths[control_rows].detach().cpu().numpy(),
+                total_budget_after_policy_fit=(
+                    total_budget
+                ),
+                deployment_sample_count=len(phase2),
+                maximum_cost_per_sample=float(width),
+                maximum_candidate_cost_per_sample=float(width),
+                maximum_pilot_cost_per_sample=float(width),
+            )
+            selected_probabilities = family[:, selection.selected_index]
+            selector_metrics = {
+                "risk_budget_selector_valid": 1,
+                "risk_budget_selected_candidate_index": selection.selected_index,
+                "risk_budget_selector_left_side_per_sample": selection.selector_left_side_per_sample,
+                "risk_budget_guarantee_kind": selection.guarantee_kind,
+                "expected_budget_guarantee_kind": selection.guarantee_kind,
+                "expected_budget_guarantee_requires_projection_accuracy": 0,
+                "expected_budget_guarantee_is_marginal_finite_sample": 1,
+            }
+
+        selected_probabilities = selected_probabilities.to(torch.float64)
+        acquisition_uniforms = self.get_acquisition_uniforms(
+            n, width, device=device, dtype=torch.float64
+        )
+        if acquisition_uniforms is None:
+            self.reset_acquisition_rng()
+            first_uniform = torch.rand(n, device=device, dtype=torch.float64)
+        else:
+            first_uniform = acquisition_uniforms[:, 0]
+        selected = first_uniform[phase2] < selected_probabilities[phase2]
+        C = torch.zeros(n, dtype=torch.long, device=device)
+        C[phase1] = prior_q[phase1]
+        C[phase2] = torch.where(
+            selected, prior_q[phase2], torch.zeros_like(prior_q[phase2])
+        )
+        terminal_pi = selected_probabilities.clone()
+        terminal_pi[phase1] = 1.0
+        candidate_pi = terminal_pi[:, None].expand_as(quantile_est).clone()
+        candidate_pi = torch.where(
+            quantile_est == width + 1,
+            torch.ones_like(candidate_pi),
+            candidate_pi,
+        )
+        realized_cost = phase1_cost + float(
+            lengths[phase2][selected].sum().item()
+        )
+        expected_total = phase1_cost + float(
+            (lengths[phase2] * selected_probabilities[phase2]).sum().item()
+        )
+        expected_metrics = summarize_expected_budget(
+            expected_total,
+            n,
+            self.budget_per_sample,
+            cost_semantics="phase1_full_plus_k2_endpoint_block_sampling",
+        )
+        target_weights, _ = self._weights_at_frozen_anchor(
+            t, prior_q, quantile_est
+        )
+        objective_proxy = (
+            target_weights * (terminal_pi.reciprocal() - 1.0)
+        )
+        additional = {
+            "objective_kind": self.objective_kind,
+            "upb_endpoint_block_action": 1,
+            "upb_block_score": "sqrt_initial_upb_residual_variance_per_expected_cost",
+            "upb_block_k2_threshold": threshold,
+            "upb_block_low_base": float(bin_bases[0].item()),
+            "upb_block_high_base": float(bin_bases[1].item()),
+            "phase1_sample_count": control,
+            "policy_fit_label_count": 0,
+            "policy_fit_kind": "model_only_soft_upb_target",
+            "crc_control_sample_count": control,
+            "phase2_sample_count": len(phase2),
+            "phase1_expected_cost_total": phase1_cost,
+            "phase2_expected_cost_total": expected_total - phase1_cost,
+            "phase2_expected_cost_per_sample": (
+                (expected_total - phase1_cost) / len(phase2)
+            ),
+            "phase2_mean_objective_variance_proxy": float(
+                objective_proxy[phase2].mean().item()
+            ),
+            "terminal_pi_min": epsilon,
+            **expected_metrics,
+            **selector_metrics,
+            **self.objective_metadata(),
+        }
+        return BudgetAllocationResult(
+            f=quantile_est,
+            C=C,
+            C_probs=terminal_pi,
+            total_budget_used=realized_cost,
+            mean_weight=float(terminal_pi.reciprocal().mean().item()),
+            max_weight=float(terminal_pi.reciprocal().max().item()),
+            additional_metrics=additional,
+            candidate_C_probs=candidate_pi,
         )
 
     def _weights_at_frozen_anchor(
@@ -3314,7 +3876,7 @@ class SoftTargetUPBDAPRO(SoftTargetDAPRO):
             )
         weights = (
             finite
-            & (event_times.reshape(-1) <= anchor_q.reshape(-1))
+            & (event_times.reshape(-1) > anchor_q.reshape(-1))
         ).to(torch.float64)
         return weights, int(within_prior)
 
@@ -3332,20 +3894,24 @@ class SoftTargetUPBDAPRO(SoftTargetDAPRO):
             event_times.reshape(-1).to(torch.long),
             prior_q.reshape(-1).to(torch.long),
         )
-        named = history_soft_objective_coefficients(
-            conditional_grid,
-            active_lengths,
-            anchor_q,
-            strict=False,
-            target_kind="upb_coverage_event",
-            global_regularization=0.0,
-        ).event_mass
-        named = np.asarray(named, dtype=np.float64)
-        # f=201 is deterministic coverage and has no target HT variance.
-        sentinel = np.asarray(
-            (anchor_q == 201).detach().cpu(), dtype=bool
-        )
-        named[sentinel] = 0.0
+        n, width, _ = conditional_grid.shape
+        named = np.zeros((n, width), dtype=np.float64)
+        endpoints = np.asarray(anchor_q.detach().cpu(), dtype=np.int64)
+        lengths = np.asarray(active_lengths.detach().cpu(), dtype=np.int64)
+        finite = (endpoints >= 1) & (endpoints <= width)
+        resolvable = finite & (lengths >= endpoints)
+        rows = np.flatnonzero(resolvable)
+        if len(rows):
+            columns = endpoints[rows] - 1
+            hazards = np.asarray(
+                conditional_grid[
+                    torch.as_tensor(rows, device=conditional_grid.device),
+                    torch.as_tensor(columns, device=conditional_grid.device),
+                    torch.as_tensor(columns, device=conditional_grid.device),
+                ].detach().cpu(),
+                dtype=np.float64,
+            )
+            named[rows, columns] = 1.0 - np.clip(hazards, 0.0, 1.0)
         if self.global_regularization > 0:
             all_event = history_soft_objective_coefficients(
                 conditional_grid,
@@ -3375,23 +3941,34 @@ class SoftTargetUPBDAPRO(SoftTargetDAPRO):
         )
         base = (
             f"dapro_soft_prefix_bins_{self.score_bin_count}_"
-            f"upb_coverage_{coverage}_phase1_anchor_global_{regularization}"
+            f"upb_residual_aht_coverage_{coverage}_model_anchor_"
+            f"global_{regularization}"
             f"_projection_margin_{margin}"
         )
         base += self.budget_control_name_suffix
-        return f"{base}_n1_{self.n1}"
+        return base
 
     @property
     def objective_kind(self) -> str:
-        return "soft_prefix_hazard_variance_upb_coverage"
+        return "soft_prefix_augmented_ht_residual_variance_upb_coverage"
 
     def objective_metadata(self) -> dict:
         metadata = super().objective_metadata()
         metadata.update({
             "target_bound_type": "upb",
-            "target_event_side": "lower_or_equal",
+            "target_event_side": "upper",
+            "target_event_kind": "upb_miscoverage_t_gt_f",
             "target_coverage": self.target_coverage,
-            "target_anchor_kind": "phase1_unweighted_upb_coverage",
+            "policy_target_coverage": self.target_coverage,
+            "target_anchor_kind": "model_soft_upb_coverage",
+            "target_anchor_label_rates_available": 0,
+            "target_anchor_phase1_a_rate": np.nan,
+            "target_anchor_phase2_a_rate": np.nan,
+            "target_anchor_phase1_within_prior": 1,
+            "target_anchor_phase2_within_prior": 1,
+            "generalized_dapro_upb_action": "endpoint_block_from_x_i0",
+            "generalized_dapro_policy_fit_uses_labels": 0,
+            "generalized_dapro_score": "upb_residual_variance_per_expected_cost",
             "upb_infinity_value": 201,
             "upb_infinity_contribution_is_deterministic": 1,
         })
@@ -3446,14 +4023,14 @@ class SoftTargetCRCUPBDAPRO(SoftTargetUPBDAPRO):
         )
         return (
             f"dapro_soft_prefix_bins_{self.score_bin_count}_"
-            f"upb_coverage_{coverage}_phase1_anchor_global_{regularization}"
+            f"upb_residual_aht_coverage_{coverage}_model_anchor_"
+            f"global_{regularization}"
             f"_budget_crc_control_{self.budget_control_size}"
-            f"_n1_{self.n1}"
         )
 
     @property
     def objective_kind(self) -> str:
-        return "soft_prefix_hazard_variance_upb_coverage_crc"
+        return "soft_prefix_augmented_ht_residual_variance_upb_coverage_crc"
 
     def objective_metadata(self) -> dict:
         metadata = super().objective_metadata()
@@ -3464,6 +4041,372 @@ class SoftTargetCRCUPBDAPRO(SoftTargetUPBDAPRO):
             "risk_budget_row_cost_cap_policy_version": "none",
         })
         return metadata
+
+
+class HistoryAdaptiveUPBDAPROMixin:
+    """Execute the shared DAPRO solver as a genuinely sequential UPB policy."""
+
+    upb_endpoint_block_action = False
+
+    def allocate_budget(
+            self,
+            probability_est: torch.Tensor,
+            x: torch.Tensor,
+            t: torch.Tensor,
+            quantile_est: torch.Tensor,
+    ) -> BudgetAllocationResult:
+        # The model-soft anchor is frozen before the score table is evaluated.
+        self._select_target_anchor(t, quantile_est)
+        return SoftTargetDAPRO.allocate_budget(
+            self, probability_est, x, t, quantile_est
+        )
+
+    def policy_scores(self, quantile_est: torch.Tensor) -> torch.Tensor:
+        """Current-prefix residual value per predicted remaining reveal cost."""
+        if self._target_anchor_index is None:
+            raise RuntimeError("The UPB target anchor must be frozen first.")
+        grid = self.conditional_grid.to(torch.float64)
+        n, width, _ = grid.shape
+        horizons = quantile_est[:, self._target_anchor_index].to(torch.long)
+        scores = torch.zeros((n, width), dtype=torch.float64, device=grid.device)
+        row_index = torch.arange(n, device=grid.device)
+        for current in range(width):
+            pmf = grid[:, current, :].clamp_min(0.0)
+            pmf = pmf / pmf.sum(dim=1, keepdim=True).clamp_min(1e-15)
+            tail = torch.flip(
+                torch.cumsum(torch.flip(pmf, dims=(1,)), dim=1), dims=(1,)
+            )
+            finite_future = (horizons > current) & (horizons <= width)
+            if not torch.any(finite_future):
+                continue
+            endpoint = horizons.clamp(min=1, max=width)
+            miscoverage = tail[row_index, endpoint]
+            # tail[k] is P(T>=k+1); summing k=current,...,f-1 is
+            # the expected number of additional turns needed to resolve A(f).
+            prefix = torch.cumsum(tail[:, :width], dim=1)
+            endpoint_cost = prefix[row_index, endpoint - 1]
+            prior_cost = (
+                prefix[:, current - 1]
+                if current > 0
+                else torch.zeros(n, dtype=prefix.dtype, device=prefix.device)
+            )
+            remaining_cost = (endpoint_cost - prior_cost).clamp_min(1e-12)
+            residual_risk = miscoverage * (1.0 - miscoverage)
+            scores[:, current] = torch.where(
+                finite_future,
+                torch.sqrt(residual_risk / remaining_cost),
+                torch.zeros_like(residual_risk),
+            )
+        return scores
+
+    def objective_metadata(self) -> dict:
+        metadata = super().objective_metadata()
+        metadata.update({
+            "upb_endpoint_block_action": 0,
+            "generalized_dapro_upb_action": (
+                "history_adaptive_prefix_continuation"
+            ),
+            "generalized_dapro_policy_fit_uses_labels": 1,
+            "generalized_dapro_score": (
+                "current_upb_residual_variance_per_predicted_remaining_cost"
+            ),
+            "generalized_dapro_uses_current_prefix_x_it": 1,
+            "generalized_dapro_uses_initial_x_i0_only": 0,
+        })
+        return metadata
+
+
+class SoftPrefixEndpointUPBDAPRO(
+        HistoryAdaptiveUPBDAPROMixin, SoftTargetUPBDAPRO
+):
+    """History-adaptive K2 UPB DAPRO with the endpoint soft-mass target.
+
+    This is the direct sequential counterpart of the historical soft-prefix
+    policy.  It retains the endpoint survival mass used by the original UPB
+    Generalized-DAPRO formulation, while the calibrator uses every reached
+    model-prediction update through sequential augmented HT.
+    """
+
+    upb_estimator_kind = "ordinary_ht"
+
+    @property
+    def name(self) -> str:
+        coverage = self._format_parameter(self.target_coverage, 2)
+        regularization = self._format_parameter(self.global_regularization, 3)
+        margin = self._format_parameter(self.projection_budget_margin, 2)
+        base = (
+            f"dapro_soft_prefix_bins_{self.score_bin_count}_"
+            f"upb_endpoint_dynamic_aht_coverage_{coverage}_"
+            f"global_{regularization}_projection_margin_{margin}"
+        )
+        base += self.budget_control_name_suffix
+        return f"{base}_n1_{self.n1}"
+
+    @property
+    def objective_kind(self) -> str:
+        return "soft_prefix_upb_endpoint_mass_sequential_aht"
+
+
+class InformationGainUPBDAPRO(
+        HistoryAdaptiveUPBDAPROMixin, SoftTargetUPBDAPRO
+):
+    """History-adaptive K2 DAPRO fitted to squared UPB prediction updates."""
+
+    upb_estimator_kind = "sequential"
+
+    def phase1_objective_masses(
+            self,
+            event_times: torch.Tensor,
+            prior_q: torch.Tensor,
+            quantile_est: torch.Tensor,
+            conditional_grid: torch.Tensor,
+    ) -> torch.Tensor:
+        if self._target_anchor_index is None:
+            self._select_target_anchor(event_times, quantile_est)
+        grid = conditional_grid.to(torch.float64)
+        n, width, _ = grid.shape
+        horizons = quantile_est[:, self._target_anchor_index].to(torch.long)
+        times = event_times.reshape(-1).to(device=grid.device, dtype=torch.long)
+        prior = prior_q.reshape(-1).to(device=grid.device, dtype=torch.long)
+        finite = (horizons >= 1) & (horizons <= width)
+        row_index = torch.arange(n, device=grid.device)
+
+        def tail_at(current: int) -> torch.Tensor:
+            pmf = grid[:, current, :].clamp_min(0.0)
+            pmf = pmf / pmf.sum(dim=1, keepdim=True).clamp_min(1e-15)
+            return torch.flip(
+                torch.cumsum(torch.flip(pmf, dims=(1,)), dim=1), dims=(1,)
+            )
+
+        initial = tail_at(0)
+        endpoint = horizons.clamp(min=1, max=width)
+        previous = initial[row_index, endpoint]
+        previous = torch.where(finite, previous, torch.zeros_like(previous))
+        masses = torch.zeros((n, width), dtype=torch.float64, device=grid.device)
+        for turn in range(1, width + 1):
+            active = finite & (turn <= times) & (turn <= prior) & (turn <= horizons)
+            if not torch.any(active):
+                continue
+            post = previous.clone()
+            event_now = active & (times == turn)
+            resolves_at_bound = active & (times > turn) & (horizons == turn)
+            continues = active & (times > turn) & (horizons > turn)
+            post[event_now] = 0.0
+            post[resolves_at_bound] = 1.0
+            if torch.any(continues):
+                next_tail = tail_at(turn)
+                post[continues] = next_tail[continues, endpoint[continues]]
+            masses[active, turn - 1] = (post[active] - previous[active]).square()
+            previous[active] = post[active]
+
+        if self.global_regularization > 0:
+            active_lengths = torch.minimum(times, prior)
+            exploration = history_soft_objective_coefficients(
+                conditional_grid,
+                active_lengths,
+                width,
+                strict=False,
+                target_kind="all_observable_events",
+                global_regularization=0.0,
+            ).event_mass
+            masses = (
+                masses
+                + self.global_regularization * torch.as_tensor(
+                    exploration, dtype=torch.float64, device=grid.device
+                )
+            ) / (1.0 + self.global_regularization)
+        return masses
+
+    @property
+    def name(self) -> str:
+        coverage = self._format_parameter(self.target_coverage, 2)
+        regularization = self._format_parameter(self.global_regularization, 3)
+        margin = self._format_parameter(self.projection_budget_margin, 2)
+        base = (
+            f"dapro_information_gain_bins_{self.score_bin_count}_"
+            f"upb_sequential_aht_coverage_{coverage}_"
+            f"global_{regularization}_projection_margin_{margin}"
+        )
+        base += self.budget_control_name_suffix
+        return f"{base}_n1_{self.n1}"
+
+    @property
+    def objective_kind(self) -> str:
+        return "soft_prefix_upb_squared_prediction_update_sequential_aht"
+
+    def objective_metadata(self) -> dict:
+        metadata = super().objective_metadata()
+        metadata.update({
+            "generalized_dapro_coefficient_estimator": (
+                "policy_fit_realized_squared_upb_prediction_update"
+            ),
+            "upb_information_gain_objective": 1,
+        })
+        return metadata
+
+
+class ResidualUPBDAPRO(InformationGainUPBDAPRO):
+    """History-adaptive K2 schedule for the UPB residual-tail bound."""
+
+    upb_estimator_kind = "sequential"
+
+    def phase1_objective_masses(
+            self,
+            event_times: torch.Tensor,
+            prior_q: torch.Tensor,
+            quantile_est: torch.Tensor,
+            conditional_grid: torch.Tensor,
+    ) -> torch.Tensor:
+        if self._target_anchor_index is None:
+            self._select_target_anchor(event_times, quantile_est)
+        grid = conditional_grid.to(torch.float64)
+        n, width, _ = grid.shape
+        horizons = quantile_est[:, self._target_anchor_index].to(torch.long)
+        times = event_times.reshape(-1).to(device=grid.device, dtype=torch.long)
+        prior = prior_q.reshape(-1).to(device=grid.device, dtype=torch.long)
+        finite = (horizons >= 1) & (horizons <= width)
+        row_index = torch.arange(n, device=grid.device)
+
+        def tail_at(current: int) -> torch.Tensor:
+            pmf = grid[:, current, :].clamp_min(0.0)
+            pmf = pmf / pmf.sum(dim=1, keepdim=True).clamp_min(1e-15)
+            return torch.flip(
+                torch.cumsum(torch.flip(pmf, dims=(1,)), dim=1), dims=(1,)
+            )
+
+        endpoint = horizons.clamp(min=1, max=width)
+        previous = tail_at(0)[row_index, endpoint]
+        previous = torch.where(finite, previous, torch.zeros_like(previous))
+        target = (finite & (times > horizons)).to(torch.float64)
+        masses = torch.zeros((n, width), dtype=torch.float64, device=grid.device)
+        for turn in range(1, width + 1):
+            active = finite & (turn <= times) & (turn <= prior) & (turn <= horizons)
+            if not torch.any(active):
+                continue
+            masses[active, turn - 1] = (
+                target[active] - previous[active]
+            ).square()
+            post = previous.clone()
+            event_now = active & (times == turn)
+            resolves_at_bound = active & (times > turn) & (horizons == turn)
+            continues = active & (times > turn) & (horizons > turn)
+            post[event_now] = 0.0
+            post[resolves_at_bound] = 1.0
+            if torch.any(continues):
+                next_tail = tail_at(turn)
+                post[continues] = next_tail[continues, endpoint[continues]]
+            previous[active] = post[active]
+        if self.global_regularization > 0:
+            active_lengths = torch.minimum(times, prior)
+            exploration = history_soft_objective_coefficients(
+                conditional_grid,
+                active_lengths,
+                width,
+                strict=False,
+                target_kind="all_observable_events",
+                global_regularization=0.0,
+            ).event_mass
+            masses = (
+                masses + self.global_regularization * torch.as_tensor(
+                    exploration, dtype=torch.float64, device=grid.device
+                )
+            ) / (1.0 + self.global_regularization)
+        return masses
+
+    @property
+    def name(self) -> str:
+        coverage = self._format_parameter(self.target_coverage, 2)
+        margin = self._format_parameter(self.projection_budget_margin, 2)
+        base = (
+            f"dapro_residual_sequential_aht_upb_c{coverage}_"
+            f"bins_{self.score_bin_count}_raw_margin_{margin}"
+        )
+        base += self.budget_control_name_suffix
+        return f"{base}_n1_{self.n1}"
+
+    @property
+    def objective_kind(self) -> str:
+        return "dynamic_residual_schedule_sequential_aht_upb"
+
+    def objective_metadata(self) -> dict:
+        metadata = super().objective_metadata()
+        metadata.update({
+            "generalized_dapro_coefficient_estimator": (
+                "policy_fit_realized_upb_squared_remaining_residual"
+            ),
+            "upb_information_gain_objective": 0,
+            "upb_residual_tail_objective": 1,
+        })
+        return metadata
+
+
+class SoftPrefixEndpointCRCUPBDAPRO(SoftPrefixEndpointUPBDAPRO):
+    """Independent-CRC controller for dynamic endpoint-mass UPB DAPRO."""
+
+    def __init__(
+            self, *args, n1: int = 50, budget_control_size: int = 25,
+            budget_candidate_count: int = 401, **kwargs,
+    ):
+        super().__init__(
+            *args,
+            n1=n1,
+            projection_budget_margin=0.0,
+            budget_control_mode="crc",
+            budget_control_size=budget_control_size,
+            budget_candidate_count=budget_candidate_count,
+            risk_candidate_row_cost_cap=None,
+            **kwargs,
+        )
+
+    @property
+    def objective_kind(self) -> str:
+        return f"{super().objective_kind}_crc"
+
+
+class InformationGainCRCUPBDAPRO(InformationGainUPBDAPRO):
+    """Independent-CRC controller for information-gain UPB DAPRO."""
+
+    def __init__(
+            self, *args, n1: int = 50, budget_control_size: int = 25,
+            budget_candidate_count: int = 401, **kwargs,
+    ):
+        super().__init__(
+            *args,
+            n1=n1,
+            projection_budget_margin=0.0,
+            budget_control_mode="crc",
+            budget_control_size=budget_control_size,
+            budget_candidate_count=budget_candidate_count,
+            risk_candidate_row_cost_cap=None,
+            **kwargs,
+        )
+
+    @property
+    def objective_kind(self) -> str:
+        return f"{super().objective_kind}_crc"
+
+
+class ResidualCRCUPBDAPRO(ResidualUPBDAPRO):
+    """Independent-CRC controller for residual-tail UPB DAPRO."""
+
+    def __init__(
+            self, *args, n1: int = 50, budget_control_size: int = 25,
+            budget_candidate_count: int = 401, **kwargs,
+    ):
+        super().__init__(
+            *args,
+            n1=n1,
+            projection_budget_margin=0.0,
+            budget_control_mode="crc",
+            budget_control_size=budget_control_size,
+            budget_candidate_count=budget_candidate_count,
+            risk_candidate_row_cost_cap=None,
+            **kwargs,
+        )
+
+    @property
+    def objective_kind(self) -> str:
+        return f"{super().objective_kind}_crc"
 
 
 class DefinitiveCRCUPBDAPRO(DefinitiveCRCDAPRO):

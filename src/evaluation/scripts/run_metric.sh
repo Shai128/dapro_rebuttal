@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# Canonical metric-estimation launcher. The implementation lives in run.sh
+# for backward compatibility with existing server commands.
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+exec "$SCRIPT_DIR/run.sh" "$@"

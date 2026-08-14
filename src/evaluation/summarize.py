@@ -30,7 +30,7 @@ from src.evaluation.result_matrix import (
 ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_INPUT_DIR = ROOT / "results" / "merged_metric_calibration_dfs"
 DEFAULT_OUTPUT_DIR = ROOT / "figures" / "metric_estimation"
-ORACLE_NAME = "oracle_full_budget"
+ORACLE_NAME = "oracle_split_full_budget"
 LOG_SCALE_METRICS = {"mean_weight", "mean_a_weighted_weight"}
 ORACLE_REFERENCE_METRICS = {"estimated_cjr", "estimated_rmttu"}
 TARGET_BUDGET_REFERENCE_METRICS = {"budget_per_sample"}
@@ -39,17 +39,16 @@ FULL_OBSERVATION_COST_METRICS = {
     "total_budget_utilized",
 }
 INCLUDED_DISPLAY_METHODS = frozenset({
-    "Uniform (unweighted)",
-    "Uniform + reweighting",
     "Static",
-    "Constant + CRC",
-    "Metric-optimal PMF",
-    "Pooled-Neyman schedule",
-    "Prefix-Neyman + CRC",
-    "Generalized DAPRO (soft metric)",
-    "Generalized DAPRO + CRC",
+    "Soft-prefix DAPRO",
+    "Soft-prefix DAPRO + CRC",
+    "Information-gain + sequential AHT",
+    "Information-gain + sequential AHT + CRC",
+    "Residual + sequential AHT",
+    "Residual + sequential AHT + CRC",
+    "Endpoint/block + terminal residual AHT",
+    "Endpoint/block + terminal residual AHT + CRC",
     "Full budget (calibration)",
-    "Full budget (calibration+test)",
 })
 
 METRICS = {
@@ -147,15 +146,16 @@ def _normalize_legacy_configuration_rows(frame: pd.DataFrame) -> pd.DataFrame:
 
 
 def _oracle_reference(frame: pd.DataFrame, metric: str) -> float:
-    values = pd.to_numeric(
-        frame.loc[frame["allocator_name"] == ORACLE_NAME, metric],
-        errors="coerce",
-    ).dropna()
+    reference_column = {
+        "estimated_cjr": "full_benchmark_cjr",
+        "estimated_rmttu": "full_benchmark_rmttu",
+    }.get(metric, metric)
+    values = pd.to_numeric(frame[reference_column], errors="coerce").dropna()
     if values.empty:
         raise ValueError(f"No finite full-budget oracle value for {metric}.")
     if not np.allclose(values, values.iloc[0], rtol=1e-10, atol=1e-10):
         raise ValueError(
-            f"Full-budget oracle values vary across seeds for {metric}: "
+            f"Full-benchmark reference values vary across seeds for {metric}: "
             f"{values.tolist()}"
         )
     return float(values.iloc[0])
@@ -168,7 +168,7 @@ def _plot_metric(
         output_path: Path,
         quality: str,
 ) -> None:
-    plot_frame = frame[frame["allocator_name"] != ORACLE_NAME].copy()
+    plot_frame = frame.copy()
     plot_frame = plot_frame[
         plot_frame["method_display"].isin(INCLUDED_DISPLAY_METHODS)
     ]
@@ -212,7 +212,7 @@ def _plot_metric(
             color="#c62828",
             linestyle="--",
             linewidth=1.8,
-            label=f"Full-budget oracle ({reference:.4g})",
+            label=f"Full-benchmark truth ({reference:.4g})",
         )
     elif metric in TARGET_BUDGET_REFERENCE_METRICS:
         target = pd.to_numeric(frame["target_budget"], errors="coerce").dropna()
@@ -410,7 +410,7 @@ def _plot_grouped_metric(
         output_path: Path,
         quality: str,
 ) -> None:
-    plot_frame = frame[frame["allocator_name"] != ORACLE_NAME].copy()
+    plot_frame = frame.copy()
     plot_frame = plot_frame[
         plot_frame["method_display"].isin(INCLUDED_DISPLAY_METHODS)
     ]
@@ -451,18 +451,24 @@ def _plot_grouped_metric(
     )
 
     if metric in ORACLE_REFERENCE_METRICS:
-        oracle = frame[frame["allocator_name"] == ORACLE_NAME].copy()
-        oracle[metric] = pd.to_numeric(oracle[metric], errors="coerce")
+        reference_column = {
+            "estimated_cjr": "full_benchmark_cjr",
+            "estimated_rmttu": "full_benchmark_rmttu",
+        }[metric]
+        oracle = frame.copy()
+        oracle[reference_column] = pd.to_numeric(
+            oracle[reference_column], errors="coerce"
+        )
         for target_index, target in enumerate(target_order):
             values = oracle.loc[
-                oracle["target_model"] == target, metric
+                oracle["target_model"] == target, reference_column
             ].dropna()
             if values.empty:
                 raise ValueError(f"Missing oracle {metric} for {target}.")
             if not np.allclose(
                     values, values.iloc[0], rtol=1e-10, atol=1e-10):
                 raise ValueError(
-                    f"Oracle {metric} varies across seeds for {target}.")
+                    f"Full-benchmark {metric} varies across seeds for {target}.")
             axis.hlines(
                 float(values.iloc[0]),
                 target_index - 0.42,
@@ -471,7 +477,7 @@ def _plot_grouped_metric(
                 linestyle="--",
                 linewidth=1.8,
                 zorder=5,
-                label="Full-budget oracle" if target_index == 0 else None,
+                label="Full-benchmark truth" if target_index == 0 else None,
             )
     elif metric in TARGET_BUDGET_REFERENCE_METRICS:
         targets = pd.to_numeric(
@@ -528,7 +534,7 @@ def _plot_grouped_variance(
         quality: str,
 ) -> pd.DataFrame:
     """Plot sample variance across random calibration/test splits."""
-    plot_frame = frame[frame["allocator_name"] != ORACLE_NAME].copy()
+    plot_frame = frame.copy()
     plot_frame = plot_frame[
         plot_frame["method_display"].isin(INCLUDED_DISPLAY_METHODS)
     ]

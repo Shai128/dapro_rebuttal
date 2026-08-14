@@ -90,6 +90,14 @@ def _best_method(
 
 
 def _configuration_summary(frame: pd.DataFrame) -> pd.DataFrame:
+    # LPB-only and synthetic ablation frames predate the UPB-value diagnostics.
+    # Keep the common table renderer backward compatible by representing
+    # inapplicable bound-value columns as missing rather than requiring callers
+    # to synthesize them.
+    frame = frame.copy()
+    for optional in ("size", "infinite_bound_rate_pct"):
+        if optional not in frame:
+            frame[optional] = np.nan
     ordinary = (
         frame.groupby("method", observed=True)[[
             "mean_weight",
@@ -209,7 +217,7 @@ def render_latex_tables(frame: pd.DataFrame) -> str:
 
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--suffix", default="full_bounds_v4_soft_upb")
+    parser.add_argument("--suffix", default="full_bounds_v5_soft_upb_aht")
     parser.add_argument(
         "--output", type=Path,
         default=DEFAULT_OUTPUT_DIR / "full_bounds_tables.tex",

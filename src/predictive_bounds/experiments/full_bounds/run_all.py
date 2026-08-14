@@ -11,7 +11,6 @@ import sys
 
 from src.predictive_bounds.experiments.full_bounds.config import (
     TARGET_MODELS,
-    calibration_names,
     select_configs,
 )
 from src.predictive_bounds.experiments.full_bounds.make_tables import (
@@ -38,6 +37,10 @@ def _run(command: list[str], *, dry_run: bool) -> None:
 
 
 def _base_command(config, args) -> list[str]:
+    target_coverages = (
+        ["0.90"] if config.bound_type == "lpb"
+        else ["0.70", "0.80", "0.90"]
+    )
     return [
         "--bound-type", config.bound_type,
         "--data-type", "real",
@@ -51,11 +54,9 @@ def _base_command(config, args) -> list[str]:
         "--seed-end", str(args.seed_end),
         "--device", args.device,
         "--experiment-suffix", args.suffix,
-        "--dapro-n1-values", "200",
-        "--definitive-dapro-margins", "1",
-        "--calibration-names", ",".join(
-            calibration_names(config.bound_type)
-        ),
+        "--method-suite", "unified_aht",
+        "--dapro-n1-values", *[str(value) for value in args.dapro_n1_values],
+        "--target-coverages", *target_coverages,
     ]
 
 
@@ -64,7 +65,10 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--seed-start", type=int, default=0)
     parser.add_argument("--seed-end", type=int, default=50)
     parser.add_argument("--device", default="cuda:0")
-    parser.add_argument("--suffix", default="full_bounds_v4_soft_upb")
+    parser.add_argument(
+        "--dapro-n1-values", type=int, nargs="+", default=[200, 100, 50]
+    )
+    parser.add_argument("--suffix", default="full_bounds_v5_soft_upb_aht")
     parser.add_argument(
         "--quality", choices=["high", "low"], default="low"
     )
@@ -118,27 +122,57 @@ def main() -> None:
     if not configs:
         raise SystemExit("No configurations matched the requested filters.")
 
+    completed_experiments = set()
+    failed_experiments = []
     for config in configs:
+        experiment_key = (
+            config.dataset_name,
+            config.dataset_setup,
+            config.bound_type,
+            config.budget_per_sample,
+            config.tau_prior,
+        )
+        if experiment_key in completed_experiments:
+            continue
+        completed_experiments.add(experiment_key)
         common = _base_command(config, args)
+        construct_ok = True
         if "construct" in stages:
-            _run([
-                sys.executable,
-                "-m",
-                "src.predictive_bounds.construct_calibrated_bound",
-                *common,
-            ], dry_run=args.dry_run)
-        if "merge" in stages:
-            _run([
-                sys.executable,
-                "-m",
-                "src.predictive_bounds.merge_bounds_results",
-                *common,
-            ], dry_run=args.dry_run)
+            try:
+                _run([
+                    sys.executable,
+                    "-m",
+                    "src.predictive_bounds.construct_calibrated_bound",
+                    *common,
+                ], dry_run=args.dry_run)
+            except subprocess.CalledProcessError as error:
+                construct_ok = False
+                failed_experiments.append((config.key, "construct", error.returncode))
+                print(
+                    f"WARNING: {config.key} construction failed; continuing.",
+                    file=sys.stderr,
+                )
+        if "merge" in stages and construct_ok:
+            try:
+                _run([
+                    sys.executable,
+                    "-m",
+                    "src.predictive_bounds.merge_bounds_results",
+                    *common,
+                ], dry_run=args.dry_run)
+            except subprocess.CalledProcessError as error:
+                failed_experiments.append((config.key, "merge", error.returncode))
+                print(
+                    f"WARNING: {config.key} merge failed; continuing.",
+                    file=sys.stderr,
+                )
 
     if args.dry_run:
         return
     if "figures" in stages or "tables" in stages:
-        frame = load_comparison_data(configs, args.suffix)
+        frame = load_comparison_data(
+            configs, args.suffix, allow_missing=bool(failed_experiments)
+        )
         if "figures" in stages:
             paths = generate_all_figures(
                 frame,
@@ -156,6 +190,10 @@ def main() -> None:
                 render_latex_tables(frame), encoding="utf-8"
             )
             print(args.table_output.resolve(), flush=True)
+    if failed_experiments:
+        print("Completed with failed configurations:", file=sys.stderr)
+        for key, stage, code in failed_experiments:
+            print(f"  - {key}: {stage} exited {code}", file=sys.stderr)
 
 
 if __name__ == "__main__":

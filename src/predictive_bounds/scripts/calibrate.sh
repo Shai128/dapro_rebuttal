@@ -1,13 +1,15 @@
 #!/usr/bin/env bash
 # Construct and merge predictive bounds for every configured dataset.
 #
-# Experiment matrix:
+# LPB experiment matrix:
 #   (DAPRO_N1=200, CRC_CONTROL_SIZE=100) x BUDGET_PER_SAMPLE={5,10,20}
 #   (DAPRO_N1=100, CRC_CONTROL_SIZE=50)  x BUDGET_PER_SAMPLE={5,10,20}
 #   (DAPRO_N1=50,  CRC_CONTROL_SIZE=25)  x BUDGET_PER_SAMPLE={5,10,20}
 # The only DAPRO family run is Soft-prefix Generalized DAPRO, with and without
-# CRC.  UPB CRC deliberately uses the full 200-turn CRC support bound and no
-# shared-PAV row cap.  UPB value 201 is infinity/no event through turn 200.
+# CRC.  The UPB specialization is model-only, so it has no N1 axis and runs
+# once with CRC_CONTROL_SIZE=100 at each budget.  Its CRC deliberately uses the
+# full 200-turn support bound and no shared-PAV row cap.  UPB value 201 is
+# infinity/no event through turn 200.
 #
 # Typical invocations:
 #   bash src/predictive_bounds/scripts/calibrate.sh --local
@@ -21,7 +23,7 @@ set -euo pipefail
 
 # ======================== EDITABLE CONFIGURATION ========================
 RUN_MODE="local"                    # "local" or "slurm"
-BOUND_TYPE="${BOUND_TYPE:-upb}"     # "upb" (default) or "lpb"
+BOUND_TYPE="upb"     # "upb" (default) or "lpb"
 DEVICE="cuda:0"                     # Use "cpu" when no GPU is available.
 AVAILABLE_ONLY=0                    # 1 skips configurations without cached predictions.
 DRY_RUN=0                           # 1 prints commands without executing them.
@@ -163,7 +165,7 @@ if [[ -z "$TAU_PRIOR" ]]; then
 fi
 if [[ -z "$BASE_EXPERIMENT_SUFFIX" ]]; then
   if [[ "$BOUND_TYPE" == "upb" ]]; then
-    BASE_EXPERIMENT_SUFFIX="upb_v1_soft_prefix"
+    BASE_EXPERIMENT_SUFFIX="upb_v2_soft_residual_aht"
   else
     BASE_EXPERIMENT_SUFFIX="lpb_v5_soft_prefix"
   fi
@@ -349,20 +351,24 @@ build_methods() {
 
   DAPRO_N1_ARGS=()
   local dapro_config dapro_n1 crc_control_size
+  if [[ "$BOUND_TYPE" == "upb" ]]; then
+    # Compatibility value consumed by the Python constructor; the UPB policy
+    # fits no labels, and only the independent CRC control size is operative.
+    DAPRO_N1_ARGS=(200)
+    METHODS+=(
+      "calibration_dapro_soft_prefix_bins_2_upb_residual_aht_coverage_0p70_model_anchor_global_0p001_projection_margin_1p00_allocation"
+      "calibration_dapro_soft_prefix_bins_2_upb_residual_aht_coverage_0p70_model_anchor_global_0p001_budget_crc_control_100_allocation"
+    )
+    METHOD_CSV="$(IFS=,; echo "${METHODS[*]}")"
+    return
+  fi
   for dapro_config in "${DAPRO_CONFIGS[@]}"; do
     IFS=: read -r dapro_n1 crc_control_size <<< "$dapro_config"
     DAPRO_N1_ARGS+=("$dapro_n1")
-    if [[ "$BOUND_TYPE" == "upb" ]]; then
-      METHODS+=(
-        "calibration_dapro_soft_prefix_bins_2_upb_coverage_0p70_phase1_anchor_global_0p001_projection_margin_1p00_n1_${dapro_n1}_allocation"
-        "calibration_dapro_soft_prefix_bins_2_upb_coverage_0p70_phase1_anchor_global_0p001_budget_crc_control_${crc_control_size}_n1_${dapro_n1}_allocation"
-      )
-    else
-      METHODS+=(
-        "calibration_dapro_soft_prefix_bins_2_lpb_alpha_0p10_global_0p001_projection_margin_1p00_n1_${dapro_n1}_allocation"
-        "calibration_dapro_soft_prefix_bins_2_lpb_alpha_0p10_global_0p001_budget_crc_control_${crc_control_size}_row_cap_2p00x_budget_causal_shared_pav_v1_n1_${dapro_n1}_allocation"
-      )
-    fi
+    METHODS+=(
+      "calibration_dapro_soft_prefix_bins_2_lpb_alpha_0p10_global_0p001_projection_margin_1p00_n1_${dapro_n1}_allocation"
+      "calibration_dapro_soft_prefix_bins_2_lpb_alpha_0p10_global_0p001_budget_crc_control_${crc_control_size}_row_cap_2p00x_budget_causal_shared_pav_v1_n1_${dapro_n1}_allocation"
+    )
   done
   METHOD_CSV="$(IFS=,; echo "${METHODS[*]}")"
 }
@@ -431,7 +437,11 @@ run_configuration() {
 }
 
 echo "Mode: $RUN_MODE | device: $DEVICE | seeds: [$SEED_START, $SEED_END)"
-echo "DAPRO/CRC configurations: ${DAPRO_CONFIGS[*]}"
+if [[ "$BOUND_TYPE" == "upb" ]]; then
+  echo "DAPRO/CRC configuration: model-only UPB target, CRC control=100"
+else
+  echo "DAPRO/CRC configurations: ${DAPRO_CONFIGS[*]}"
+fi
 echo "Budgets per sample: ${BUDGET_PER_SAMPLE_VALUES[*]}"
 echo "Base experiment suffix: $BASE_EXPERIMENT_SUFFIX"
 

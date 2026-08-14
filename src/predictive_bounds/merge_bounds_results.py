@@ -15,6 +15,7 @@ from src.predictive_bounds.utils.get_calibration_methods_utils import (
     get_baseline_calibrations,
     get_new_allocation_algorithms,
     get_upb_calibrations,
+    get_unified_bound_calibrations,
 )
 from src.predictive_bounds.utils.utils import (
     get_tmp_calibration_result_path,
@@ -69,7 +70,20 @@ def process_calibration(calibration, seed, experiments_name, bound_type):
 
 def get_calibration_methods(conditional_grid, budget_per_sample, taus_range, tau_prior, m_upper_bound, allocations: str,
                             device, bound_type, dapro_n1_values=(200,),
-                            definitive_dapro_margins=(1.0,)):
+                            definitive_dapro_margins=(1.0,),
+                            method_suite="legacy",
+                            target_coverages=(0.90,)):
+    if method_suite == "unified_aht":
+        return get_unified_bound_calibrations(
+            conditional_grid,
+            budget_per_sample,
+            taus_range,
+            tau_prior,
+            m_upper_bound,
+            bound_type=bound_type,
+            dapro_n1_values=dapro_n1_values,
+            target_coverages=target_coverages,
+        )
     if bound_type == "upb":
         return get_upb_calibrations(
             conditional_grid,
@@ -111,7 +125,8 @@ def get_calibration_methods(conditional_grid, budget_per_sample, taus_range, tau
 
 def merge_results(experiments_name, seeds, budget_per_sample, taus_range, tau_prior, m_upper_bound, target_taus_list,
                   allocations, device, bound_type, calibration_names=None,
-                  dapro_n1_values=(200,), definitive_dapro_margins=(1.0,)):
+                  dapro_n1_values=(200,), definitive_dapro_margins=(1.0,),
+                  method_suite="legacy", target_coverages=(0.90,)):
     all_dfs = []
     errors = []
     for seed in tqdm.tqdm(range(seeds[0], seeds[1]), desc="merging csvs"):
@@ -119,7 +134,9 @@ def merge_results(experiments_name, seeds, budget_per_sample, taus_range, tau_pr
         all_calibrations = get_calibration_methods(None, budget_per_sample, taus_range, tau_prior, m_upper_bound,
                                                    allocations, device=device, bound_type=bound_type,
                                                    dapro_n1_values=dapro_n1_values,
-                                                   definitive_dapro_margins=definitive_dapro_margins)
+                                                   definitive_dapro_margins=definitive_dapro_margins,
+                                                   method_suite=method_suite,
+                                                   target_coverages=target_coverages)
         if calibration_names:
             available = {calibration.name for calibration in all_calibrations}
             missing = sorted(set(calibration_names) - available)
@@ -206,6 +223,10 @@ def main():
         help="Optional suffix used to isolate this run from existing results.",
     )
     parser.add_argument(
+        '--method-suite', choices=['legacy', 'unified_aht'], default='legacy'
+    )
+    parser.add_argument('--target-coverages', type=float, nargs='+', default=None)
+    parser.add_argument(
         '--calibration-names',
         type=str,
         default='',
@@ -288,6 +309,13 @@ def main():
         tau_prior = args.tau_prior if args.tau_prior is not None else 0.98
         target_taus_list = 1 - np.arange(0.01, 0.5, 0.01)
         taus_range = make_upb_tau_grid(device=device)
+    target_coverages = tuple(
+        args.target_coverages
+        if args.target_coverages is not None
+        else ([0.90] if bound_type == 'lpb' else [0.70, 0.80, 0.90])
+    )
+    if any(not 0 < value < 1 for value in target_coverages):
+        parser.error('--target-coverages values must lie in (0, 1).')
 
     budget_per_sample = args.budget_per_sample
 
@@ -336,7 +364,9 @@ def main():
                   dapro_n1_values=tuple(args.dapro_n1_values),
                   definitive_dapro_margins=tuple(
                       args.definitive_dapro_margins
-                  ))
+                  ),
+                  method_suite=args.method_suite,
+                  target_coverages=target_coverages)
 
     print("Finished")
 

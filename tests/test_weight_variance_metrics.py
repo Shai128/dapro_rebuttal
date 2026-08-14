@@ -65,10 +65,14 @@ def test_broadcast_calibration_weights_match_legacy_repeat_exactly():
         C=c,
         C_probs=probabilities,
         total_budget_used=20,
+        candidate_C_probs=probabilities[:, None].expand_as(f),
     )
     prediction = SurvivalModelPrediction(
         quantile_est=f,
-        probability_est=torch.zeros(4, 1),
+        # Unit hazard gives zero model survivor probability, so augmented HT
+        # reduces exactly to the historical unaugmented contribution tested
+        # below.
+        probability_est=torch.ones(4, 1),
     )
 
     lpb = SurvivalCalibrationWithKnownWeights(
@@ -92,7 +96,10 @@ def test_broadcast_calibration_weights_match_legacy_repeat_exactly():
     legacy_upb[t[:, None] <= f] = 0
     legacy_upb[f > c[:, None]] = 0
     legacy_upb[f == 200] = 0
-    assert torch.equal(upb.miscoverage, legacy_upb.mean(dim=0))
+    torch.testing.assert_close(
+        upb.miscoverage,
+        legacy_upb.mean(dim=0).to(torch.float64),
+    )
 
 
 def test_requested_inverse_probability_metrics_are_exact():
@@ -249,11 +256,16 @@ def test_upb_selected_a_weight_metrics_use_the_upper_tail_event():
     ])
     calibration.t_cal = torch.tensor([1.0, 5.0, 4.0])
     calibration.miscoverage = torch.tensor([0.4, 0.2, 0.1])
+    calibration.coverage = 1.0 - calibration.miscoverage
+    calibration.model_miscoverage = torch.zeros_like(f, dtype=torch.float64)
     calibration.allocation_result = BudgetAllocationResult(
         f=f,
         C=torch.tensor([4.0, 4.0, 4.0]),
         C_probs=torch.tensor([0.5, 0.25, 1.0]),
         total_budget_used=12,
+        candidate_C_probs=torch.tensor(
+            [[0.5], [0.25], [1.0]], dtype=torch.float64
+        ).expand_as(f),
     )
     prediction = SurvivalModelPrediction(
         quantile_est=f,

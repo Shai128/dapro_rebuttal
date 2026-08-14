@@ -10,6 +10,10 @@ from src.predictive_bounds.calibration.calibration_utils import (
     indexed_tensor_metrics,
     select_calibration_positions,
 )
+from src.predictive_bounds.calibration.sequential_aht import (
+    sequential_lower_curve,
+    terminal_residual_lower_curve,
+)
 from src.train_model.models.utils import ModelPrediction, SurvivalModelPrediction
 
 
@@ -45,16 +49,64 @@ class SurvivalCalibrationWithKnownWeights(SurvivalLPBCalibration):
 
         # quantile_est = model_prediction_cal.quantile_est
 
-        estimable_miscoverage = (
-            (t_cal.reshape(-1, 1) < f)
-            & (f <= C.reshape(-1, 1))
+        estimator_kind = getattr(
+            self.budget_allocator, "aht_estimator_kind", "ordinary_ht"
         )
-        # Broadcasting avoids materializing a repeated N-by-n_taus copy of
-        # the inverse-probability vector before applying the same mask.
-        self.miscoverage = (
-            estimable_miscoverage
-            * (1 / C_probs.reshape(-1, 1))
-        ).mean(dim=0)
+        if estimator_kind in {"sequential", "terminal_residual"}:
+            prediction_grid = getattr(
+                self.budget_allocator,
+                "conditional_grid",
+                model_prediction_cal.probability_est,
+            )
+            if allocation_result.candidate_C_probs is None:
+                raise ValueError(
+                    f"Allocator {self.budget_allocator.name!r} must expose "
+                    "candidate-specific reach propensities for LPB AHT."
+                )
+            if estimator_kind == "sequential":
+                if allocation_result.continuation_probabilities is None:
+                    raise ValueError(
+                        "Sequential LPB AHT requires executed continuation "
+                        "probabilities."
+                    )
+                contributions = sequential_lower_curve(
+                    t_cal,
+                    f,
+                    C,
+                    allocation_result.continuation_probabilities,
+                    prediction_grid,
+                    strict=True,
+                )
+            else:
+                contributions = terminal_residual_lower_curve(
+                    t_cal,
+                    f,
+                    C,
+                    C_probs,
+                    allocation_result.candidate_C_probs,
+                    prediction_grid,
+                    strict=True,
+                )
+            self.miscoverage = contributions.mean(dim=0)
+            if allocation_result.additional_metrics is None:
+                allocation_result.additional_metrics = {}
+            allocation_result.additional_metrics.update({
+                "lpb_aht_estimator_path": estimator_kind,
+                "lpb_sequential_prefix_updates": int(
+                    estimator_kind == "sequential"
+                ),
+            })
+        else:
+            estimable_miscoverage = (
+                (t_cal.reshape(-1, 1) < f)
+                & (f <= C.reshape(-1, 1))
+            )
+            # Broadcasting avoids materializing a repeated N-by-n_taus copy
+            # of the inverse-probability vector before applying the mask.
+            self.miscoverage = (
+                estimable_miscoverage
+                * (1 / C_probs.reshape(-1, 1))
+            ).mean(dim=0)
         # from predictive_bounds.calibration.calibration_utils import get_prior
         # prior_quantile_est = get_prior(f, self.taus_range, self.budget_allocator.tau_prior)
         # (prior_quantile_est <= C).float().mean()

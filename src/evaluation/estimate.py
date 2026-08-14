@@ -21,6 +21,10 @@ from src.predictive_bounds.utils.utils import (
 )
 from src.utils.utils import set_seeds
 from src.train_model.models.utils import SurvivalModelPrediction
+from src.predictive_bounds.calibration.sequential_aht import (
+    metric_aht_contributions,
+    metric_aht_path_variance,
+)
 
 
 # ==========================================
@@ -40,6 +44,9 @@ class TrajectoryData:
     W_i: torch.Tensor  # IPCW weights (1 / prod P_i(k))
     device: torch.device
     allocation_metrics: Dict[str, Any]
+    continuation_probabilities: torch.Tensor | None = None
+    conditional_grid: torch.Tensor | None = None
+    estimator_kind: str = "ordinary_ht"
 
 
 # ==========================================
@@ -70,6 +77,11 @@ class IPCWTrajectorySimulator:
             C_i=C_i, Y_i=Y_i, Delta_i=Delta_i, W_i=W_i, device=device,
             total_budget_utilized=total_budget_used,
             allocation_metrics=result.additional_metrics or {},
+            continuation_probabilities=result.continuation_probabilities,
+            conditional_grid=getattr(allocator, "conditional_grid", None),
+            estimator_kind=getattr(
+                allocator, "aht_estimator_kind", "ordinary_ht"
+            ),
         )
 
 
@@ -104,15 +116,33 @@ class CumulativeJailbreakRateMetric(SafetyMetric):
         self.oracle_cjr = oracle_cjr
 
     def compute(self, data: TrajectoryData) -> Dict[str, Any]:
-        observed_event = data.Y_i <= data.max_time
-        est_cjr = (
-            _observed_event_ipcw(data) * observed_event.to(torch.float64)
-        ).mean().item()
+        if data.estimator_kind in {"sequential", "terminal_residual"}:
+            if data.conditional_grid is None:
+                raise ValueError("Metric AHT requires a conditional-PMF grid.")
+            contributions = metric_aht_contributions(
+                data.t_tilde,
+                data.C_i,
+                data.W_i,
+                data.conditional_grid,
+                data.max_time,
+                continuation_probabilities=(
+                    data.continuation_probabilities
+                    if data.estimator_kind == "sequential"
+                    else None
+                ),
+            )
+            est_cjr = contributions.mean().item()
+        else:
+            observed_event = data.Y_i <= data.max_time
+            est_cjr = (
+                _observed_event_ipcw(data) * observed_event.to(torch.float64)
+            ).mean().item()
 
         return {
             'oracle_cjr': self.oracle_cjr * 100,
             'estimated_cjr': est_cjr * 100,
-            'abs_diff_cjr': abs(est_cjr - self.oracle_cjr) * 100
+            'abs_diff_cjr': abs(est_cjr - self.oracle_cjr) * 100,
+            'unsafe_event_rate_estimator_kind': data.estimator_kind,
         }
 
 
@@ -165,6 +195,33 @@ class AllocationEstimationDiagnostics(SafetyMetric):
         resolved = data.Delta_i.reshape(-1) | (
             data.C_i.reshape(-1) >= data.max_time
         )
+        if data.estimator_kind in {"sequential", "terminal_residual"}:
+            if data.conditional_grid is None:
+                raise ValueError("Metric AHT diagnostics require a PMF grid.")
+            path_variance = metric_aht_path_variance(
+                data.t_tilde,
+                data.W_i,
+                data.conditional_grid,
+                data.max_time,
+                continuation_probabilities=(
+                    data.continuation_probabilities
+                    if data.estimator_kind == "sequential"
+                    else None
+                ),
+            ).sum().item() / data.N ** 2
+            observed_variance = np.nan
+        else:
+            path_variance = (
+                (target_a * (inverse - 1)).sum().item() / data.N ** 2
+            )
+            observed_variance = (
+                (
+                    observed_target_a
+                    * (1 - propensities)
+                    / propensities.square()
+                ).sum().item()
+                / data.N ** 2
+            )
         results = {
             "mean_weight": inverse.mean().item(),
             "mean_inverse_probability": inverse.mean().item(),
@@ -187,20 +244,16 @@ class AllocationEstimationDiagnostics(SafetyMetric):
             # the fixed benchmark rows.  Percent-scale plots can multiply by
             # 100^2 if desired.
             "conditional_variance_unsafe_event_rate_estimator": (
-                (target_a * (inverse - 1)).sum().item() / data.N ** 2
+                path_variance
             ),
             # Design-unbiased estimate of the same conditional acquisition
             # variance.  Unlike the preceding offline diagnostic, this uses
             # only unsafe events actually observed under the policy:
             # E[R_i A_i (1-pi_i)/pi_i^2] = A_i(1/pi_i-1).
             "estimated_conditional_variance_unsafe_event_rate_estimator": (
-                (
-                    observed_target_a
-                    * (1 - propensities)
-                    / propensities.square()
-                ).sum().item()
-                / data.N ** 2
+                observed_variance
             ),
+            "unsafe_event_rate_estimator_kind": data.estimator_kind,
         }
         for key, value in data.allocation_metrics.items():
             if isinstance(value, (str, int, float, bool, np.number)):
@@ -496,6 +549,7 @@ def run_experiments(
         exclude_locally_adaptive=False,
         allocator_names=None,
         include_dapro_comparison=False,
+        method_suite="legacy",
 ):
     taus_range = torch.tensor(np.arange(0.01, 1.0, 0.01)).to(device)
     m_upper_bound = 200 if is_real else 20
@@ -535,6 +589,7 @@ def run_experiments(
             include_legacy_dapro=not exclude_legacy_dapro,
             include_locally_adaptive=not exclude_locally_adaptive,
             include_dapro_comparison=include_dapro_comparison,
+            method_suite=method_suite,
         )
         if allocator_names is not None:
             requested = set(allocator_names)
@@ -610,6 +665,12 @@ def main():
     parser.add_argument('--dapro-n1', type=int, default=200)
     parser.add_argument('--crc-control-size', type=int, default=100)
     parser.add_argument('--experiment-suffix', type=str, default='')
+    parser.add_argument(
+        '--method-suite',
+        choices=['legacy', 'unified_aht'],
+        default='legacy',
+        help='Allocator registry to run. The paper launcher uses unified_aht.',
+    )
     parser.add_argument('--exclude-legacy-dapro', action='store_true')
     parser.add_argument('--exclude-locally-adaptive', action='store_true')
     parser.add_argument(
@@ -658,7 +719,8 @@ def main():
                     exclude_legacy_dapro=args.exclude_legacy_dapro,
                     exclude_locally_adaptive=args.exclude_locally_adaptive,
                     allocator_names=args.allocator_names,
-                    include_dapro_comparison=args.include_dapro_comparison)
+                    include_dapro_comparison=args.include_dapro_comparison,
+                    method_suite=args.method_suite)
     print("Finished Metrics Evaluation Suite.")
 
 

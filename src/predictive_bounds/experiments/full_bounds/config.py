@@ -1,7 +1,7 @@
 """Immutable experiment and display configuration for the full comparison.
 
 The matrix contains matching LPB and UPB experiments for every benchmark and
-target model.  LPBs use 90% coverage and UPBs use 70% coverage.  UPB value
+target model. LPBs use 90% coverage and UPBs use 70%, 80%, and 90%. UPB value
 201 denotes infinity/no event through the 200-turn acquisition horizon.
 """
 
@@ -239,16 +239,16 @@ GENERALIZED_LPB_CRC_DAPRO = (
     "n1_200_allocation"
 )
 UPB_DAPRO = (
-    "calibration_dapro_soft_prefix_bins_2_upb_coverage_0p70_phase1_anchor_global_0p001_"
-    "budget_crc_control_100_n1_200_allocation"
+    "calibration_dapro_soft_prefix_bins_2_upb_residual_aht_coverage_0p70_"
+    "model_anchor_global_0p001_budget_crc_control_100_allocation"
 )
 GENERALIZED_UPB_DAPRO = (
-    "calibration_dapro_soft_prefix_bins_2_upb_coverage_0p70_phase1_anchor_global_0p001_"
-    "projection_margin_1p00_n1_200_allocation"
+    "calibration_dapro_soft_prefix_bins_2_upb_residual_aht_coverage_0p70_"
+    "model_anchor_global_0p001_projection_margin_1p00_allocation"
 )
 GENERALIZED_UPB_CRC_DAPRO = (
-    "calibration_dapro_soft_prefix_bins_2_upb_coverage_0p70_phase1_anchor_global_0p001_"
-    "budget_crc_control_100_n1_200_allocation"
+    "calibration_dapro_soft_prefix_bins_2_upb_residual_aht_coverage_0p70_"
+    "model_anchor_global_0p001_budget_crc_control_100_allocation"
 )
 SPLIT_DAPRO_ORACLE = (
     "calibration_oracle_target_a_dapro_alpha_0p10_n1_200_allocation"
@@ -262,24 +262,15 @@ GLOBAL_DAPRO_ORACLE = (
 )
 
 METHOD_ORDER = (
-    "Raw",
     "Static",
-    "Constant + CRC",
-    "Power schedule + CRC",
-    "Local + CRC",
-    "Legacy DAPRO",
-    "Target-A DAPRO",
-    "DAPRO (projection)",
-    "Legacy DAPRO + CRC",
-    "Target-A DAPRO + CRC",
-    "DAPRO + CRC",
-    "Generalized DAPRO (soft LPB)",
-    "Generalized DAPRO (soft LPB) + CRC",
-    "Generalized DAPRO (soft UPB)",
-    "Generalized DAPRO (soft UPB) + CRC",
-    "DAPRO Oracle (split)",
-    "DAPRO Oracle + CRC",
-    "DAPRO Oracle (global)",
+    "Soft-prefix DAPRO",
+    "Soft-prefix DAPRO + CRC",
+    "Information-gain + sequential AHT",
+    "Information-gain + sequential AHT + CRC",
+    "Residual + sequential AHT",
+    "Residual + sequential AHT + CRC",
+    "Endpoint/block + terminal residual AHT",
+    "Endpoint/block + terminal residual AHT + CRC",
     "Oracle",
 )
 
@@ -307,26 +298,42 @@ METHOD_DISPLAY = {
 }
 
 METHOD_COLORS = {
-    "Raw": "#d62728",
     "Static": "#1f77b4",
-    "Constant + CRC": "#9467bd",
-    "Power schedule + CRC": "#8c564b",
-    "Local + CRC": "#bcbd22",
-    "Legacy DAPRO": "#ff9f40",
-    "Target-A DAPRO": "#17a2b8",
-    "DAPRO (projection)": "#2ca02c",
-    "Legacy DAPRO + CRC": "#c45a00",
-    "Target-A DAPRO + CRC": "#007f8b",
-    "DAPRO + CRC": "#006d2c",
-    "Generalized DAPRO (soft LPB)": "#665191",
-    "Generalized DAPRO (soft LPB) + CRC": "#d45087",
-    "Generalized DAPRO (soft UPB)": "#665191",
-    "Generalized DAPRO (soft UPB) + CRC": "#d45087",
-    "DAPRO Oracle (split)": "#e377c2",
-    "DAPRO Oracle + CRC": "#7f3c8d",
-    "DAPRO Oracle (global)": "#11a579",
+    "Soft-prefix DAPRO": "#665191",
+    "Soft-prefix DAPRO + CRC": "#d45087",
+    "Information-gain + sequential AHT": "#2ca02c",
+    "Information-gain + sequential AHT + CRC": "#006d2c",
+    "Residual + sequential AHT": "#ff9f40",
+    "Residual + sequential AHT + CRC": "#c45a00",
+    "Endpoint/block + terminal residual AHT": "#17a2b8",
+    "Endpoint/block + terminal residual AHT + CRC": "#007f8b",
     "Oracle": "#4d4d4d",
 }
+
+
+def method_display_name(calibration_name: str) -> str | None:
+    """Map versioned N1/coverage method names to stable paper labels."""
+    name = str(calibration_name)
+    if name in {LPB_ORACLE, UPB_ORACLE}:
+        return "Oracle"
+    if name == STATIC:
+        return "Static"
+    crc = "budget_crc" in name or "_crc_control_" in name
+    if "endpoint_block_terminal_residual_aht" in name or (
+            "upb_residual_aht_coverage" in name and "model_anchor" in name
+    ):
+        base = "Endpoint/block + terminal residual AHT"
+    elif "dapro_information_gain" in name:
+        base = "Information-gain + sequential AHT"
+    elif "dapro_residual_sequential_aht" in name:
+        base = "Residual + sequential AHT"
+    elif "dapro_soft_prefix_bins_2" in name and (
+            "lpb_alpha" in name or "upb_endpoint_dynamic_aht" in name
+    ):
+        base = "Soft-prefix DAPRO"
+    else:
+        return METHOD_DISPLAY.get(name)
+    return f"{base} + CRC" if crc else base
 
 
 def calibration_names(bound_type: str) -> tuple[str, ...]:
@@ -356,9 +363,20 @@ def calibration_names(bound_type: str) -> tuple[str, ...]:
 def all_experiment_configs() -> tuple[ExperimentConfig, ...]:
     configs = []
     for spec in DATASET_SPECS:
+        coverages = (
+            (0.70, 0.80, 0.90)
+            if spec["bound_type"] == "upb"
+            else (float(spec["target_coverage"]),)
+        )
         for target in TARGET_MODELS:
+          for coverage in coverages:
+            suffix = (
+                f"__c{int(round(100 * coverage))}"
+                if spec["bound_type"] == "upb"
+                else ""
+            )
             configs.append(ExperimentConfig(
-                key=f"{spec['key']}__{target.key}",
+                key=f"{spec['key']}__{target.key}{suffix}",
                 dataset_name=str(spec["dataset_name"]),
                 dataset_setup=str(spec["setup"]).format(
                     target=target.model_id
@@ -367,7 +385,7 @@ def all_experiment_configs() -> tuple[ExperimentConfig, ...]:
                 bound_type=str(spec["bound_type"]),
                 budget_per_sample=float(spec["budget"]),
                 tau_prior=float(spec["tau_prior"]),
-                target_coverage=float(spec["target_coverage"]),
+                target_coverage=float(coverage),
                 figure_dataset_name=str(spec["figure_name"]),
                 display_dataset_name=str(spec["display_name"]),
             ))

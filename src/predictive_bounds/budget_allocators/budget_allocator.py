@@ -48,6 +48,12 @@ class BudgetAllocationResult:
     # the survivor event 1{T > f_j}; a single terminal/event propensity is
     # insufficient for a history-adaptive allocation.
     candidate_C_probs: torch.Tensor = None
+    # Optional N-by-M conditional continuation probabilities of the executed
+    # policy.  Their row-wise cumulative products are the probabilities of
+    # observing successive prefixes.  Sequential augmented-HT estimators use
+    # this richer pathwise propensity record; terminal-only estimators may
+    # continue to rely on ``C_probs`` and ``candidate_C_probs``.
+    continuation_probabilities: torch.Tensor = None
 
 
 def candidate_reach_probabilities(

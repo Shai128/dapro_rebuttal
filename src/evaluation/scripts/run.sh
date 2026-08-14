@@ -1,11 +1,10 @@
 #!/usr/bin/env bash
 # Run and merge the production fixed-benchmark metric comparison.
 #
-# The registry contains only:
-#   weighted/unweighted Uniform, naive Static, Constant+CRC,
-#   Metric-optimal PMF without CRC, pooled-Neyman without CRC,
-#   prefix-Neyman+CRC, Generalized DAPRO with/without CRC, full-budget
-#   calibration, and full-budget calibration+test.
+# The unified registry contains Static, the split full-budget oracle, and four
+# target-specific schedules (soft-prefix HT, information-gain sequential AHT,
+# residual sequential AHT, endpoint/block terminal-residual AHT), each with
+# raw zero-margin and independent-CRC variants.
 #
 # Parallelism is across complete experiment configurations, not across seeds.
 # Every estimate.py invocation processes the full configured seed range.
@@ -46,7 +45,7 @@ CAL_SIZE=3000
 SEED_START=0
 SEED_END=50
 TAU_PRIOR=0.56
-EXPERIMENT_SUFFIX="metric_v3_causal_pav"
+EXPERIMENT_SUFFIX="metric_unified_aht_v1"
 
 # Each entry is DAPRO_N1:CRC_CONTROL_SIZE.
 DAPRO_CONFIGS=(
@@ -292,6 +291,7 @@ run_configuration() {
     --tau-prior "$TAU_PRIOR"
     --device "$DEVICE"
     --experiment-suffix "$EXPERIMENT_SUFFIX"
+    --method-suite unified_aht
   )
 
   key="${dataset}_${target}_b_${budget}"

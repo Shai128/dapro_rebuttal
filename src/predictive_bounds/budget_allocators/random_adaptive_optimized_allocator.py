@@ -1,7 +1,11 @@
 import numpy as np
 import torch
 
-from src.predictive_bounds.budget_allocators.budget_allocator import BudgetAllocator, BudgetAllocationResult
+from src.predictive_bounds.budget_allocators.budget_allocator import (
+    BudgetAllocator,
+    BudgetAllocationResult,
+    candidate_reach_probabilities,
+)
 from src.predictive_bounds.budget_allocators.adaptive_optimized_allocator import (
     phase1_empirical_budget_limit,
 )
@@ -215,7 +219,7 @@ class RandomAdaptiveOptimizedBudgetAllocator(BudgetAllocator):
             quantile_est,
             self.taus_range,
             self.tau_prior,
-        )
+        ).clamp(max=T_max_curr)
 
         # --- Data Splitting ---
         # Validation Set: Used to learn the optimal policy parameters (lambda)
@@ -684,6 +688,10 @@ class RandomAdaptiveOptimizedBudgetAllocator(BudgetAllocator):
                 .item()
             ),
         }
+        all_conditionals = torch.ones(
+            (N, T_max_curr), dtype=torch.float64, device=device
+        )
+        all_conditionals[test_idxs] = executed_test_probabilities
         return BudgetAllocationResult(
             quantile_est,
             final_C,
@@ -692,6 +700,11 @@ class RandomAdaptiveOptimizedBudgetAllocator(BudgetAllocator):
             mean_weight=mean_val_weight,
             max_weight=max_val_weight,
             additional_metrics=additional_metrics,
+            candidate_C_probs=candidate_reach_probabilities(
+                all_conditionals,
+                quantile_est,
+                infinity_value=T_max_curr + 1,
+            ),
         )
 
 

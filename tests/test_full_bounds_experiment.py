@@ -33,9 +33,16 @@ from src.predictive_bounds.experiments.full_bounds.summarize import (
 
 def test_full_bounds_matrix_covers_every_dataset_model_and_bound():
     configs = all_experiment_configs()
-    assert len(configs) == 40
+    # 20 LPB configurations plus three UPB coverage targets for each of the
+    # 20 dataset/model pairs.
+    assert len(configs) == 80
     assert sum(config.bound_type == "lpb" for config in configs) == 20
-    assert sum(config.bound_type == "upb" for config in configs) == 20
+    assert sum(config.bound_type == "upb" for config in configs) == 60
+    assert {
+        config.target_coverage
+        for config in configs
+        if config.bound_type == "upb"
+    } == {0.70, 0.80, 0.90}
     assert {config.target_model.key for config in configs} == {
         "qwen", "llama", "phi", "gemma",
     }

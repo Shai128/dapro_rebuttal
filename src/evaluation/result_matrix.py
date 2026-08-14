@@ -204,9 +204,22 @@ def method_display_name(name: str) -> str:
         and "metric_horizon" in name
         and "budget_crc" in name
     ):
-        return "Generalized DAPRO + CRC"
+        return "Soft-prefix DAPRO + CRC"
     if "dapro_soft_prefix" in name and "metric_horizon" in name:
-        return "Generalized DAPRO (soft metric)"
+        return (
+            "Soft-prefix DAPRO"
+            if "projection_margin_0p00" in name
+            else "Generalized DAPRO (soft metric)"
+        )
+    if "dapro_information_gain" in name and "metric_m" in name:
+        base = "Information-gain + sequential AHT"
+        return f"{base} + CRC" if "budget_crc" in name else base
+    if "dapro_residual_sequential_aht" in name and "metric_m" in name:
+        base = "Residual + sequential AHT"
+        return f"{base} + CRC" if "budget_crc" in name else base
+    if "endpoint_block_terminal_residual_aht_metric" in name:
+        base = "Endpoint/block + terminal residual AHT"
+        return f"{base} + CRC" if "_crc_control_" in name else base
     if (
         "dapro_soft_prefix" in name
         and "lpb_alpha" in name
@@ -254,17 +267,16 @@ def method_display_name(name: str) -> str:
 
 
 METHOD_ORDER = (
-    "Uniform (unweighted)",
-    "Uniform + reweighting",
     "Static",
-    "Constant + CRC",
-    "Metric-optimal PMF",
-    "Pooled-Neyman schedule",
-    "Prefix-Neyman + CRC",
-    "Generalized DAPRO (soft metric)",
-    "Generalized DAPRO + CRC",
+    "Soft-prefix DAPRO",
+    "Soft-prefix DAPRO + CRC",
+    "Information-gain + sequential AHT",
+    "Information-gain + sequential AHT + CRC",
+    "Residual + sequential AHT",
+    "Residual + sequential AHT + CRC",
+    "Endpoint/block + terminal residual AHT",
+    "Endpoint/block + terminal residual AHT + CRC",
     "Full budget (calibration)",
-    "Full budget (calibration+test)",
 )
 
 DAPRO_ORACLE_METHODS = frozenset({
@@ -288,6 +300,14 @@ METHOD_COLORS = {
     "Prefix-Neyman + CRC": "#f28e2b",
     "Generalized DAPRO (soft metric)": "#2f4b7c",
     "Generalized DAPRO + CRC": "#e45756",
+    "Soft-prefix DAPRO": "#665191",
+    "Soft-prefix DAPRO + CRC": "#d45087",
+    "Information-gain + sequential AHT": "#2ca02c",
+    "Information-gain + sequential AHT + CRC": "#006d2c",
+    "Residual + sequential AHT": "#ff9f40",
+    "Residual + sequential AHT + CRC": "#c45a00",
+    "Endpoint/block + terminal residual AHT": "#17a2b8",
+    "Endpoint/block + terminal residual AHT + CRC": "#007f8b",
     "Generalized DAPRO (soft LPB)": "#665191",
     "Generalized DAPRO (soft LPB) + CRC": "#d45087",
     "Legacy DAPRO": "#ff9f40",

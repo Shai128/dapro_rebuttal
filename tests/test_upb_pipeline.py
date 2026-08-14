@@ -21,6 +21,10 @@ from src.predictive_bounds.construct_calibrated_bound import (
 from src.predictive_bounds.utils.get_calibration_methods_utils import (
     get_upb_calibrations,
 )
+from src.predictive_bounds.experiments.full_bounds.config import (
+    GENERALIZED_UPB_CRC_DAPRO,
+    GENERALIZED_UPB_DAPRO,
+)
 from src.train_model.models.utils import SurvivalModelPrediction
 
 
@@ -37,6 +41,7 @@ class _FixedUPBAllocator(BudgetAllocator):
         return BudgetAllocationResult(
             self._f.clone(), self._C.clone(), self._pi.clone(),
             total_budget_used=int(self._C.sum().item()),
+            candidate_C_probs=torch.ones_like(self._f, dtype=torch.float64),
         )
 
     @property
@@ -106,6 +111,48 @@ def test_upb_ht_coverage_uses_event_propensity_and_deterministic_infinity():
     assert test_bound[:, 1].tolist() == [201.0, 201.0, 201.0]
 
 
+def test_upb_augmented_ht_is_design_unbiased_for_wrong_soft_predictions():
+    candidates = torch.tensor([[3.0], [3.0], [201.0]])
+    times = torch.tensor([2.0, 5.0, 201.0])
+    model_miscoverage = torch.tensor([[0.8], [0.1], [0.0]])
+    propensity = torch.full((3, 1), 0.25, dtype=torch.float64)
+    terminal_propensity = torch.full((3,), 0.25, dtype=torch.float64)
+
+    expected = torch.zeros(3, 1, dtype=torch.float64)
+    for observed_value, probability in ((0.0, 0.75), (1.0, 0.25)):
+        horizons = torch.full((3,), 3.0 * observed_value)
+        contribution = (
+            SurvivalUPBCalibrationWithKnownWeights
+            ._augmented_miscoverage_contributions(
+                times,
+                candidates,
+                horizons,
+                propensity,
+                terminal_propensity,
+                model_miscoverage,
+            )
+        )
+        expected += probability * contribution
+    torch.testing.assert_close(
+        expected,
+        torch.tensor([[0.0], [1.0], [0.0]], dtype=torch.float64),
+    )
+
+
+def test_upb_model_miscoverage_uses_prefix_zero_pmf_and_zero_for_201():
+    grid = torch.zeros(1, 3, 4, dtype=torch.float64)
+    grid[:, 0, :] = torch.tensor([0.1, 0.2, 0.3, 0.4])
+    candidates = torch.tensor([[1.0, 2.0, 3.0, 201.0]])
+    actual = (
+        SurvivalUPBCalibrationWithKnownWeights
+        ._model_miscoverage_probabilities(grid, candidates)
+    )
+    torch.testing.assert_close(
+        actual,
+        torch.tensor([[0.9, 0.7, 0.4, 0.0]], dtype=torch.float64),
+    )
+
+
 def test_upb_coverage_treats_200_as_real_and_201_as_infinity():
     times = torch.tensor([200.0, 201.0])
     bounds = torch.tensor([[200.0, 201.0], [200.0, 201.0]])
@@ -127,7 +174,7 @@ def test_soft_upb_dapro_uses_finite_lower_or_equal_target_and_no_pav_crc():
         [2.0, 4.0, 5.0],
         [3.0, 201.0, 201.0],
     ])
-    times = torch.tensor([1.0, 201.0, 4.0, 201.0])
+    times = torch.tensor([6.0, 201.0, 6.0, 201.0])
     prior = quantiles[:, -1].clamp(max=width)
     allocator = SoftTargetUPBDAPRO(
         grid, 20.0, taus, 0.90, width, n1=2,
@@ -143,7 +190,7 @@ def test_soft_upb_dapro_uses_finite_lower_or_equal_target_and_no_pav_crc():
     )
     assert masses[0].sum() > masses[1].sum()
     assert masses[2].sum() > masses[3].sum()
-    assert "upb_coverage_0p70_phase1_anchor" in allocator.name
+    assert "upb_residual_aht_coverage_0p70_model_anchor" in allocator.name
 
     crc = SoftTargetCRCUPBDAPRO(
         grid, 20.0, taus, 0.90, width,
@@ -166,3 +213,7 @@ def test_upb_registry_contains_only_soft_prefix_dapro_variants():
     assert any("projection_margin" in name for name in dapro_names)
     assert any("budget_crc_control_100" in name for name in dapro_names)
     assert all("causal_shared_pav" not in name for name in dapro_names)
+    assert set(dapro_names) == {
+        GENERALIZED_UPB_DAPRO,
+        GENERALIZED_UPB_CRC_DAPRO,
+    }

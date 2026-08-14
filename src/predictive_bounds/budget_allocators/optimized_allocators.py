@@ -21,7 +21,7 @@ class OptimizedBudgetAllocator(BudgetAllocator):
 
         prior_quantile_est = get_prior(
             quantile_est, self.taus_range, self.tau_prior
-        ).clamp(max=self.max_estimator)
+        )
 
         device = probability_est.device
         trimmed_prior_quantile_est = torch.minimum(prior_quantile_est,

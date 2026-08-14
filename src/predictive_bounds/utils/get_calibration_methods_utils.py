@@ -30,7 +30,20 @@ from src.predictive_bounds.budget_allocators.DAPRO import (
     SoftTargetCRCUPBDAPRO,
     SoftTargetDAPRO,
     SoftTargetUPBDAPRO,
+    SoftPrefixEndpointUPBDAPRO,
+    SoftPrefixEndpointCRCUPBDAPRO,
+    InformationGainDAPRO,
+    InformationGainCRCDAPRO,
+    ResidualDAPRO,
+    ResidualCRCDAPRO,
+    InformationGainUPBDAPRO,
+    InformationGainCRCUPBDAPRO,
+    ResidualUPBDAPRO,
+    ResidualCRCUPBDAPRO,
     TargetAWeightedDAPRO,
+)
+from src.predictive_bounds.budget_allocators.endpoint_residual_allocator import (
+    EndpointResidualAHTAllocator,
 )
 from src.predictive_bounds.budget_allocators.random_adaptive_optimized_allocator import (
     ConstantCRCBudgetAllocator,
@@ -46,6 +59,7 @@ from src.predictive_bounds.calibration.dummy_calibration import (
     UncalibratedUPBSurvivalCalibration,
 )
 from src.predictive_bounds.calibration.oracle_survival_calibration import (
+    OracleSurvivalCalibration,
     OracleSurvivalUPBCalibration,
 )
 from src.predictive_bounds.calibration.survival_calibration_with_known_weights import SurvivalCalibrationWithKnownWeights
@@ -69,6 +83,172 @@ from src.predictive_bounds.budget_allocators.metric_optimal_allocator import (
 from typing import List
 
 
+def get_unified_bound_calibrations(
+        conditional_grid,
+        budget_per_sample,
+        taus_range,
+        tau_prior,
+        m_upper_bound,
+        *,
+        bound_type: str,
+        dapro_n1_values=(200, 100, 50),
+        target_coverages=(0.90,),
+) -> List[SurvivalLPBCalibration | SurvivalUPBCalibration]:
+    """Registry for the paper's unified LPB/UPB AHT comparison.
+
+    Every learned schedule is included both as a raw, zero-margin projection
+    and with an independent CRC controller.  The raw variants do not reserve
+    or assume a worst-case projection-error ``eta``.
+    """
+    if bound_type not in {"lpb", "upb"}:
+        raise ValueError("`bound_type` must be 'lpb' or 'upb'.")
+    n1_values = tuple(dict.fromkeys(int(value) for value in dapro_n1_values))
+    if not n1_values or any(value < 2 for value in n1_values):
+        raise ValueError("DAPRO N1 values must be integers of at least two.")
+
+    static = OptimizedBudgetAllocator(
+        budget_per_sample, taus_range, tau_prior, m_upper_bound
+    )
+    if bound_type == "lpb":
+        calibrations: list = [
+            OracleSurvivalCalibration(taus_range, tau_prior),
+            SurvivalCalibrationWithKnownWeights(static, taus_range, tau_prior),
+        ]
+        target_alpha = 0.10
+        common = dict(
+            conditional_grid=conditional_grid,
+            budget_per_sample=budget_per_sample,
+            taus_range=taus_range,
+            tau_prior=tau_prior,
+            m_upper_bound=m_upper_bound,
+            target_alpha=target_alpha,
+        )
+        for n1 in n1_values:
+            control = n1 // 2
+            allocations = [
+                SoftTargetDAPRO(
+                    **common, n1=n1, projection_budget_margin=0.0
+                ),
+                SoftTargetCRCDAPRO(
+                    **common, n1=n1, budget_control_size=control
+                ),
+                InformationGainDAPRO(
+                    **common, n1=n1, projection_budget_margin=0.0
+                ),
+                InformationGainCRCDAPRO(
+                    **common, n1=n1, budget_control_size=control
+                ),
+                ResidualDAPRO(
+                    **common, n1=n1, projection_budget_margin=0.0
+                ),
+                ResidualCRCDAPRO(
+                    **common, n1=n1, budget_control_size=control
+                ),
+            ]
+            calibrations.extend(
+                SurvivalCalibrationWithKnownWeights(
+                    allocation, taus_range, tau_prior
+                ) for allocation in allocations
+            )
+        endpoint_allocations = [EndpointResidualAHTAllocator(
+            conditional_grid,
+            budget_per_sample,
+            taus_range,
+            tau_prior,
+            m_upper_bound,
+            target_kind="lpb",
+            target_alpha=target_alpha,
+        )]
+        endpoint_allocations.extend(
+            EndpointResidualAHTAllocator(
+                conditional_grid,
+                budget_per_sample,
+                taus_range,
+                tau_prior,
+                m_upper_bound,
+                target_kind="lpb",
+                target_alpha=target_alpha,
+                crc_control_size=n1 // 2,
+            ) for n1 in n1_values
+        )
+        calibrations.extend(
+            SurvivalCalibrationWithKnownWeights(
+                allocation, taus_range, tau_prior
+            ) for allocation in endpoint_allocations
+        )
+        return calibrations
+
+    calibrations = [
+        OracleSurvivalUPBCalibration(taus_range, tau_prior),
+        SurvivalUPBCalibrationWithKnownWeights(static, taus_range, tau_prior),
+    ]
+    for coverage in target_coverages:
+        for n1 in n1_values:
+            control = n1 // 2
+            common = dict(
+                conditional_grid=conditional_grid,
+                budget_per_sample=budget_per_sample,
+                taus_range=taus_range,
+                tau_prior=tau_prior,
+                m_upper_bound=m_upper_bound,
+                target_coverage=float(coverage),
+                n1=n1,
+            )
+            allocations = [
+                SoftPrefixEndpointUPBDAPRO(
+                    **common, projection_budget_margin=0.0
+                ),
+                SoftPrefixEndpointCRCUPBDAPRO(
+                    **common, budget_control_size=control
+                ),
+                InformationGainUPBDAPRO(
+                    **common, projection_budget_margin=0.0
+                ),
+                InformationGainCRCUPBDAPRO(
+                    **common, budget_control_size=control
+                ),
+                ResidualUPBDAPRO(
+                    **common, projection_budget_margin=0.0
+                ),
+                ResidualCRCUPBDAPRO(
+                    **common, budget_control_size=control
+                ),
+            ]
+            calibrations.extend(
+                SurvivalUPBCalibrationWithKnownWeights(
+                    allocation, taus_range, tau_prior
+                ) for allocation in allocations
+            )
+        endpoint = [SoftTargetUPBDAPRO(
+            conditional_grid,
+            budget_per_sample,
+            taus_range,
+            tau_prior,
+            m_upper_bound,
+            n1=max(n1_values),
+            target_coverage=float(coverage),
+            projection_budget_margin=0.0,
+        )]
+        endpoint.extend(
+            SoftTargetCRCUPBDAPRO(
+                conditional_grid,
+                budget_per_sample,
+                taus_range,
+                tau_prior,
+                m_upper_bound,
+                n1=n1,
+                budget_control_size=n1 // 2,
+                target_coverage=float(coverage),
+            ) for n1 in n1_values
+        )
+        calibrations.extend(
+            SurvivalUPBCalibrationWithKnownWeights(
+                allocation, taus_range, tau_prior
+            ) for allocation in endpoint
+        )
+    return calibrations
+
+
 def get_upb_calibrations(
         conditional_grid,
         budget_per_sample,
@@ -82,66 +262,16 @@ def get_upb_calibrations(
 ) -> List[SurvivalUPBCalibration]:
     """Return the shared UPB construction/merge registry.
 
-    All ordinary allocation baselines are retained.  The only DAPRO family
-    instantiated is soft-prefix Generalized DAPRO, with its UPB coverage
-    target, both with the projection controller and with independent CRC.
-    The CRC variant intentionally uses no shared-PAV row cap.
+    The paper comparison retains Static, Constant+CRC, and the power-schedule
+    baseline.  Each exposes candidate-specific reach propensities required by
+    UPB calibration.  The only DAPRO family instantiated is soft-prefix
+    Generalized DAPRO, with and without independent CRC; the CRC variant
+    intentionally uses no shared-PAV row cap.
     """
     reach = {"reach_t_max_is_success": True}
     allocations: List[BudgetAllocator] = [
-        BasicBudgetAllocator(
-            budget_per_sample, taus_range, tau_prior
-        ),
-        TrimmedBudgetAllocator(
-            budget_per_sample, taus_range, tau_prior, m_upper_bound
-        ),
         OptimizedBudgetAllocator(
             budget_per_sample, taus_range, tau_prior, m_upper_bound
-        ),
-        AdaptiveOptimizedBudgetAllocator(
-            conditional_grid,
-            budget_per_sample,
-            taus_range,
-            tau_prior,
-            m_upper_bound,
-            **reach,
-        ),
-        AdaptiveOptimizedBudgetAllocator(
-            conditional_grid,
-            budget_per_sample,
-            taus_range,
-            tau_prior,
-            m_upper_bound,
-            terminal_pi_min=1.0 / float(m_upper_bound),
-            terminal_floor_mode="mixture",
-            **reach,
-        ),
-        AdaptiveOptimizedBudgetAllocator(
-            conditional_grid,
-            budget_per_sample,
-            taus_range,
-            tau_prior,
-            m_upper_bound,
-            terminal_pi_min=None,
-            terminal_floor_mode="none",
-            **reach,
-        ),
-        AdaptiveOptimizedBudgetAllocator(
-            conditional_grid,
-            budget_per_sample,
-            taus_range,
-            tau_prior,
-            m_upper_bound,
-            budget_control_mode="crc",
-            **reach,
-        ),
-        RandomAdaptiveOptimizedBudgetAllocator(
-            conditional_grid,
-            budget_per_sample,
-            taus_range,
-            tau_prior,
-            m_upper_bound,
-            **reach,
         ),
         ConstantCRCBudgetAllocator(
             conditional_grid,
@@ -163,28 +293,32 @@ def get_upb_calibrations(
             **reach,
         ),
     ]
-    for n1 in dapro_n1_values:
-        allocations.append(SoftTargetUPBDAPRO(
+    # The UPB specialization is model-only: there is no policy-fit N1 axis and
+    # hence no reason to duplicate the same allocator for several historical
+    # N1 values.  Retain the argument for CLI compatibility and use its largest
+    # requested value only to obtain the conventional CRC control size of 100.
+    requested_n1 = max(tuple(dapro_n1_values), default=200)
+    allocations.append(SoftTargetUPBDAPRO(
+        conditional_grid,
+        budget_per_sample,
+        taus_range,
+        tau_prior,
+        m_upper_bound,
+        n1=requested_n1,
+        target_coverage=target_coverage,
+        projection_budget_margin=projection_budget_margin,
+    ))
+    if requested_n1 >= 2:
+        allocations.append(SoftTargetCRCUPBDAPRO(
             conditional_grid,
             budget_per_sample,
             taus_range,
             tau_prior,
             m_upper_bound,
-            n1=n1,
+            n1=requested_n1,
+            budget_control_size=min(100, requested_n1 // 2),
             target_coverage=target_coverage,
-            projection_budget_margin=projection_budget_margin,
         ))
-        if n1 >= 2:
-            allocations.append(SoftTargetCRCUPBDAPRO(
-                conditional_grid,
-                budget_per_sample,
-                taus_range,
-                tau_prior,
-                m_upper_bound,
-                n1=n1,
-                budget_control_size=min(100, n1 // 2),
-                target_coverage=target_coverage,
-            ))
     return [
         UncalibratedUPBSurvivalCalibration(taus_range),
         OracleSurvivalUPBCalibration(taus_range, tau_prior),
@@ -741,6 +875,7 @@ def get_metric_allocators(
         include_legacy_dapro=True,
         include_locally_adaptive=True,
         include_dapro_comparison=False,
+        method_suite="legacy",
 ) -> List[BudgetAllocator]:
     """Return the exact server/local metric-estimation comparison.
 
@@ -771,6 +906,74 @@ def get_metric_allocators(
         m_upper_bound=m_upper_bound,
     )
     target = dict(metric_estimation_horizon=m_upper_bound)
+
+    if method_suite == "unified_aht":
+        allocations = [
+            OptimizedBudgetAllocator(
+                budget_per_sample, taus_range, tau_prior, m_upper_bound
+            ),
+            SoftTargetDAPRO(
+                **common,
+                n1=dapro_n1,
+                projection_budget_margin=0.0,
+                **target,
+            ),
+            SoftTargetCRCDAPRO(
+                **common,
+                n1=dapro_n1,
+                budget_control_size=crc_control_size,
+                **target,
+            ),
+            InformationGainDAPRO(
+                **common,
+                n1=dapro_n1,
+                projection_budget_margin=0.0,
+                **target,
+            ),
+            InformationGainCRCDAPRO(
+                **common,
+                n1=dapro_n1,
+                budget_control_size=crc_control_size,
+                **target,
+            ),
+            ResidualDAPRO(
+                **common,
+                n1=dapro_n1,
+                projection_budget_margin=0.0,
+                **target,
+            ),
+            ResidualCRCDAPRO(
+                **common,
+                n1=dapro_n1,
+                budget_control_size=crc_control_size,
+                **target,
+            ),
+            EndpointResidualAHTAllocator(
+                conditional_grid,
+                budget_per_sample,
+                taus_range,
+                tau_prior,
+                m_upper_bound,
+                target_kind="metric",
+            ),
+            EndpointResidualAHTAllocator(
+                conditional_grid,
+                budget_per_sample,
+                taus_range,
+                tau_prior,
+                m_upper_bound,
+                target_kind="metric",
+                crc_control_size=crc_control_size,
+            ),
+            SplitFullBudgetOracleAllocator(
+                taus_range, tau_prior, m_upper_bound
+            ),
+        ]
+        return allocations
+    if method_suite != "legacy":
+        raise ValueError(
+            "`method_suite` must be 'legacy' or 'unified_aht'."
+        )
 
     allocators = [
         # Intentional duplicate allocation with and without IPCW correction.

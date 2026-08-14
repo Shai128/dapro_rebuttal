@@ -1,13 +1,12 @@
 #!/usr/bin/env bash
-# Construct, merge, plot, and tabulate the 70/80/90%-coverage UPB matrix.
-# Value 201 is the infinity/no-event-through-turn-200 UPB sentinel.
+# Construct, merge, summarize, and tabulate the 90%-coverage LPB comparison.
 set -euo pipefail
 
 PYTHON_EXE="${PYTHON:-python}"
 DEVICE_VALUE="${DEVICE:-cuda:0}"
 SEED_START_VALUE="${SEED_START:-0}"
 SEED_END_VALUE="${SEED_END:-50}"
-SUFFIX_VALUE="${EXPERIMENT_SUFFIX:-upb_unified_aht_v1}"
+SUFFIX_VALUE="${EXPERIMENT_SUFFIX:-lpb_unified_aht_v1}"
 QUALITY_VALUE="${FIGURE_QUALITY:-high}"
 
 extra=()
@@ -16,7 +15,7 @@ if [[ "${AVAILABLE_ONLY:-0}" == "1" ]]; then
 fi
 
 "$PYTHON_EXE" -m src.predictive_bounds.experiments.full_bounds.run_all \
-  --bound-type upb \
+  --bound-type lpb \
   --seed-start "$SEED_START_VALUE" \
   --seed-end "$SEED_END_VALUE" \
   --device "$DEVICE_VALUE" \
@@ -26,5 +25,5 @@ fi
   "${extra[@]}" \
   "$@"
 
-echo "Merged UPB CSVs: results/merged_upb_calibration_dfs"
-echo "Local figures: python -m src.predictive_bounds.experiments.full_bounds.summarize --bound-type upb --experiment-suffix $SUFFIX_VALUE --input-dir results/merged_upb_calibration_dfs --output-dir figures/upb --quality high"
+echo "Merged LPB CSVs: results/merged_calibration_dfs"
+echo "Local figures: python -m src.predictive_bounds.experiments.full_bounds.summarize --bound-type lpb --experiment-suffix $SUFFIX_VALUE --input-dir results/merged_calibration_dfs --output-dir figures/lpb --quality high"

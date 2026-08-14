@@ -30,7 +30,7 @@ from src.predictive_bounds.experiments.full_bounds.config import (
     UNCALIBRATED,
     ExperimentConfig,
     all_experiment_configs,
-    calibration_names,
+    method_display_name,
 )
 from src.evaluation.result_matrix import (
     DAPRO_ORACLE_METHODS,
@@ -160,6 +160,7 @@ PLOT_COLUMNS = {
     "seed",
     "calibration_name",
     "target_coverage",
+    "policy_target_coverage",
     "coverage",
     "mean_weight",
     "mean_a_weighted_inverse_probability",
@@ -192,6 +193,10 @@ def _method_n1(calibration_name: str) -> int | None:
         return int(match.group("n1"))
     if "projected_optimization" in str(calibration_name):
         return 100
+    if "endpoint" in str(calibration_name):
+        control_match = _METHOD_CRC_RE.search(str(calibration_name))
+        if control_match is not None:
+            return 2 * int(control_match.group("crc"))
     return None
 
 
@@ -273,14 +278,23 @@ def _prepare_frame(
         config.target_coverage,
         atol=5e-7,
     )].copy()
+    if "policy_target_coverage" in frame:
+        fitted = pd.to_numeric(
+            frame["policy_target_coverage"], errors="coerce"
+        )
+        frame = frame[
+            fitted.isna()
+            | np.isclose(fitted, config.target_coverage, atol=5e-7)
+        ].copy()
     if frame.empty:
         return frame
 
-    frame["method"] = frame["calibration_name"].map(METHOD_DISPLAY)
+    frame["method"] = frame["calibration_name"].map(method_display_name)
     unknown = frame["method"].isna() & frame["calibration_name"].notna()
     frame.loc[unknown, "method"] = frame.loc[
         unknown, "calibration_name"
     ].map(_fallback_method_name)
+    frame = frame[frame["method"].isin(METHOD_ORDER)].copy()
     frame = frame[
         ~frame["method"].isin(EXCLUDED_DISPLAY_METHODS)
     ].copy()
@@ -297,6 +311,7 @@ def _prepare_frame(
     frame["coverage_diff_pct"] = (
         frame["coverage_pct"] - frame["target_coverage_pct"]
     ).abs()
+    frame["infinite_bound_rate_pct"] = 100 * frame["infinite_bound_rate"]
     frame["mean_a_weight"] = frame[
         "mean_a_weighted_inverse_probability"
     ]
@@ -331,12 +346,6 @@ def load_comparison_data(
             missing_paths.append(path)
             continue
         frame = _read_plot_columns(path)
-        requested = set(calibration_names(config.bound_type))
-        available = set(frame["calibration_name"].dropna().unique())
-        absent = sorted(requested - available)
-        if absent:
-            missing_methods.append((config.key, absent))
-        frame = frame[frame["calibration_name"].isin(requested)].copy()
         frame = _prepare_frame(frame, config, path)
         if frame.empty:
             missing_methods.append((
@@ -345,7 +354,26 @@ def load_comparison_data(
             ))
             continue
 
-        frames.append(frame)
+        pairs = _compact_result_configurations(frame["calibration_name"])
+        if not pairs:
+            frames.append(frame)
+            continue
+        method_n1 = frame["calibration_name"].map(_method_n1)
+        common = method_n1.isna()
+        for n1, crc in pairs:
+            selected = frame[common | (method_n1 == n1)].copy()
+            selected["dapro_n1"] = n1
+            selected["crc_control_size"] = crc
+            selected["plot_context"] = f"DAPRO N1={n1}, CRC={crc}"
+            selected["configuration"] = (
+                selected["configuration"].astype(str)
+                + f"__n1_{n1}_crc_{crc}"
+            )
+            selected["dataset_key"] = (
+                selected["dataset_key"].astype(str)
+                + f"/n1_{n1}_crc_{crc}"
+            )
+            frames.append(selected)
 
     if (missing_paths or missing_methods) and not allow_missing:
         details = [f"missing result: {path}" for path in missing_paths]
@@ -361,16 +389,21 @@ def load_comparison_data(
     return pd.concat(frames, ignore_index=True)
 
 
-def _match_result_config(path: Path) -> ExperimentConfig | None:
+def _match_result_configs(
+        path: Path, bound_type: str | None = None
+) -> tuple[ExperimentConfig, ...]:
     directory_name = path.parent.name
     matches = []
     for config in all_experiment_configs():
+        if bound_type is not None and config.bound_type != bound_type:
+            continue
         base = experiment_name(config, "")
-        if directory_name == base or directory_name.startswith(f"{base}__"):
+        if directory_name == base or directory_name.startswith(f"{base}_"):
             matches.append((len(base), config))
     if not matches:
-        return None
-    return max(matches, key=lambda item: item[0])[1]
+        return ()
+    longest = max(length for length, _ in matches)
+    return tuple(config for length, config in matches if length == longest)
 
 
 def load_merged_directory(
@@ -378,26 +411,35 @@ def load_merged_directory(
         *,
         configuration_keys: set[str] | None = None,
         target_models: set[str] | None = None,
+        bound_type: str | None = None,
+        experiment_suffix: str | None = None,
 ) -> pd.DataFrame:
     """Discover and load every recognized ``all_df.csv`` below a directory."""
     paths = sorted(input_dir.rglob("all_df.csv"))
+    if experiment_suffix:
+        paths = [
+            path for path in paths
+            if path.parent.name.endswith(f"_{experiment_suffix}")
+        ]
     if not paths:
         raise FileNotFoundError(f"No all_df.csv files found below {input_dir}.")
 
     frames = []
     unrecognized = []
     for path in paths:
-        config = _match_result_config(path)
-        if config is None:
+        matched_configs = _match_result_configs(path, bound_type=bound_type)
+        if not matched_configs:
             unrecognized.append(path)
             continue
-        if configuration_keys and config.key not in configuration_keys:
-            continue
-        if target_models and config.target_model.key not in target_models:
-            continue
-        frame = _prepare_frame(_read_plot_columns(path), config, path)
-        if not frame.empty:
-            frames.append(frame)
+        raw_frame = _read_plot_columns(path)
+        for config in matched_configs:
+            if configuration_keys and config.key not in configuration_keys:
+                continue
+            if target_models and config.target_model.key not in target_models:
+                continue
+            frame = _prepare_frame(raw_frame.copy(), config, path)
+            if not frame.empty:
+                frames.append(frame)
 
     if unrecognized:
         print(f"Skipped {len(unrecognized)} unrecognized result directories.")
@@ -411,12 +453,19 @@ def load_merged_directory(
     return pd.concat(frames, ignore_index=True)
 
 
-def load_lpb_matrix(input_dir: Path) -> tuple[pd.DataFrame, pd.DataFrame]:
+def load_lpb_matrix(
+        input_dir: Path, experiment_suffix: str | None = None
+) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Load every suffixed all-method LPB result for every budget and N1."""
     frames = []
     inventory_rows = []
     skipped = []
     discovered_paths = sorted(input_dir.rglob("all_df.csv"))
+    if experiment_suffix:
+        discovered_paths = [
+            path for path in discovered_paths
+            if path.parent.name.endswith(f"_{experiment_suffix}")
+        ]
     selected_paths = _prefer_latest_compact_lpb_results(discovered_paths)
     superseded_count = len(discovered_paths) - len(selected_paths)
     if superseded_count:
@@ -568,7 +617,10 @@ def _place_legend(axis, figure) -> None:
             labels,
             title="Method",
             loc="upper center",
-            bbox_to_anchor=(0.5, 0.94),
+            # Keep the method legend below long UPB titles such as the
+            # explicit 201/infinity diagnostic.  The previous 0.94 anchor
+            # overlapped and visually truncated those labels.
+            bbox_to_anchor=(0.5, 0.88),
             ncol=4,
             frameon=False,
         )
@@ -888,13 +940,26 @@ def _parse_args() -> argparse.Namespace:
         help="Use the original manuscript-config discovery instead of the "
         "budget/N1 result matrix.",
     )
+    parser.add_argument(
+        "--bound-type", choices=["lpb", "upb"], default="lpb",
+        help=(
+            "Result type to summarize. Use --input-dir "
+            "results/merged_upb_calibration_dfs for UPB downloads."
+        ),
+    )
+    parser.add_argument(
+        "--experiment-suffix",
+        help="Only summarize merged directories with this experiment suffix.",
+    )
     return parser.parse_args()
 
 
 def main() -> None:
     args = _parse_args()
-    if not args.legacy_config_mode:
-        frame, inventory = load_lpb_matrix(args.input_dir)
+    if not args.legacy_config_mode and args.bound_type == "lpb":
+        frame, inventory = load_lpb_matrix(
+            args.input_dir, experiment_suffix=args.experiment_suffix
+        )
         print(
             f"Loaded {len(frame):,} LPB rows from "
             f"{frame['source_file'].nunique()} files, covering "
@@ -910,6 +975,8 @@ def main() -> None:
         args.input_dir,
         configuration_keys=set(args.configs or []),
         target_models=set(args.target_model or []),
+        bound_type=args.bound_type,
+        experiment_suffix=args.experiment_suffix,
     )
     print(
         f"Loaded {len(frame):,} rows from "
