@@ -83,16 +83,16 @@ marginal expected total budget, not every realized calibration split.
 On Linux/Ubuntu, the complete UPB matrix is launched with:
 
 ```bash
-bash src/predictive_bounds/experiments/full_bounds/scripts/run_upb.sh
+bash src/predictive_bounds/scripts/calibrate_upb.sh --slurm --parallel-jobs 20 --cpu
 ```
 
-The broader construct/merge launcher defaults to UPB and continues past failed
-configurations:
+The shared construct/merge engine continues past failed configurations and can
+also be invoked directly:
 
 ```bash
-bash src/predictive_bounds/scripts/calibrate.sh --local
+bash src/predictive_bounds/scripts/calibrate.sh --bound-type upb --local
 # or
-bash src/predictive_bounds/scripts/calibrate.sh --slurm --parallel-jobs 20
+bash src/predictive_bounds/scripts/calibrate.sh --bound-type upb --slurm --parallel-jobs 20 --cpu
 ```
 
 The local validation used experiment suffix `upb_final_validation`.  Its compact

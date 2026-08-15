@@ -287,8 +287,8 @@ These `.sh` files wrap the underlying Python pipeline to execute across all test
 - `train_model.sh`: Automates the training of the survival transformer models across different setups.
 
 **3. Primary Predictive-Bound Runs:** (`src/predictive_bounds/scripts/`)
-- `calibrate.sh`: Runs the LPB calibration experiments.
-- `calibrate_upb.sh`: Runs the UPB calibration experiments.
+- `calibrate.sh`: Runs and merges the 90%-coverage LPB matrix.
+- `calibrate_upb.sh`: Runs and merges the 70/80/90%-coverage UPB matrix.
 
 Additional experiment and ablation runners live beside their modules under
 `src/predictive_bounds/experiments/*/scripts/` and
@@ -297,7 +297,8 @@ included for the ablations.
 
 To execute any of these, run them from the project root. For example:
 ```bash
-bash src/predictive_bounds/scripts/calibrate.sh
+bash src/predictive_bounds/scripts/calibrate.sh --slurm --parallel-jobs 20 --cpu
+bash src/predictive_bounds/scripts/calibrate_upb.sh --slurm --parallel-jobs 20 --cpu
 ```
 
 ---

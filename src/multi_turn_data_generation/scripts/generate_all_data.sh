@@ -11,7 +11,7 @@ git pull
 #target_models=('qwen25-14b-instruct' 'llama-3.1-8B-instruct' 'mini_phi_4_instruct' 'gemma3_4b_it')
 
 
-dataset_names=('red_team')
+dataset_names=('autoif')
 attacker_models=('gemma3_12b_it')
 target_models=('llama-3.1-8B-instruct')
 exclude_list=$(sinfo -N -h -o "%n %G" | awk '$2 !~ /A100|A40|A6000|6000ADA|L40|L4|A4000/ {print $1}' | paste -sd, -)
@@ -52,7 +52,7 @@ for dataset in "${dataset_names[@]}"; do
 
 #                   srun -A galileo -p galileo  -c 4 --gres=gpu:1 \
 
-                   srun -A galileo -p galileo  -c 4 --gres=gpu:1 \
+                   srun -p public,ash,nlp,dym,galileo,bml,tdk,espresso,euler,newton,ran -c4 --gres=gpu:1 --mem=20G  \
                     --exclude="$exclude_list" -J plsNoKil \
                        python -m src.multi_turn_data_generation.main \
                             --data-index-start "$index_start"  --data-index-end "$index_end" \

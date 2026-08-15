@@ -1,29 +1,28 @@
 #!/usr/bin/env bash
-# Construct and merge predictive bounds for every configured dataset.
+# Shared Slurm/local engine for the paper's LPB and UPB calibration suites.
 #
-# LPB experiment matrix:
-#   (DAPRO_N1=200, CRC_CONTROL_SIZE=100) x BUDGET_PER_SAMPLE={5,10,20}
-#   (DAPRO_N1=100, CRC_CONTROL_SIZE=50)  x BUDGET_PER_SAMPLE={5,10,20}
-#   (DAPRO_N1=50,  CRC_CONTROL_SIZE=25)  x BUDGET_PER_SAMPLE={5,10,20}
-# The only DAPRO family run is Soft-prefix Generalized DAPRO, with and without
-# CRC.  The UPB specialization is model-only, so it has no N1 axis and runs
-# once with CRC_CONTROL_SIZE=100 at each budget.  Its CRC deliberately uses the
-# full 200-turn support bound and no shared-PAV row cap.  UPB value 201 is
-# infinity/no event through turn 200.
+# Public entry points:
+#   bash src/predictive_bounds/scripts/calibrate.sh --slurm --parallel-jobs 20 --cpu
+#   bash src/predictive_bounds/scripts/calibrate_upb.sh --slurm --parallel-jobs 20 --cpu
 #
-# Typical invocations:
-#   bash src/predictive_bounds/scripts/calibrate.sh --local
-#   bash src/predictive_bounds/scripts/calibrate.sh --local --cpu --available-only
-#   bash src/predictive_bounds/scripts/calibrate.sh --slurm
-#  bash src/predictive_bounds/scripts/calibrate.sh --slurm --parallel-jobs 20
-# #   bash src/predictive_bounds/scripts/calibrate.sh --slurm --dry-run
+# Each dataset/model/budget job constructs all seeds and then merges them. A
+# failed job is reported but does not stop the other jobs. Both task suites run:
+#   * optimized Static and the full-budget oracle;
+#   * soft-prefix history-adaptive Generalized DAPRO;
+#   * information-gain schedule + sequential AHT;
+#   * residual schedule + sequential AHT;
+#   * endpoint/block schedule + terminal residual AHT.
+# Every learned family is evaluated raw (zero projection margin) and with CRC.
+# N1={200,100,50}, with CRC control size N1/2. LPB targets 90% coverage;
+# UPB targets 70%, 80%, and 90%. UPB value 201 means infinity/no event through
+# turn 200.
 #
-# Edit only the configuration block below to change the experiment matrix.
+# Direct generic invocation is also supported with --bound-type lpb|upb.
 set -euo pipefail
 
 # ======================== EDITABLE CONFIGURATION ========================
 RUN_MODE="local"                    # "local" or "slurm"
-BOUND_TYPE="upb"     # "upb" (default) or "lpb"
+BOUND_TYPE="lpb"                    # calibrate_upb.sh overrides this to upb
 DEVICE="cuda:0"                     # Use "cpu" when no GPU is available.
 AVAILABLE_ONLY=0                    # 1 skips configurations without cached predictions.
 DRY_RUN=0                           # 1 prints commands without executing them.
@@ -59,13 +58,13 @@ DAPRO_CONFIGS=(
 
 # Every budget is run for every DAPRO/CRC configuration above.
 BUDGET_PER_SAMPLE_VALUES=(
-  5
-  10
   20
+  10
+  5
 )
 
-# All N1/CRC methods for one dataset/model/budget share one compact directory
-# and are constructed and merged together.
+# All methods and N1/CRC configurations for one dataset/model/budget share one
+# compact directory and are constructed and merged together.
 BASE_EXPERIMENT_SUFFIX="${BASE_EXPERIMENT_SUFFIX:-}"
 ARCHIVE_PATH=""
 
@@ -83,10 +82,12 @@ usage() {
   echo "Usage: $0 [--local | --slurm] [--cpu | --device DEVICE]"
   echo "          [--bound-type upb|lpb]"
   echo "          [--available-only] [--parallel-jobs N] [--dry-run]"
-  echo "          [--seed-end N]"
+  echo "          [--seed-start N] [--seed-end N] [--experiment-suffix NAME]"
   echo
   echo "The editable block at the top controls datasets, models, budgets,"
   echo "DAPRO/CRC configurations, Slurm resources, result isolation, and archive output."
+  echo
+  echo "Task entry points: calibrate.sh (LPB) and calibrate_upb.sh (UPB)."
 }
 
 while (( $# > 0 )); do
@@ -139,6 +140,22 @@ while (( $# > 0 )); do
       SEED_END="$2"
       shift
       ;;
+    --seed-start)
+      if (( $# < 2 )); then
+        echo "--seed-start requires an integer." >&2
+        exit 2
+      fi
+      SEED_START="$2"
+      shift
+      ;;
+    --experiment-suffix)
+      if (( $# < 2 )); then
+        echo "--experiment-suffix requires a value." >&2
+        exit 2
+      fi
+      BASE_EXPERIMENT_SUFFIX="$2"
+      shift
+      ;;
     --help|-h)
       usage
       exit 0
@@ -165,9 +182,9 @@ if [[ -z "$TAU_PRIOR" ]]; then
 fi
 if [[ -z "$BASE_EXPERIMENT_SUFFIX" ]]; then
   if [[ "$BOUND_TYPE" == "upb" ]]; then
-    BASE_EXPERIMENT_SUFFIX="upb_v2_soft_residual_aht"
+    BASE_EXPERIMENT_SUFFIX="upb_unified_aht_v1"
   else
-    BASE_EXPERIMENT_SUFFIX="lpb_v5_soft_prefix"
+    BASE_EXPERIMENT_SUFFIX="lpb_unified_aht_v1"
   fi
 fi
 ARCHIVE_PATH="results/${BOUND_TYPE}_merged_${BASE_EXPERIMENT_SUFFIX}.tar.gz"
@@ -204,6 +221,10 @@ for dapro_config in "${DAPRO_CONFIGS[@]}"; do
   fi
   if (( crc_control_size >= dapro_n1 )); then
     echo "CRC_CONTROL_SIZE=$crc_control_size must be smaller than DAPRO_N1=$dapro_n1." >&2
+    exit 2
+  fi
+  if (( crc_control_size != dapro_n1 / 2 )); then
+    echo "CRC_CONTROL_SIZE must equal DAPRO_N1/2; got $dapro_config." >&2
     exit 2
   fi
 done
@@ -330,47 +351,21 @@ configure_dataset() {
   esac
 }
 
-build_methods() {
-  local oracle_name
-  if [[ "$BOUND_TYPE" == "upb" ]]; then
-    oracle_name="oracle_survival_upb_calibration"
-  else
-    oracle_name="oracle_survival_calibration"
-  fi
-  METHODS=(
-    # Raw prediction and infinite-observation reference.
-    uncalibrated
-    "$oracle_name"
-    # Static baselines.
-    calibration_optimized_allocation
-    # Constant continuation with an always-follow mixture that bounds IPW;
-    # CRC accounts for the mixture while controlling the expected budget.
-    calibration_random_adaptive_optimized_mixture_terminal_floor_0p005_crc_allocation
-    calibration_random_schedule_power_reach_alpha_2_crc_allocation
-  )
-
+build_method_suite_args() {
   DAPRO_N1_ARGS=()
+  TARGET_COVERAGE_ARGS=()
   local dapro_config dapro_n1 crc_control_size
-  if [[ "$BOUND_TYPE" == "upb" ]]; then
-    # Compatibility value consumed by the Python constructor; the UPB policy
-    # fits no labels, and only the independent CRC control size is operative.
-    DAPRO_N1_ARGS=(200)
-    METHODS+=(
-      "calibration_dapro_soft_prefix_bins_2_upb_residual_aht_coverage_0p70_model_anchor_global_0p001_projection_margin_1p00_allocation"
-      "calibration_dapro_soft_prefix_bins_2_upb_residual_aht_coverage_0p70_model_anchor_global_0p001_budget_crc_control_100_allocation"
-    )
-    METHOD_CSV="$(IFS=,; echo "${METHODS[*]}")"
-    return
-  fi
+
   for dapro_config in "${DAPRO_CONFIGS[@]}"; do
     IFS=: read -r dapro_n1 crc_control_size <<< "$dapro_config"
     DAPRO_N1_ARGS+=("$dapro_n1")
-    METHODS+=(
-      "calibration_dapro_soft_prefix_bins_2_lpb_alpha_0p10_global_0p001_projection_margin_1p00_n1_${dapro_n1}_allocation"
-      "calibration_dapro_soft_prefix_bins_2_lpb_alpha_0p10_global_0p001_budget_crc_control_${crc_control_size}_row_cap_2p00x_budget_causal_shared_pav_v1_n1_${dapro_n1}_allocation"
-    )
   done
-  METHOD_CSV="$(IFS=,; echo "${METHODS[*]}")"
+
+  if [[ "$BOUND_TYPE" == "lpb" ]]; then
+    TARGET_COVERAGE_ARGS=(0.90)
+  else
+    TARGET_COVERAGE_ARGS=(0.70 0.80 0.90)
+  fi
 }
 
 run_configuration() {
@@ -382,7 +377,7 @@ run_configuration() {
   local job_key
 
   configure_dataset "$dataset_key" "$target_model"
-  build_methods
+  build_method_suite_args
 
   cache_file="alg_playground_model/is_real_True_dataset_${DATASET_NAME}_dataset_${DATASET_SETUP}/probability_est_cal_test.pt"
   if (( AVAILABLE_ONLY == 1 )) && [[ ! -f "$cache_file" ]]; then
@@ -405,9 +400,10 @@ run_configuration() {
     --device "$DEVICE"
     --allocations none
     --experiment-suffix "$experiment_suffix"
+    --method-suite unified_aht
+    --target-coverages "${TARGET_COVERAGE_ARGS[@]}"
     --dapro-n1-values "${DAPRO_N1_ARGS[@]}"
-    --definitive-dapro-margins 1.0
-    --calibration-names "$METHOD_CSV"
+    --definitive-dapro-margins 0.0
   )
 
   # Run the complete seed range in one Python process / one srun.
@@ -437,10 +433,12 @@ run_configuration() {
 }
 
 echo "Mode: $RUN_MODE | device: $DEVICE | seeds: [$SEED_START, $SEED_END)"
+echo "Bound type: ${BOUND_TYPE^^}"
+echo "DAPRO/CRC configurations: ${DAPRO_CONFIGS[*]}"
 if [[ "$BOUND_TYPE" == "upb" ]]; then
-  echo "DAPRO/CRC configuration: model-only UPB target, CRC control=100"
+  echo "Target coverages: 0.70 0.80 0.90"
 else
-  echo "DAPRO/CRC configurations: ${DAPRO_CONFIGS[*]}"
+  echo "Target coverage: 0.90"
 fi
 echo "Budgets per sample: ${BUDGET_PER_SAMPLE_VALUES[*]}"
 echo "Base experiment suffix: $BASE_EXPERIMENT_SUFFIX"
