@@ -36,6 +36,10 @@ _COMPACT_LPB_RE = re.compile(
     r"^(?P<setup>dataset_.+)_(?P<budget>\d+(?:\.\d+)?)_"
     r"calibration_lpb(?:_.+)?$"
 )
+_COMPACT_UPB_RE = re.compile(
+    r"^(?P<setup>dataset_.+)_(?P<budget>\d+(?:\.\d+)?)_"
+    r"calibration_upb(?:_.+)?$"
+)
 
 
 @dataclass(frozen=True)
@@ -133,6 +137,26 @@ def parse_lpb_result(path: Path) -> MatrixResult | None:
         budget_per_sample=budget,
         dapro_n1=int(suffix_match.group("n1")),
         crc_control_size=int(suffix_match.group("crc")),
+    )
+
+
+def parse_upb_result(path: Path) -> MatrixResult | None:
+    """Parse a compact all-method UPB result path."""
+    match = _COMPACT_UPB_RE.match(path.parent.name)
+    if match is None:
+        return None
+    parsed_setup = _parse_setup(match.group("setup"))
+    if parsed_setup is None:
+        return None
+    dataset, target, judge = parsed_setup
+    return MatrixResult(
+        path=path,
+        dataset=dataset,
+        judge=judge,
+        target_model=target,
+        budget_per_sample=float(match.group("budget")),
+        dapro_n1=None,
+        crc_control_size=None,
     )
 
 

@@ -566,7 +566,10 @@ class SurvivalUPBCalibrationWithKnownWeights(SurvivalUPBCalibration):
             "alpha_hat_per_tau": self.miscoverage[positions],
             "coverage_hat_per_tau": self.coverage[positions],
             "mean_a_weighted_inverse_probability_minus_one": (
-                variance_proxy.mean(dim=0)
+                (
+                    finite_a.to(torch.float64)
+                    * (selected_pi.reciprocal() - 1.0)
+                ).mean(dim=0)
             ),
             "mean_upb_residual_squared_inverse_probability_minus_one": (
                 variance_proxy.mean(dim=0)
@@ -598,7 +601,11 @@ class SurvivalUPBCalibrationWithKnownWeights(SurvivalUPBCalibration):
             "max_weight": max_weight,
             "upb_infinity_value": UPB_INFINITY_VALUE,
             "upb_calibration_target": "miscoverage_event_t_gt_f",
-            "upb_calibration_estimator": "sequential_augmented_horvitz_thompson",
+            "upb_calibration_estimator": {
+                "ordinary_ht": "ordinary_horvitz_thompson",
+                "terminal_residual": "terminal_residual_augmented_ht",
+                "sequential": "sequential_augmented_horvitz_thompson",
+            }[estimator_kind],
             "upb_exact_variance_diagnostic_kind": exact_variance_kind,
             **indexed,
             **additional,

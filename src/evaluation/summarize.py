@@ -9,6 +9,7 @@ written below ``figures/metric_estimation`` by default.
 from __future__ import annotations
 
 import argparse
+import os.path
 from pathlib import Path
 
 import matplotlib
@@ -391,7 +392,7 @@ def load_metric_matrix(
         print(f"Ignored {len(skipped)} unrecognized metric result files.")
     if not frames:
         raise FileNotFoundError(
-            f"No metric-estimation matrix results below {input_dir}."
+            f"No metric-estimation matrix results with suffix {experiment_suffix} below {os.path.abspath(input_dir)}."
         )
     return pd.concat(frames, ignore_index=True), pd.DataFrame(inventory_rows)
 

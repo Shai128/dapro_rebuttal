@@ -182,7 +182,7 @@ if [[ -z "$TAU_PRIOR" ]]; then
 fi
 if [[ -z "$BASE_EXPERIMENT_SUFFIX" ]]; then
   if [[ "$BOUND_TYPE" == "upb" ]]; then
-    BASE_EXPERIMENT_SUFFIX="upb_unified_aht_v1"
+    BASE_EXPERIMENT_SUFFIX="upb_unified_aht_v2"
   else
     BASE_EXPERIMENT_SUFFIX="lpb_unified_aht_v1"
   fi

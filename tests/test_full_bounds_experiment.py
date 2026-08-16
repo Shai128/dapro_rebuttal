@@ -21,14 +21,18 @@ from src.predictive_bounds.experiments.full_bounds.config import (
     SPLIT_DAPRO_ORACLE,
     all_experiment_configs,
     calibration_names,
+    method_display_name,
 )
 from src.predictive_bounds.experiments.full_bounds.summarize import (
     LOW_QUALITY_MAX_BYTES,
     _compact_result_configurations,
     _method_n1,
+    _method_palette,
     _prefer_latest_compact_lpb_results,
     _save_jpeg,
+    load_upb_matrix,
 )
+from src.evaluation.result_matrix import parse_upb_result
 
 
 def test_full_bounds_matrix_covers_every_dataset_model_and_bound():
@@ -129,3 +133,83 @@ def test_latest_compact_lpb_result_supersedes_stale_version():
         v2,
         unrelated,
     ]
+
+
+def test_unified_lpb_methods_have_canonical_labels_and_complete_palette():
+    names = [
+        "calibration_dapro_soft_prefix_bins_2_lpb_alpha_0p10_global_0p001_projection_margin_0p00_n1_50_allocation",
+        "calibration_dapro_soft_prefix_bins_2_lpb_alpha_0p10_global_0p001_budget_crc_control_25_n1_50_allocation",
+        "calibration_dapro_information_gain_sequential_aht_lpb_c0p90_bins_2_raw_margin_0p00_n1_50_allocation",
+        "calibration_dapro_residual_sequential_aht_lpb_c0p90_bins_2_raw_margin_0p00_budget_crc_control_25_n1_50_allocation",
+        "calibration_endpoint_block_terminal_residual_aht_lpb_c0p90_crc_control_25_allocation",
+    ]
+    labels = [method_display_name(name) for name in names]
+
+    assert labels == [
+        "Soft-prefix DAPRO",
+        "Soft-prefix DAPRO + CRC",
+        "Information-gain + sequential AHT",
+        "Residual + sequential AHT + CRC",
+        "Endpoint/block + terminal residual AHT + CRC",
+    ]
+    assert set(_method_palette(labels)) == set(labels)
+    assert _method_palette(["Future method"])["Future method"] == "#6b7280"
+
+
+def test_upb_matrix_is_split_by_policy_coverage_and_n1(tmp_path: Path):
+    result_dir = (
+        tmp_path
+        / "dataset_toxicity_attack_toxic_attack_qwen_lm_target_"
+        "qwen25_14b_instruct_judge_detoxify_20_calibration_upb_test"
+    )
+    result_dir.mkdir(parents=True)
+    path = result_dir / "all_df.csv"
+    rows = []
+    for coverage in (0.70, 0.80, 0.90):
+        rows.extend([
+            {
+                "seed": 0,
+                "target_coverage": coverage,
+                "policy_target_coverage": None,
+                "calibration_name": "calibration_optimized_allocation",
+                "coverage": coverage,
+            },
+            {
+                "seed": 0,
+                "target_coverage": coverage,
+                "policy_target_coverage": coverage,
+                "calibration_name": (
+                    "calibration_dapro_soft_prefix_bins_2_"
+                    f"upb_endpoint_dynamic_aht_coverage_0p{int(100 * coverage)}_"
+                    "global_0p001_projection_margin_0p00_n1_50_allocation"
+                ),
+                "coverage": coverage,
+            },
+            {
+                "seed": 0,
+                "target_coverage": coverage,
+                "policy_target_coverage": coverage,
+                "calibration_name": (
+                    "calibration_dapro_soft_prefix_bins_2_"
+                    f"upb_endpoint_dynamic_aht_coverage_0p{int(100 * coverage)}_"
+                    "global_0p001_budget_crc_control_25_n1_50_allocation"
+                ),
+                "coverage": coverage,
+            },
+        ])
+    pd.DataFrame(rows).to_csv(path, index=False)
+
+    assert parse_upb_result(path) is not None
+    frame, inventory = load_upb_matrix(
+        tmp_path, experiment_suffix="test"
+    )
+
+    assert set(frame["target_coverage_pct"]) == {70.0, 80.0, 90.0}
+    assert set(frame["dapro_n1"]) == {50}
+    assert set(frame["crc_control_size"]) == {25}
+    assert set(inventory["target_coverage"]) == {0.70, 0.80, 0.90}
+    learned = frame[frame["policy_target_coverage"].notna()]
+    assert (
+        100 * learned["policy_target_coverage"]
+        == learned["target_coverage_pct"]
+    ).all()

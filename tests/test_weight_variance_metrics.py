@@ -292,3 +292,6 @@ def test_upb_selected_a_weight_metrics_use_the_upper_tail_event():
     )
     assert metrics["all_observed_jailbreaks_0"] == 1
     assert metrics["all_observed_both_0"] == 1
+    assert metrics["upb_calibration_estimator"] == (
+        "terminal_residual_augmented_ht"
+    )

@@ -141,3 +141,19 @@ def test_dynamic_upb_allocators_log_full_path_propensities_and_budget():
             result.candidate_C_probs[finite], expected_candidate_pi[finite]
         )
         assert result.additional_metrics["total_expected_budget_per_sample"] <= 2.5 + 1e-7
+
+
+def test_soft_prefix_upb_uses_the_sequential_aht_estimator_contract():
+    allocator = SoftPrefixEndpointUPBDAPRO(
+        _toy_grid(12),
+        1.5,
+        torch.tensor([0.5, 0.7, 0.9]),
+        0.9,
+        2,
+        n1=4,
+        target_coverage=0.7,
+        projection_budget_margin=0.0,
+    )
+
+    assert allocator.upb_estimator_kind == "sequential"
+    assert "seq_estimator_v2" in allocator.name

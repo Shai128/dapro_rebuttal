@@ -4127,7 +4127,12 @@ class SoftPrefixEndpointUPBDAPRO(
     model-prediction update through sequential augmented HT.
     """
 
-    upb_estimator_kind = "ordinary_ht"
+    # This history-adaptive policy exposes a propensity for every reached
+    # prefix.  Using ordinary endpoint HT here silently discarded those
+    # observations and made the method incomparable to the residual-AHT
+    # Static baseline.  The class documentation and allocator name have
+    # always described a sequential-AHT method, so make that contract real.
+    upb_estimator_kind = "sequential"
 
     @property
     def name(self) -> str:
@@ -4136,7 +4141,7 @@ class SoftPrefixEndpointUPBDAPRO(
         margin = self._format_parameter(self.projection_budget_margin, 2)
         base = (
             f"dapro_soft_prefix_bins_{self.score_bin_count}_"
-            f"upb_endpoint_dynamic_aht_coverage_{coverage}_"
+            f"upb_endpoint_dynamic_aht_seq_estimator_v2_coverage_{coverage}_"
             f"global_{regularization}_projection_margin_{margin}"
         )
         base += self.budget_control_name_suffix

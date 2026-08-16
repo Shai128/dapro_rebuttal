@@ -12,7 +12,15 @@ from __future__ import annotations
 import argparse
 import os
 import re
+import shutil
+import sys
 from pathlib import Path
+
+# Support both ``python -m ...summarize`` and the direct absolute-file command
+# used by the local plotting workflow, without requiring PYTHONPATH to be set.
+_REPOSITORY_ROOT = Path(__file__).resolve().parents[4]
+if str(_REPOSITORY_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPOSITORY_ROOT))
 
 import matplotlib
 matplotlib.use("Agg")
@@ -34,13 +42,13 @@ from src.predictive_bounds.experiments.full_bounds.config import (
 )
 from src.evaluation.result_matrix import (
     DAPRO_ORACLE_METHODS,
-    method_display_name as matrix_method_display_name,
     numeric_label,
     parse_lpb_result,
+    parse_upb_result,
 )
 
 
-ROOT = Path(__file__).resolve().parents[4]
+ROOT = _REPOSITORY_ROOT
 DEFAULT_INPUT_DIR = ROOT / "results" / "merged_calibration_dfs"
 DEFAULT_OUTPUT_DIR = ROOT / "figures" / "full" / "merged"
 LOW_QUALITY_MAX_BYTES = 100 * 1024
@@ -57,7 +65,17 @@ BOX_METRICS = {
     },
     "mean_a_weight": {
         "filename": "target-weight.jpg",
-        "ylabel": r"Mean target weight $A_i/\pi_i$",
+        "ylabel": (
+            r"Mean raw-HT target weight $A_i/\pi_i$ "
+            "(not AHT variance)"
+        ),
+        "allocation_only": True,
+        "log_scale": True,
+        "group": "core",
+    },
+    "estimated_conditional_variance_upb_coverage_estimator": {
+        "filename": "upb-estimator-conditional-variance.jpg",
+        "ylabel": "UPB estimator conditional variance (squared pp)",
         "allocation_only": True,
         "log_scale": True,
         "group": "core",
@@ -169,6 +187,7 @@ PLOT_COLUMNS = {
     "total_expected_budget_per_sample",
     "a_weighted_effective_sample_size",
     "method_runtime_seconds",
+    "estimated_conditional_variance_upb_coverage_estimator",
     "configured_cal_size",
     "size",
     "infinite_bound_rate",
@@ -491,8 +510,12 @@ def load_lpb_matrix(
             skipped.append(path)
             continue
 
+        # Bound plots use the bound registry's canonical labels.  The metric
+        # result-matrix mapper has intentionally different task-specific
+        # patterns and falls back to title-cased allocator identifiers for
+        # LPB information-gain/residual/endpoint methods.
         frame["method"] = frame["calibration_name"].map(
-            matrix_method_display_name
+            method_display_name
         )
         frame = frame[
             ~frame["method"].isin(EXCLUDED_DISPLAY_METHODS)
@@ -561,7 +584,128 @@ def load_lpb_matrix(
         )
     if not frames:
         raise FileNotFoundError(
-            f"No suffixed LPB matrix results found below {input_dir}."
+            f"No suffixed {experiment_suffix} LPB matrix results found below {os.path.abspath(input_dir)}."
+        )
+    return (
+        pd.concat(frames, ignore_index=True),
+        pd.DataFrame(inventory_rows),
+    )
+
+
+def load_upb_matrix(
+        input_dir: Path,
+        experiment_suffix: str | None = None,
+        target_coverages: tuple[float, ...] = (0.70, 0.80, 0.90),
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Load the UPB coverage x budget x N1/CRC result matrix."""
+    frames = []
+    inventory_rows = []
+    skipped = []
+    paths = sorted(input_dir.rglob("all_df.csv"))
+    if experiment_suffix:
+        paths = [
+            path for path in paths
+            if path.parent.name.endswith(f"_{experiment_suffix}")
+        ]
+
+    for path in paths:
+        metadata = parse_upb_result(path)
+        if metadata is None:
+            skipped.append(path)
+            continue
+        raw_frame = _read_plot_columns(path)
+        for column in PLOT_COLUMNS:
+            if column not in raw_frame:
+                raw_frame[column] = np.nan
+        for column in PLOT_COLUMNS - {"calibration_name"}:
+            raw_frame[column] = pd.to_numeric(
+                raw_frame[column], errors="coerce"
+            )
+
+        for target_coverage in target_coverages:
+            frame = raw_frame[np.isclose(
+                raw_frame["target_coverage"], target_coverage, atol=5e-7
+            )].copy()
+            policy_target = frame["policy_target_coverage"]
+            frame = frame[
+                policy_target.isna()
+                | np.isclose(policy_target, target_coverage, atol=5e-7)
+            ].copy()
+            if frame.empty:
+                continue
+
+            frame["method"] = frame["calibration_name"].map(
+                method_display_name
+            )
+            frame = frame[frame["method"].isin(METHOD_ORDER)].copy()
+            frame = frame[
+                ~frame["method"].isin(EXCLUDED_DISPLAY_METHODS)
+            ].copy()
+            if frame.empty:
+                continue
+
+            method_n1 = frame["calibration_name"].map(_method_n1)
+            configurations = _compact_result_configurations(
+                frame["calibration_name"]
+            )
+            if not configurations:
+                continue
+            common_rows = method_n1.isna()
+
+            frame["target_model"] = metadata.target_model_display
+            frame["target_model_key"] = metadata.target_model
+            frame["configuration"] = metadata.dataset_key
+            frame["dataset_key"] = metadata.dataset_key
+            frame["dataset_display"] = metadata.dataset_display
+            frame["bound_type"] = "UPB"
+            frame["source_file"] = str(path)
+            frame["target_coverage_pct"] = 100 * target_coverage
+            frame["target_budget"] = metadata.budget_per_sample
+            frame["coverage_pct"] = 100 * frame["coverage"]
+            frame["coverage_diff_pct"] = (
+                frame["coverage_pct"] - frame["target_coverage_pct"]
+            ).abs()
+            frame["infinite_bound_rate_pct"] = (
+                100 * frame["infinite_bound_rate"]
+            )
+            frame["mean_a_weight"] = frame[
+                "mean_a_weighted_inverse_probability"
+            ]
+            calibration_size = frame["configured_cal_size"].fillna(3000)
+            frame["budget_used_per_sample"] = (
+                frame["budget_used"] / calibration_size
+            )
+
+            for n1, crc in configurations:
+                selected = frame[
+                    common_rows | (method_n1 == n1)
+                ].copy()
+                selected["dapro_n1"] = n1
+                selected["crc_control_size"] = crc
+                selected["plot_context"] = (
+                    f"coverage={100 * target_coverage:.0f}%, "
+                    f"budget={metadata.budget_per_sample:g}, "
+                    f"DAPRO N1={n1}, CRC={crc}"
+                )
+                frames.append(selected)
+                inventory_rows.append({
+                    "dataset": metadata.dataset_key,
+                    "target_model": metadata.target_model,
+                    "target_coverage": target_coverage,
+                    "budget_per_sample": metadata.budget_per_sample,
+                    "dapro_n1": n1,
+                    "crc_control_size": crc,
+                    "seed_count": selected["seed"].nunique(),
+                    "method_count": selected["calibration_name"].nunique(),
+                    "source_file": str(path),
+                })
+
+    if skipped:
+        print(f"Ignored {len(skipped)} non-UPB result file(s).")
+    if not frames:
+        raise FileNotFoundError(
+            f"No suffixed {experiment_suffix} UPB matrix results found "
+            f"below {os.path.abspath(input_dir)}."
         )
     return (
         pd.concat(frames, ignore_index=True),
@@ -596,6 +740,14 @@ def _ordered_present(values: pd.Series, order: tuple[str, ...]) -> list[str]:
     present = set(values.dropna().unique())
     known = [value for value in order if value in present]
     return known + sorted(present - set(known))
+
+
+def _method_palette(hue_order: list[str]) -> dict[str, str]:
+    """Return a complete palette, including future/unregistered methods."""
+    return {
+        method: METHOD_COLORS.get(method, "#6b7280")
+        for method in hue_order
+    }
 
 
 def _style_axis(axis, ylabel: str) -> None:
@@ -699,7 +851,7 @@ def _plot_box_metric(
         hue="method",
         order=target_order,
         hue_order=hue_order,
-        palette=METHOD_COLORS,
+        palette=_method_palette(hue_order),
         showmeans=True,
         meanprops={
             "marker": "o",
@@ -761,7 +913,7 @@ def _plot_coverage_variance(
         hue="method",
         order=target_order,
         hue_order=hue_order,
-        palette=METHOD_COLORS,
+        palette=_method_palette(hue_order),
         errorbar=None,
         ax=axis,
     )
@@ -886,6 +1038,69 @@ def generate_lpb_matrix_figures(
     return generated
 
 
+def generate_upb_matrix_figures(
+        frame: pd.DataFrame,
+        inventory: pd.DataFrame,
+        output_dir: Path,
+        quality: str,
+) -> list[Path]:
+    """Generate a figure tree for every coverage/budget/N1/CRC cell."""
+    # Remove only artifacts created by the former flat UPB renderer. Without
+    # this cleanup, a corrected matrix run leaves the obsolete unsplit plots
+    # beside coverage_70/80/90 and makes the output ambiguous.
+    if output_dir.exists():
+        for child in output_dir.iterdir():
+            if child.is_dir() and (
+                    child.name == "data"
+                    or (child / "core").exists()
+                    or (child / "diagnostics").exists()
+            ):
+                shutil.rmtree(child)
+        for filename in ("figure-index.csv", "README.md"):
+            legacy_file = output_dir / filename
+            if legacy_file.exists():
+                legacy_file.unlink()
+
+    generated = []
+    combination_rows = []
+    group_columns = [
+        "target_coverage_pct",
+        "target_budget",
+        "dapro_n1",
+        "crc_control_size",
+    ]
+    for (coverage, budget, n1, crc), combination in frame.groupby(
+            group_columns, sort=True, observed=True
+    ):
+        combination_dir = (
+            output_dir
+            / f"coverage_{numeric_label(coverage)}"
+            / f"budget_{numeric_label(budget)}"
+            / f"n1_{int(n1)}"
+            / f"crc_{int(crc)}"
+        )
+        paths = generate_all_figures(combination, combination_dir, quality)
+        generated.extend(paths)
+        combination_rows.append({
+            "target_coverage": coverage / 100,
+            "target_coverage_pct": coverage,
+            "budget_per_sample": budget,
+            "dapro_n1": int(n1),
+            "crc_control_size": int(crc),
+            "dataset_count": combination["dataset_key"].nunique(),
+            "target_model_count": combination["target_model_key"].nunique(),
+            "source_file_count": combination["source_file"].nunique(),
+            "figure_count": len(paths),
+            "directory": str(combination_dir.relative_to(output_dir)),
+        })
+    output_dir.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame(combination_rows).to_csv(
+        output_dir / "matrix-index.csv", index=False
+    )
+    inventory.to_csv(output_dir / "result-inventory.csv", index=False)
+    return generated
+
+
 def _write_figure_readme(output_dir: Path, manifest: pd.DataFrame) -> None:
     lines = [
         "# Predictive-bound figures",
@@ -970,6 +1185,22 @@ def main() -> None:
             frame, inventory, args.output_dir, args.quality
         )
         print(f"Generated {len(paths)} LPB figures below {args.output_dir}.")
+        return
+    if not args.legacy_config_mode and args.bound_type == "upb":
+        frame, inventory = load_upb_matrix(
+            args.input_dir, experiment_suffix=args.experiment_suffix
+        )
+        print(
+            f"Loaded {len(frame):,} UPB rows from "
+            f"{frame['source_file'].nunique()} files, covering "
+            f"{frame['target_coverage_pct'].nunique()} target coverages, "
+            f"{frame['target_budget'].nunique()} budgets, and "
+            f"{frame['dapro_n1'].nunique()} N1 values."
+        )
+        paths = generate_upb_matrix_figures(
+            frame, inventory, args.output_dir, args.quality
+        )
+        print(f"Generated {len(paths)} UPB figures below {args.output_dir}.")
         return
     frame = load_merged_directory(
         args.input_dir,
