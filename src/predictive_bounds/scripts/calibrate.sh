@@ -67,7 +67,7 @@ BUDGET_PER_SAMPLE_VALUES=(
 
 # All methods and N1/CRC configurations for one dataset/model/budget share one
 # compact directory and are constructed and merged together.
-BASE_EXPERIMENT_SUFFIX="${BASE_EXPERIMENT_SUFFIX:-}"
+BASE_EXPERIMENT_SUFFIX="v3"
 ARCHIVE_PATH=""
 
 SLURM_ACCOUNT="galileo"

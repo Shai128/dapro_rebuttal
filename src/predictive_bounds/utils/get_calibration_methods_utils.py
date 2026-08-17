@@ -132,50 +132,50 @@ def get_unified_bound_calibrations(
                 SoftTargetCRCDAPRO(
                     **common, n1=n1, budget_control_size=control
                 ),
-                InformationGainDAPRO(
-                    **common, n1=n1, projection_budget_margin=0.0
-                ),
-                InformationGainCRCDAPRO(
-                    **common, n1=n1, budget_control_size=control
-                ),
-                ResidualDAPRO(
-                    **common, n1=n1, projection_budget_margin=0.0
-                ),
-                ResidualCRCDAPRO(
-                    **common, n1=n1, budget_control_size=control
-                ),
+                # InformationGainDAPRO(
+                #     **common, n1=n1, projection_budget_margin=0.0
+                # ),
+                # InformationGainCRCDAPRO(
+                #     **common, n1=n1, budget_control_size=control
+                # ),
+                # ResidualDAPRO(
+                #     **common, n1=n1, projection_budget_margin=0.0
+                # ),
+                # ResidualCRCDAPRO(
+                #     **common, n1=n1, budget_control_size=control
+                # ),
             ]
             calibrations.extend(
                 SurvivalCalibrationWithKnownWeights(
                     allocation, taus_range, tau_prior
                 ) for allocation in allocations
             )
-        endpoint_allocations = [EndpointResidualAHTAllocator(
-            conditional_grid,
-            budget_per_sample,
-            taus_range,
-            tau_prior,
-            m_upper_bound,
-            target_kind="lpb",
-            target_alpha=target_alpha,
-        )]
-        endpoint_allocations.extend(
-            EndpointResidualAHTAllocator(
-                conditional_grid,
-                budget_per_sample,
-                taus_range,
-                tau_prior,
-                m_upper_bound,
-                target_kind="lpb",
-                target_alpha=target_alpha,
-                crc_control_size=n1 // 2,
-            ) for n1 in n1_values
-        )
-        calibrations.extend(
-            SurvivalCalibrationWithKnownWeights(
-                allocation, taus_range, tau_prior
-            ) for allocation in endpoint_allocations
-        )
+        # endpoint_allocations = [EndpointResidualAHTAllocator(
+        #     conditional_grid,
+        #     budget_per_sample,
+        #     taus_range,
+        #     tau_prior,
+        #     m_upper_bound,
+        #     target_kind="lpb",
+        #     target_alpha=target_alpha,
+        # )]
+        # endpoint_allocations.extend(
+        #     EndpointResidualAHTAllocator(
+        #         conditional_grid,
+        #         budget_per_sample,
+        #         taus_range,
+        #         tau_prior,
+        #         m_upper_bound,
+        #         target_kind="lpb",
+        #         target_alpha=target_alpha,
+        #         crc_control_size=n1 // 2,
+        #     ) for n1 in n1_values
+        # )
+        # calibrations.extend(
+        #     SurvivalCalibrationWithKnownWeights(
+        #         allocation, taus_range, tau_prior
+        #     ) for allocation in endpoint_allocations
+        # )
         return calibrations
 
     calibrations = [
@@ -201,51 +201,51 @@ def get_unified_bound_calibrations(
                 SoftPrefixEndpointCRCUPBDAPRO(
                     **common, budget_control_size=control
                 ),
-                InformationGainUPBDAPRO(
-                    **common, projection_budget_margin=0.0
-                ),
-                InformationGainCRCUPBDAPRO(
-                    **common, budget_control_size=control
-                ),
-                ResidualUPBDAPRO(
-                    **common, projection_budget_margin=0.0
-                ),
-                ResidualCRCUPBDAPRO(
-                    **common, budget_control_size=control
-                ),
+                # InformationGainUPBDAPRO(
+                #     **common, projection_budget_margin=0.0
+                # ),
+                # InformationGainCRCUPBDAPRO(
+                #     **common, budget_control_size=control
+                # ),
+                # ResidualUPBDAPRO(
+                #     **common, projection_budget_margin=0.0
+                # ),
+                # ResidualCRCUPBDAPRO(
+                #     **common, budget_control_size=control
+                # ),
             ]
             calibrations.extend(
                 SurvivalUPBCalibrationWithKnownWeights(
                     allocation, taus_range, tau_prior
                 ) for allocation in allocations
             )
-        endpoint = [SoftTargetUPBDAPRO(
-            conditional_grid,
-            budget_per_sample,
-            taus_range,
-            tau_prior,
-            m_upper_bound,
-            n1=max(n1_values),
-            target_coverage=float(coverage),
-            projection_budget_margin=0.0,
-        )]
-        endpoint.extend(
-            SoftTargetCRCUPBDAPRO(
-                conditional_grid,
-                budget_per_sample,
-                taus_range,
-                tau_prior,
-                m_upper_bound,
-                n1=n1,
-                budget_control_size=n1 // 2,
-                target_coverage=float(coverage),
-            ) for n1 in n1_values
-        )
-        calibrations.extend(
-            SurvivalUPBCalibrationWithKnownWeights(
-                allocation, taus_range, tau_prior
-            ) for allocation in endpoint
-        )
+        # endpoint = [SoftTargetUPBDAPRO(
+        #     conditional_grid,
+        #     budget_per_sample,
+        #     taus_range,
+        #     tau_prior,
+        #     m_upper_bound,
+        #     n1=max(n1_values),
+        #     target_coverage=float(coverage),
+        #     projection_budget_margin=0.0,
+        # )]
+        # endpoint.extend(
+        #     SoftTargetCRCUPBDAPRO(
+        #         conditional_grid,
+        #         budget_per_sample,
+        #         taus_range,
+        #         tau_prior,
+        #         m_upper_bound,
+        #         n1=n1,
+        #         budget_control_size=n1 // 2,
+        #         target_coverage=float(coverage),
+        #     ) for n1 in n1_values
+        # )
+        # calibrations.extend(
+        #     SurvivalUPBCalibrationWithKnownWeights(
+        #         allocation, taus_range, tau_prior
+        #     ) for allocation in endpoint
+        # )
     return calibrations
 
 
@@ -924,47 +924,47 @@ def get_metric_allocators(
                 budget_control_size=crc_control_size,
                 **target,
             ),
-            InformationGainDAPRO(
-                **common,
-                n1=dapro_n1,
-                projection_budget_margin=0.0,
-                **target,
-            ),
-            InformationGainCRCDAPRO(
-                **common,
-                n1=dapro_n1,
-                budget_control_size=crc_control_size,
-                **target,
-            ),
-            ResidualDAPRO(
-                **common,
-                n1=dapro_n1,
-                projection_budget_margin=0.0,
-                **target,
-            ),
-            ResidualCRCDAPRO(
-                **common,
-                n1=dapro_n1,
-                budget_control_size=crc_control_size,
-                **target,
-            ),
-            EndpointResidualAHTAllocator(
-                conditional_grid,
-                budget_per_sample,
-                taus_range,
-                tau_prior,
-                m_upper_bound,
-                target_kind="metric",
-            ),
-            EndpointResidualAHTAllocator(
-                conditional_grid,
-                budget_per_sample,
-                taus_range,
-                tau_prior,
-                m_upper_bound,
-                target_kind="metric",
-                crc_control_size=crc_control_size,
-            ),
+            # InformationGainDAPRO(
+            #     **common,
+            #     n1=dapro_n1,
+            #     projection_budget_margin=0.0,
+            #     **target,
+            # ),
+            # InformationGainCRCDAPRO(
+            #     **common,
+            #     n1=dapro_n1,
+            #     budget_control_size=crc_control_size,
+            #     **target,
+            # ),
+            # ResidualDAPRO(
+            #     **common,
+            #     n1=dapro_n1,
+            #     projection_budget_margin=0.0,
+            #     **target,
+            # ),
+            # ResidualCRCDAPRO(
+            #     **common,
+            #     n1=dapro_n1,
+            #     budget_control_size=crc_control_size,
+            #     **target,
+            # ),
+            # EndpointResidualAHTAllocator(
+            #     conditional_grid,
+            #     budget_per_sample,
+            #     taus_range,
+            #     tau_prior,
+            #     m_upper_bound,
+            #     target_kind="metric",
+            # ),
+            # EndpointResidualAHTAllocator(
+            #     conditional_grid,
+            #     budget_per_sample,
+            #     taus_range,
+            #     tau_prior,
+            #     m_upper_bound,
+            #     target_kind="metric",
+            #     crc_control_size=crc_control_size,
+            # ),
             SplitFullBudgetOracleAllocator(
                 taus_range, tau_prior, m_upper_bound
             ),
@@ -990,37 +990,37 @@ def get_metric_allocators(
         ),
         # Constant continuation with CRC. It has no policy-fit fold, so the
         # requested N1//2 CRC size is its fully observed control size.
-        ConstantCRCBudgetAllocator(
-            **common,
-            phase1_size=crc_control_size,
-        ),
+        # ConstantCRCBudgetAllocator(
+        #     **common,
+        #     phase1_size=crc_control_size,
+        # ),
         # No-split, model-budget, initial-PMF cumulative-reach optimum.
-        MetricOptimalPMFAllocator(
-            budget_per_sample,
-            taus_range,
-            tau_prior,
-            m_upper_bound,
-        ),
-        # The same variance objective restricted to one shared, time-varying
-        # cumulative-reach schedule.  This is a simple O(NM), no-split,
-        # model-budget alternative to DAPRO.
-        MetricOptimalPooledTimeAllocator(
-            budget_per_sample,
-            taus_range,
-            tau_prior,
-            m_upper_bound,
-        ),
+        # MetricOptimalPMFAllocator(
+        #     budget_per_sample,
+        #     taus_range,
+        #     tau_prior,
+        #     m_upper_bound,
+        # ),
+        # # The same variance objective restricted to one shared, time-varying
+        # # cumulative-reach schedule.  This is a simple O(NM), no-split,
+        # # model-budget alternative to DAPRO.
+        # MetricOptimalPooledTimeAllocator(
+        #     budget_per_sample,
+        #     taus_range,
+        #     tau_prior,
+        #     m_upper_bound,
+        # ),
         # A closed-form current-prefix value/cost index.  CRC selects only one
         # global scale; no score bins or DAPRO coordinate optimization are fit.
-        MetricPrefixNeymanCRCAllocator(
-            conditional_grid,
-            budget_per_sample,
-            taus_range,
-            tau_prior,
-            m_upper_bound,
-            control_size=crc_control_size,
-            row_cost_cap_multiplier=2.0,
-        ),
+        # MetricPrefixNeymanCRCAllocator(
+        #     conditional_grid,
+        #     budget_per_sample,
+        #     taus_range,
+        #     tau_prior,
+        #     m_upper_bound,
+        #     control_size=crc_control_size,
+        #     row_cost_cap_multiplier=2.0,
+        # ),
         # Generalized DAPRO: identical soft-prefix metric objective with an
         # assumption-based projection controller or an independent CRC fold.
         SoftTargetDAPRO(

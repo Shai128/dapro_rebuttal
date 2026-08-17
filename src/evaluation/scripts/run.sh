@@ -56,9 +56,11 @@ DAPRO_CONFIGS=(
 
 # Every budget is run for every DAPRO/CRC configuration.
 BUDGET_PER_SAMPLE_VALUES=(
-  20
-  10
-  5
+  40
+  30
+#  20
+#  10
+#  5
 )
 
 SLURM_ACCOUNT="galileo"
