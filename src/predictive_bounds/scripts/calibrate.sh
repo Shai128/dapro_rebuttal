@@ -58,9 +58,11 @@ DAPRO_CONFIGS=(
 
 # Every budget is run for every DAPRO/CRC configuration above.
 BUDGET_PER_SAMPLE_VALUES=(
-  20
-  10
-  5
+  40
+  30
+#  20
+#  10
+#  5
 )
 
 # All methods and N1/CRC configurations for one dataset/model/budget share one
