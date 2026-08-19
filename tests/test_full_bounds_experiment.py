@@ -31,6 +31,11 @@ from src.predictive_bounds.experiments.full_bounds.summarize import (
     _prefer_latest_compact_lpb_results,
     _save_jpeg,
     load_upb_matrix,
+    normalized_size_variance_frame,
+)
+from src.predictive_bounds.construct_calibrated_bound import (
+    REQUIRED_BOUND_RESULT_COLUMNS,
+    completed_bound_result_exists,
 )
 from src.evaluation.result_matrix import parse_upb_result
 
@@ -67,8 +72,8 @@ def test_full_bounds_matrix_covers_every_dataset_model_and_bound():
 def test_full_bounds_method_profiles_are_exact_and_bound_specific():
     lpb = calibration_names("lpb")
     upb = calibration_names("upb")
-    assert len(lpb) == 7
-    assert len(upb) == 7
+    assert len(lpb) == 5
+    assert len(upb) == 5
     assert LOCALLY_ADAPTIVE not in lpb and LOCALLY_ADAPTIVE not in upb
     assert LPB_DAPRO not in lpb and LPB_DAPRO not in upb
     assert GENERALIZED_LPB_DAPRO in lpb and GENERALIZED_LPB_DAPRO not in upb
@@ -80,7 +85,7 @@ def test_full_bounds_method_profiles_are_exact_and_bound_specific():
     assert GENERALIZED_UPB_DAPRO in upb
     assert GENERALIZED_UPB_CRC_DAPRO in upb
     assert GENERALIZED_UPB_DAPRO not in lpb
-    assert POWER_REACH in lpb and POWER_REACH in upb
+    assert POWER_REACH not in lpb and POWER_REACH not in upb
     assert LPB_ORACLE in lpb and LPB_ORACLE not in upb
     assert UPB_ORACLE in upb and UPB_ORACLE not in lpb
     for oracle in [
@@ -146,8 +151,8 @@ def test_unified_lpb_methods_have_canonical_labels_and_complete_palette():
     labels = [method_display_name(name) for name in names]
 
     assert labels == [
-        "Soft-prefix DAPRO",
-        "Soft-prefix DAPRO + CRC",
+        "DAPRO w/o CRC",
+        "DAPRO",
         "Information-gain + sequential AHT",
         "Residual + sequential AHT + CRC",
         "Endpoint/block + terminal residual AHT + CRC",
@@ -213,3 +218,39 @@ def test_upb_matrix_is_split_by_policy_coverage_and_n1(tmp_path: Path):
         100 * learned["policy_target_coverage"]
         == learned["target_coverage_pct"]
     ).all()
+
+
+def test_bound_result_completion_requires_the_current_metric_schema(
+        tmp_path: Path,
+):
+    result = tmp_path / "seed=0.csv"
+    pd.DataFrame([{"seed": 0, "coverage": 0.9}]).to_csv(
+        result, index=False
+    )
+    assert not completed_bound_result_exists(str(result))
+
+    pd.DataFrame([
+        {column: 0 for column in REQUIRED_BOUND_RESULT_COLUMNS}
+    ]).to_csv(result, index=False)
+    assert completed_bound_result_exists(str(result))
+
+
+def test_bound_size_variance_is_normalized_to_static_per_configuration():
+    common = {
+        "dataset_key": "toxicity",
+        "dataset_display": "Toxicity",
+        "bound_type": "lpb",
+        "target_model": "Qwen",
+        "target_coverage_pct": 90.0,
+        "target_budget": 20.0,
+    }
+    frame = pd.DataFrame([
+        {**common, "method": "Static", "seed": 0, "size": 1.0},
+        {**common, "method": "Static", "seed": 1, "size": 3.0},
+        {**common, "method": "DAPRO", "seed": 0, "size": 2.0},
+        {**common, "method": "DAPRO", "seed": 1, "size": 6.0},
+    ])
+
+    normalized = normalized_size_variance_frame(frame).set_index("method")
+    assert normalized.loc["Static", "normalized_size_variance"] == 1.0
+    assert normalized.loc["DAPRO", "normalized_size_variance"] == 4.0

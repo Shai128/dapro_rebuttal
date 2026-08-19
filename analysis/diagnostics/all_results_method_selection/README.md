@@ -163,3 +163,61 @@ classical restricted mean simultaneously, the next method must be a
 multi-target/vector influence allocation with vector AHT.  That method has not
 yet been evaluated in the saved results and should not be substituted into the
 main empirical claim without a new experiment suite.
+
+## Dataset-level parameter recommendation
+
+Conditioning on the paper's common raw soft-prefix Generalized DAPRO method,
+the following is the recommended one-configuration-per-dataset reduction.  A
+budget comparison is made only on target-model configurations present at both
+budgets.  Within a selected budget, the choice of `N1` uses the mean error and
+checks the worst target-model error so that one target model is not optimized
+at the expense of another.
+
+| Task | Dataset | Budget/sample | Coverage | N1 |
+|---|---|---:|---:|---:|
+| LPB | AutoIF | 10 | 90% | 50 |
+| LPB | Hallucination3 | 10 | 90% | 50 |
+| LPB | Red team | 20 | 90% | 50 |
+| LPB | Toxicity | 20 | 90% | 50 |
+| UPB | AutoIF | 20 | 80% | 50 |
+| UPB | Hallucination3 | 20 | 80% | 100 |
+| UPB | Red team | 20 | 80% | 100 |
+| UPB | Toxicity | 20 | 80% | 100 |
+| Metrics | AutoIF | 20 | n/a | 50 |
+| Metrics | Hallucination3 | 20 | n/a | 100 |
+| Metrics | Red team | 20 | n/a | 50 |
+| Metrics | Toxicity | 20 | n/a | 50 |
+
+The UPB target is not an ordinary tuning parameter: 70%, 80%, and 90% define
+different scientific guarantees.  The table predeclares 80% for every dataset
+as a common main-paper operating point, with 70% and 90% retained as sensitivity
+analyses.  Selecting a different target for each dataset because it happens to
+have lower empirical variance would be outcome-dependent estimand selection.
+At 80%, the selected configurations' mean rates of the sentinel value 201 are
+55.6% (AutoIF), 0.45% (Hallucination3), 26.2% (Red team), and 49.6% (Toxicity),
+which must accompany the variance result because lower variance can arise from
+an increasingly degenerate upper bound.
+
+For UPB sensitivity analyses, the target-specific robust `N1` choices at
+budget 20 are:
+
+| Dataset | N1 at 70% | N1 at 80% | N1 at 90% |
+|---|---:|---:|---:|
+| AutoIF | 50 | 50 | 50 |
+| Hallucination3 | 200 | 100 | 200 |
+| Red team | 200 | 100 | 100 |
+| Toxicity | 100 | 100 | 50 |
+
+AutoIF LPB at budget 10 versus 20 is a near tie: budget 10 has the lower mean
+MSE and uses half the queries, whereas budget 20 has a slightly lower worst-
+target MSE.  Hallucination LPB is exactly saturated at the same bounds and
+coverage under both budgets, so budget 10 is strictly preferable.  Toxicity
+LPB must be compared on the common target models: there budget 20 lowers mean
+coverage variance from `6.2e-5` to `4.4e-5`; the misleading all-file aggregate
+at budget 20 includes two additional, harder target models.
+
+These recommendations optimize empirical accuracy, not a finite-sample budget
+certificate.  Raw soft-prefix expected costs are close to the nominal budgets,
+but can exceed them slightly.  If exact marginal budget validity is mandatory,
+the CRC-controlled method must be selected and reported separately rather than
+silently attaching the raw-method hyperparameters to it.

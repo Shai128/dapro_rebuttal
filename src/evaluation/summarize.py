@@ -32,36 +32,60 @@ ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_INPUT_DIR = ROOT / "results" / "merged_metric_calibration_dfs"
 DEFAULT_OUTPUT_DIR = ROOT / "figures" / "metric_estimation"
 ORACLE_NAME = "oracle_split_full_budget"
-LOG_SCALE_METRICS = {"mean_weight", "mean_a_weighted_weight"}
-ORACLE_REFERENCE_METRICS = {"estimated_cjr", "estimated_rmttu"}
+LOG_SCALE_METRICS = {
+    "mean_weight",
+    "mean_a_weighted_weight",
+    "mean_metric_target_a_weighted_inverse_probability",
+}
+ORACLE_REFERENCE_METRICS = {
+    "estimated_cjr",
+    "estimated_rmttu",
+    "estimated_restricted_mean_time_to_event",
+}
 TARGET_BUDGET_REFERENCE_METRICS = {"budget_per_sample"}
 FULL_OBSERVATION_COST_METRICS = {
     "budget_per_sample",
     "total_budget_utilized",
 }
 INCLUDED_DISPLAY_METHODS = frozenset({
+    "Uncalibrated",
     "Static",
-    "Soft-prefix DAPRO",
-    "Soft-prefix DAPRO + CRC",
-    "Information-gain + sequential AHT",
-    "Information-gain + sequential AHT + CRC",
-    "Residual + sequential AHT",
-    "Residual + sequential AHT + CRC",
-    "Endpoint/block + terminal residual AHT",
-    "Endpoint/block + terminal residual AHT + CRC",
-    "Full budget (calibration)",
+    "DAPRO w/o CRC",
+    "DAPRO",
+    "Oracle",
 })
 
 METRICS = {
     "estimated_cjr": "Estimated unsafe-event rate (%)",
     "abs_diff_cjr": "Absolute unsafe-event-rate error (pp)",
-    "estimated_rmttu": "Estimated restricted mean time to unsafe",
-    "abs_diff_rmttu": "Absolute RMTTU error",
-    "budget_per_sample": "Realized budget per sample",
-    "total_budget_utilized": "Total realized budget",
+    "conditional_variance_unsafe_event_rate_estimator_pp2": (
+        "Exact conditional acquisition variance of event rate (squared pp)"
+    ),
+    "estimated_conditional_variance_unsafe_event_rate_estimator_pp2": (
+        "Observed-only event-rate variance estimate (squared pp)"
+    ),
+    "estimated_rmttu": "Historical mean event time conditional on event",
+    "abs_diff_rmttu": "Absolute conditional-event-time error",
+    "estimated_restricted_mean_time_to_event": (
+        r"Estimated restricted mean $E[\min(T,200)]$"
+    ),
+    "abs_diff_restricted_mean_time_to_event": (
+        "Absolute restricted-mean error"
+    ),
+    "conditional_variance_restricted_mean_time_to_event_estimator": (
+        "Exact conditional acquisition variance of restricted mean"
+    ),
+    "estimated_conditional_variance_restricted_mean_time_to_event_estimator": (
+        "Observed-only variance estimate for restricted mean"
+    ),
+    "budget_per_sample": r"Assigned budget per sample $\sum_i C_i/n$",
+    "total_budget_utilized": r"Total assigned budget $\sum_i C_i$",
+    "actual_event_stopped_budget_per_sample": (
+        "Actually generated turns per sample"
+    ),
     "mean_weight": "Mean inverse-probability weight",
-    "mean_a_weighted_weight": (
-        r"Mean metric-event-weighted weight $A_i/\pi_i$"
+    "mean_metric_target_a_weighted_inverse_probability": (
+        r"Mean metric-target weight $A_i/\pi_i$"
     ),
     "num_events_observed": "Number of unsafe events observed",
     "metric_a_weighted_effective_sample_size": (
@@ -150,6 +174,9 @@ def _oracle_reference(frame: pd.DataFrame, metric: str) -> float:
     reference_column = {
         "estimated_cjr": "full_benchmark_cjr",
         "estimated_rmttu": "full_benchmark_rmttu",
+        "estimated_restricted_mean_time_to_event": (
+            "full_benchmark_restricted_mean_time_to_event"
+        ),
     }.get(metric, metric)
     values = pd.to_numeric(frame[reference_column], errors="coerce").dropna()
     if values.empty:
@@ -175,7 +202,7 @@ def _plot_metric(
     ]
     if metric in FULL_OBSERVATION_COST_METRICS:
         plot_frame = plot_frame[
-            plot_frame["method_display"] != "Full budget (calibration)"
+            ~plot_frame["method_display"].isin({"Uncalibrated", "Oracle"})
         ]
     plot_frame[metric] = pd.to_numeric(plot_frame[metric], errors="coerce")
     plot_frame = plot_frame.dropna(subset=[metric])
@@ -319,12 +346,35 @@ def load_metric_matrix(
         if ORACLE_NAME not in set(frame["allocator_name"]):
             raise ValueError(f"{path} has no {ORACLE_NAME} rows.")
         frame = _normalize_legacy_configuration_rows(frame)
+        for source, destination in {
+            "conditional_variance_unsafe_event_rate_estimator": (
+                "conditional_variance_unsafe_event_rate_estimator_pp2"
+            ),
+            "estimated_conditional_variance_unsafe_event_rate_estimator": (
+                "estimated_conditional_variance_unsafe_event_rate_estimator_pp2"
+            ),
+        }.items():
+            if source in frame:
+                frame[destination] = 10000.0 * pd.to_numeric(
+                    frame[source], errors="coerce"
+                )
         frame["method_display"] = frame["calibration_name"].map(
             method_display_name
         )
         frame = frame[
             frame["method_display"].isin(INCLUDED_DISPLAY_METHODS)
         ].copy()
+        hidden_budget = frame["method_display"].isin({
+            "Uncalibrated",
+            "Oracle",
+        })
+        for column in (
+                "budget_per_sample",
+                "total_budget_utilized",
+                "actual_event_stopped_budget_per_sample",
+        ):
+            if column in frame:
+                frame.loc[hidden_budget, column] = np.nan
         frame["target_model"] = metadata.target_model_display
         frame["target_model_key"] = metadata.target_model
         frame["dataset_key"] = metadata.dataset_key
@@ -417,7 +467,7 @@ def _plot_grouped_metric(
     ]
     if metric in FULL_OBSERVATION_COST_METRICS:
         plot_frame = plot_frame[
-            plot_frame["method_display"] != "Full budget (calibration)"
+            ~plot_frame["method_display"].isin({"Uncalibrated", "Oracle"})
         ]
     plot_frame[metric] = pd.to_numeric(plot_frame[metric], errors="coerce")
     plot_frame = plot_frame.dropna(subset=[metric, "method_display"])
@@ -455,6 +505,9 @@ def _plot_grouped_metric(
         reference_column = {
             "estimated_cjr": "full_benchmark_cjr",
             "estimated_rmttu": "full_benchmark_rmttu",
+            "estimated_restricted_mean_time_to_event": (
+                "full_benchmark_restricted_mean_time_to_event"
+            ),
         }[metric]
         oracle = frame.copy()
         oracle[reference_column] = pd.to_numeric(
@@ -541,7 +594,7 @@ def _plot_grouped_variance(
     ]
     if metric in FULL_OBSERVATION_COST_METRICS:
         plot_frame = plot_frame[
-            plot_frame["method_display"] != "Full budget (calibration)"
+            ~plot_frame["method_display"].isin({"Uncalibrated", "Oracle"})
         ]
     plot_frame[metric] = pd.to_numeric(plot_frame[metric], errors="coerce")
     plot_frame = plot_frame.dropna(

@@ -544,15 +544,43 @@ class SurvivalUPBCalibrationWithKnownWeights(SurvivalUPBCalibration):
             mean_weight = inverse_probability.mean().item()
         if max_weight is None:
             max_weight = inverse_probability.max().item()
-        budget_used = self.allocation_result.total_budget_used
-        if budget_used is None:
-            budget_used = C.sum().item()
+        allocator_reported_budget = self.allocation_result.total_budget_used
+        budget_used = C.to(torch.float64).sum().item()
+        observation_horizon = float(
+            getattr(self.budget_allocator, "m_upper_bound", 200)
+        )
+        actual_event_stopped_budget = torch.minimum(
+            self.t_cal.reshape(-1).to(torch.float64).clamp(
+                max=observation_horizon
+            ),
+            C.reshape(-1).to(torch.float64),
+        ).sum().item()
 
         f_prior = get_prior(f, self.taus_range, self.tau_prior)
+        prior_index = int(
+            torch.abs(self.taus_range - self.tau_prior).argmin().item()
+        )
+        tau_point_one_index = int(
+            torch.abs(self.taus_range - 0.10).argmin().item()
+        )
+        tau_point_one_f = f[:, tau_point_one_index]
+        candidate_propensities = self.allocation_result.candidate_C_probs.to(
+            torch.float64
+        )
+        prior_pi = candidate_propensities[:, prior_index]
+        tau_point_one_pi = candidate_propensities[:, tau_point_one_index]
         prior_infinite = f_prior == UPB_INFINITY_VALUE
         prior_miscovered = (~prior_infinite) & (
             t.reshape(-1).to(f_prior.device) > f_prior
         )
+        tau_point_one_a = (
+            (tau_point_one_f < UPB_INFINITY_VALUE)
+            & (t.reshape(-1).to(tau_point_one_f.device) > tau_point_one_f)
+        ).to(torch.float64)
+        prior_a_weighted = (
+            prior_miscovered.to(torch.float64) / prior_pi
+        )
+        tau_point_one_a_weighted = tau_point_one_a / tau_point_one_pi
         prior_observable = prior_infinite | (
             t.reshape(-1).to(C.device) <= C.reshape(-1)
         )
@@ -581,6 +609,9 @@ class SurvivalUPBCalibrationWithKnownWeights(SurvivalUPBCalibration):
                 10000.0 * exact_path_variance.mean(dim=0) / len(t)
             ),
             "mean_a_weighted_inverse_probability": weighted.mean(dim=0),
+            "mean_calibrated_a_weighted_inverse_probability": (
+                weighted.mean(dim=0)
+            ),
             "variance_a_weighted_inverse_probability": weighted.var(
                 dim=0, unbiased=False
             ),
@@ -593,10 +624,20 @@ class SurvivalUPBCalibrationWithKnownWeights(SurvivalUPBCalibration):
             "prior_observed_both": (
                 prior_miscovered & prior_observable
             ).to(f.dtype).sum().item(),
-            "n_observed_events": ((t <= C) & (t <= 200)).sum().item(),
+            "n_observed_events": (
+                (t <= C) & (t <= observation_horizon)
+            ).sum().item(),
             "n_achieved_q_prior1": prior_observable.to(f.dtype).sum().item(),
             "n_achieved_q_prior2": prior_observable.to(f.dtype).sum().item(),
             "budget_used": budget_used,
+            "reported_assigned_budget_total": budget_used,
+            "reported_assigned_budget_per_sample": budget_used / len(t),
+            "actual_event_stopped_budget_total": actual_event_stopped_budget,
+            "actual_event_stopped_budget_per_sample": (
+                actual_event_stopped_budget / len(t)
+            ),
+            "allocator_reported_budget_total": allocator_reported_budget,
+            "reported_budget_semantics": "sum_assigned_C_i",
             "mean_weight": mean_weight,
             "max_weight": max_weight,
             "upb_infinity_value": UPB_INFINITY_VALUE,
@@ -607,6 +648,19 @@ class SurvivalUPBCalibrationWithKnownWeights(SurvivalUPBCalibration):
                 "sequential": "sequential_augmented_horvitz_thompson",
             }[estimator_kind],
             "upb_exact_variance_diagnostic_kind": exact_variance_kind,
+            "mean_prior_a_weighted_inverse_probability": (
+                prior_a_weighted.mean().item()
+            ),
+            "variance_prior_a_weighted_inverse_probability": (
+                prior_a_weighted.var(unbiased=False).item()
+            ),
+            "mean_tau_0p10_a_weighted_inverse_probability": (
+                tau_point_one_a_weighted.mean().item()
+            ),
+            "variance_tau_0p10_a_weighted_inverse_probability": (
+                tau_point_one_a_weighted.var(unbiased=False).item()
+            ),
+            "tau_0p10_target_a_rate": tau_point_one_a.mean().item(),
             **indexed,
             **additional,
         }

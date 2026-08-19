@@ -126,6 +126,32 @@ def _make_common_acquisition_uniforms(
 UPB_INFINITY_VALUE = 201
 
 
+REQUIRED_BOUND_RESULT_COLUMNS = frozenset({
+    "seed",
+    "calibration_name",
+    "target_coverage",
+    "coverage",
+    "coverage_difference",
+    "absolute_coverage_difference",
+    "size",
+    "mean_calibrated_a_weighted_inverse_probability",
+    "mean_prior_a_weighted_inverse_probability",
+    "mean_tau_0p10_a_weighted_inverse_probability",
+    "n_observed_events",
+})
+
+
+def completed_bound_result_exists(path: str) -> bool:
+    """Return whether a saved per-method file has the current result schema."""
+    if not os.path.exists(path):
+        return False
+    try:
+        columns = set(pd.read_csv(path, nrows=0).columns)
+    except (OSError, ValueError, pd.errors.ParserError):
+        return False
+    return REQUIRED_BOUND_RESULT_COLUMNS.issubset(columns)
+
+
 def compute_metrics_bound(bound: torch.Tensor, t_tilde: torch.Tensor, bound_type: str):
     if bound_type == 'lpb':
         coverage_rate = (t_tilde.unsqueeze(1) >= bound).float().mean(dim=0)
@@ -193,7 +219,7 @@ def run_one_experiment(experiments_name, seed, calibration, x_cal, t_tilde_cal, 
             dir_path = get_tmp_upb_calibration_result_path(experiments_name, calibration.name)
 
         save_path = os.path.join(f"{dir_path}", f"seed={seed}.csv")
-        if os.path.exists(save_path) and skip_existing:
+        if skip_existing and completed_bound_result_exists(save_path):
             return
 
         effective_policy_seed = (
@@ -257,9 +283,20 @@ def run_one_experiment(experiments_name, seed, calibration, x_cal, t_tilde_cal, 
         else:
             target_coverage = {f'target_coverage_{i}': target_taus_list[i] for i in range(len(target_taus_list))}
 
+        target_coverage_tensor = torch.tensor(
+            [
+                (1.0 - value) if bound_type == "lpb" else value
+                for value in target_taus_list
+            ],
+            dtype=coverage_rate.dtype,
+            device=coverage_rate.device,
+        )
+        coverage_difference = coverage_rate - target_coverage_tensor
         bound_metrics = indexed_tensor_metrics({
             "coverage": coverage_rate,
             "size": length,
+            "coverage_difference": coverage_difference,
+            "absolute_coverage_difference": coverage_difference.abs(),
         })
         if bound_type == "upb":
             bound_metrics.update(indexed_tensor_metrics({
@@ -689,13 +726,17 @@ def get_baseline_calibrations(conditional_grid, budget_per_sample, taus_range, t
                 ))
 
     if bound_type == 'lpb':
-        dummy_calibration = UncalibratedLPBSurvivalCalibration(taus_range)
+        dummy_calibration = UncalibratedLPBSurvivalCalibration(
+            taus_range, tau_prior
+        )
         oracle_calibration = OracleSurvivalCalibration(taus_range, tau_prior)
         all_calibrations: List[SurvivalLPBCalibration] = [dummy_calibration, oracle_calibration]
         all_calibrations.extend([SurvivalCalibrationWithKnownWeights(allocation, taus_range, tau_prior) for
                                  allocation in all_allocations])
     else:
-        dummy_calibration = UncalibratedUPBSurvivalCalibration(taus_range)
+        dummy_calibration = UncalibratedUPBSurvivalCalibration(
+            taus_range, tau_prior
+        )
         oracle_calibration = OracleSurvivalUPBCalibration(
             taus_range, tau_prior
         )

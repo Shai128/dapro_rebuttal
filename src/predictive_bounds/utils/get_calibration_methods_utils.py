@@ -80,6 +80,9 @@ from src.predictive_bounds.budget_allocators.metric_optimal_allocator import (
     MetricPrefixNeymanCRCAllocator,
     MetricOptimalPooledTimeAllocator,
 )
+from src.predictive_bounds.budget_allocators.uncalibrated_metric_allocator import (
+    UncalibratedMetricAllocator,
+)
 from typing import List
 
 
@@ -111,6 +114,7 @@ def get_unified_bound_calibrations(
     )
     if bound_type == "lpb":
         calibrations: list = [
+            UncalibratedLPBSurvivalCalibration(taus_range, tau_prior),
             OracleSurvivalCalibration(taus_range, tau_prior),
             SurvivalCalibrationWithKnownWeights(static, taus_range, tau_prior),
         ]
@@ -179,6 +183,7 @@ def get_unified_bound_calibrations(
         return calibrations
 
     calibrations = [
+        UncalibratedUPBSurvivalCalibration(taus_range, tau_prior),
         OracleSurvivalUPBCalibration(taus_range, tau_prior),
         SurvivalUPBCalibrationWithKnownWeights(static, taus_range, tau_prior),
     ]
@@ -320,7 +325,7 @@ def get_upb_calibrations(
             target_coverage=target_coverage,
         ))
     return [
-        UncalibratedUPBSurvivalCalibration(taus_range),
+        UncalibratedUPBSurvivalCalibration(taus_range, tau_prior),
         OracleSurvivalUPBCalibration(taus_range, tau_prior),
         *[
             SurvivalUPBCalibrationWithKnownWeights(
@@ -765,7 +770,9 @@ def get_baseline_calibrations(
     #                                                    projection=projection, score=score,
     #                                                    score_error_lambda=score_error_lambda))
 
-    dummy_calibration = UncalibratedLPBSurvivalCalibration(taus_range)
+    dummy_calibration = UncalibratedLPBSurvivalCalibration(
+        taus_range, tau_prior
+    )
     all_calibrations: List[SurvivalLPBCalibration] = [dummy_calibration]
     all_calibrations.extend([SurvivalCalibrationWithKnownWeights(allocation, taus_range, tau_prior) for
                              allocation in all_allocations])
@@ -879,12 +886,11 @@ def get_metric_allocators(
 ) -> List[BudgetAllocator]:
     """Return the exact server/local metric-estimation comparison.
 
-    Shared methods are the intentional weighted/unweighted Uniform pair,
-    naive under-cost Static, no-split initial-PMF allocations, and the two
-    full-budget oracle scopes. Configuration-specific methods are Constant +
-    CRC, prefix-Neyman CRC, and soft-prefix Generalized DAPRO with and
-    without CRC. Legacy, Target-A, Definitive, personalized PMF+CRC, and
-    clairvoyant DAPRO oracles are excluded from this production registry.
+    The ``unified_aht`` paper suite contains the initial-PMF Uncalibrated
+    plug-in, Static, soft-prefix Generalized DAPRO with raw zero-margin
+    probabilities, the same DAPRO schedule with an independent CRC
+    controller, and the split full-budget Oracle.  The legacy registry remains
+    available for historical experiments.
     """
     del (
         device,
@@ -909,6 +915,12 @@ def get_metric_allocators(
 
     if method_suite == "unified_aht":
         allocations = [
+            UncalibratedMetricAllocator(
+                conditional_grid,
+                taus_range,
+                tau_prior,
+                m_upper_bound,
+            ),
             OptimizedBudgetAllocator(
                 budget_per_sample, taus_range, tau_prior, m_upper_bound
             ),

@@ -28,6 +28,9 @@ from src.predictive_bounds.utils.utils import (
     resolve_m_upper_bound,
 )
 from src.utils.utils import set_seeds
+from src.predictive_bounds.construct_calibrated_bound import (
+    REQUIRED_BOUND_RESULT_COLUMNS,
+)
 
 # Attempt to import UPB wrapper if it exists in your repository structure
 try:
@@ -61,6 +64,12 @@ def process_calibration(calibration, seed, experiments_name, bound_type):
         df = pd.read_csv(abs_path)
         if "Unnamed: 0" in df.columns:
             df.drop("Unnamed: 0", axis=1, inplace=True)
+        missing = sorted(REQUIRED_BOUND_RESULT_COLUMNS - set(df.columns))
+        if missing:
+            raise ValueError(
+                f"Stale or incomplete result {abs_path}; missing columns: "
+                f"{missing}"
+            )
         return df
     except Exception as error:
         raise RuntimeError(

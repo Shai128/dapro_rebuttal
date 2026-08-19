@@ -7,6 +7,8 @@ import torch
 from src.evaluation.estimate import (
     AllocationEstimationDiagnostics,
     IPCWTrajectorySimulator,
+    RestrictedMeanTimeToUnsafeMetric,
+    TotalBudgetUsed,
     metric_experiment_name,
 )
 from src.predictive_bounds.budget_allocators.DAPRO import TargetAWeightedDAPRO
@@ -43,10 +45,6 @@ def test_metric_registry_contains_exact_requested_comparison():
         "UniformBudgetAllocator",
         "UnweightedUniformBudgetAllocator",
         "optimized",
-        "random_adaptive_optimized_mixture_terminal_floor_0p005_crc",
-        "metric_optimal_pmf_model_budget",
-        "metric_optimal_pooled_time_model_budget",
-        "metric_prefix_neyman_crc_control_100_row_cap_2p00x_budget",
         (
             "dapro_soft_prefix_bins_2_metric_horizon_200_global_0p001_"
             "projection_margin_1p00_n1_200"
@@ -275,6 +273,10 @@ def test_metric_diagnostics_record_requested_seed_level_values():
         metrics["mean_a_weighted_weight"],
         (2 + 4) / 3,
     )
+    np.testing.assert_allclose(
+        metrics["mean_metric_target_a_weighted_inverse_probability"],
+        (2 + 4) / 3,
+    )
     assert metrics["metric_target_a_count"] == 2
     assert metrics["num_trajectories_fully_resolved"] == 2
     assert metrics["total_expected_budget"] == 6.5
@@ -283,4 +285,72 @@ def test_metric_diagnostics_record_requested_seed_level_values():
             "estimated_conditional_variance_unsafe_event_rate_estimator"
         ],
         14 / 9,
+    )
+
+
+def test_reported_metric_budget_is_sum_c_not_event_stopped_cost():
+    class FixedAllocator:
+        name = "fixed"
+
+        def allocate_budget(self, *_args):
+            return BudgetAllocationResult(
+                f=torch.empty(0),
+                C=torch.tensor([4, 4, 1]),
+                C_probs=torch.ones(3),
+                # Allocator historically reported actual event-stopped cost.
+                total_budget_used=7,
+            )
+
+    event_times = torch.tensor([2, 4, 5])
+    prediction = SimpleNamespace(
+        probability_est=torch.empty((3, 4)),
+        quantile_est=torch.empty((3, 1)),
+    )
+    data = IPCWTrajectorySimulator.simulate(
+        FixedAllocator(), None, prediction, event_times, max_time=4
+    )
+    metrics = TotalBudgetUsed().compute(data)
+
+    assert metrics["total_budget_utilized"] == 9
+    assert metrics["budget_per_sample"] == 3
+    assert metrics["actual_event_stopped_budget_total"] == 7
+    assert metrics["allocator_reported_budget_total"] == 7
+    assert metrics["reported_budget_semantics"] == "sum_assigned_C_i"
+
+
+def test_standard_restricted_mean_is_distinct_from_conditional_event_time():
+    class FullHorizonAllocator:
+        name = "full"
+
+        def allocate_budget(self, *_args):
+            return BudgetAllocationResult(
+                f=torch.empty(0),
+                C=torch.tensor([3, 3]),
+                C_probs=torch.ones(2),
+                total_budget_used=6,
+            )
+
+    event_times = torch.tensor([1, 4])
+    prediction = SimpleNamespace(
+        probability_est=torch.empty((2, 3)),
+        quantile_est=torch.empty((2, 1)),
+    )
+    data = IPCWTrajectorySimulator.simulate(
+        FullHorizonAllocator(), None, prediction, event_times, max_time=3
+    )
+    metrics = RestrictedMeanTimeToUnsafeMetric(
+        oracle_rmttu=1.0,
+        oracle_restricted_mean=2.0,
+    ).compute(data)
+
+    assert metrics["estimated_rmttu"] == 1.0
+    assert metrics["estimated_restricted_mean_time_to_event"] == 2.0
+    assert (
+        metrics[
+            "conditional_variance_restricted_mean_time_to_event_estimator"
+        ]
+        == 0.0
+    )
+    assert metrics["historical_rmttu_semantics"] == (
+        "mean_event_time_conditional_on_event"
     )

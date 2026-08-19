@@ -135,6 +135,30 @@ def test_uniform_expected_budget_accounts_for_early_events():
     assert metrics["total_expected_budget_valid"] == 1
 
 
+def test_optimized_static_reports_assigned_c_even_after_early_event():
+    taus, quantiles, event_times, probability_est = _static_inputs()
+    allocator = OptimizedBudgetAllocator(2.0, taus, 0.5, 5)
+    set_seeds(4)
+    result = allocator.allocate_budget(
+        probability_est, None, event_times, quantiles
+    )
+
+    assigned = result.C.to(torch.float64).sum().item()
+    event_stopped = torch.minimum(
+        event_times.reshape(-1).to(torch.float64),
+        result.C.reshape(-1).to(torch.float64),
+    ).sum().item()
+    assert result.total_budget_used == assigned
+    assert result.additional_metrics["reported_assigned_budget_total"] == assigned
+    assert (
+        result.additional_metrics["actual_event_stopped_budget_total"]
+        == event_stopped
+    )
+    assert result.additional_metrics["reported_budget_semantics"] == (
+        "sum_assigned_C_i"
+    )
+
+
 def test_naive_metrics_distinguish_assigned_and_event_stopped_cost():
     taus, quantiles, event_times, probability_est = _static_inputs()
     allocator = NaiveBudgetAllocator(2.0, taus, 0.5)

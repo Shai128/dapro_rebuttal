@@ -1,10 +1,9 @@
 #!/usr/bin/env bash
 # Run and merge the production fixed-benchmark metric comparison.
 #
-# The unified registry contains Static, the split full-budget oracle, and four
-# target-specific schedules (soft-prefix HT, information-gain sequential AHT,
-# residual sequential AHT, endpoint/block terminal-residual AHT), each with
-# raw zero-margin and independent-CRC variants.
+# The unified registry contains the zero-acquisition Uncalibrated model
+# plug-in, Static, soft-prefix DAPRO with raw zero-margin probabilities,
+# soft-prefix DAPRO with independent CRC, and the split full-budget Oracle.
 #
 # Parallelism is across complete experiment configurations, not across seeds.
 # Every estimate.py invocation processes the full configured seed range.
@@ -56,11 +55,8 @@ DAPRO_CONFIGS=(
 
 # Every budget is run for every DAPRO/CRC configuration.
 BUDGET_PER_SAMPLE_VALUES=(
-  40
-  30
-#  20
-#  10
-#  5
+  20
+  10
 )
 
 SLURM_ACCOUNT="galileo"

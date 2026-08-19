@@ -1,9 +1,11 @@
+import pytest
 import torch
 
 from src.predictive_bounds.calibration.sequential_aht import (
     metric_aht_contributions,
     sequential_lower_curve,
 )
+from src.evaluation.estimate import compute_uncalibrated_model_metrics
 from src.predictive_bounds.utils.get_calibration_methods_utils import (
     get_metric_allocators,
     get_unified_bound_calibrations,
@@ -70,14 +72,38 @@ def test_unified_metric_registry_has_only_requested_families():
         crc_control_size=5,
         method_suite="unified_aht",
     )]
-    assert len(names) == 10
-    assert names[0] == "optimized"
+    assert len(names) == 5
+    assert names[0] == "uncalibrated"
+    assert names[1] == "optimized"
     assert names[-1] == "oracle_split_full_budget"
-    assert sum("information_gain_sequential_aht" in name for name in names) == 2
-    assert sum("residual_sequential_aht" in name for name in names) == 2
-    assert sum("endpoint_block_terminal_residual_aht" in name for name in names) == 2
+    assert sum("dapro_soft_prefix" in name for name in names) == 2
+    assert not any("information_gain_sequential_aht" in name for name in names)
+    assert not any("residual_sequential_aht" in name for name in names)
+    assert not any("endpoint_block_terminal_residual_aht" in name for name in names)
     raw_projection = [name for name in names if "projection_margin" in name]
     assert raw_projection and all("projection_margin_0p00" in name for name in raw_projection)
+
+
+def test_uncalibrated_metric_baseline_is_initial_pmf_plugin():
+    metrics = compute_uncalibrated_model_metrics(
+        _grid(4),
+        {
+            "cjr": 0.4,
+            "rmttu": 1.5,
+            "restricted_mean_time_to_event": 1.7,
+        },
+        max_time=2,
+    )
+
+    assert metrics["estimated_cjr"] == pytest.approx(50.0)
+    assert metrics["estimated_rmttu"] == pytest.approx(1.6)
+    assert metrics["estimated_restricted_mean_time_to_event"] == pytest.approx(1.8)
+    assert metrics["budget_per_sample"] == 0.0
+    assert metrics["num_events_observed"] == 0.0
+    assert metrics[
+        "mean_metric_target_a_weighted_inverse_probability"
+    ] == pytest.approx(0.5)
+    assert metrics["uncalibrated_metric_uses_trajectory_labels"] == 0
 
 
 def test_unified_upb_registry_separates_three_policy_targets():
@@ -93,7 +119,7 @@ def test_unified_upb_registry_separates_three_policy_targets():
         target_coverages=(0.70, 0.80, 0.90),
     )
     names = [calibration.name for calibration in calibrations]
-    assert len(names) == len(set(names)) == 26
+    assert len(names) == len(set(names)) == 9
     assert any("coverage_0p70" in name for name in names)
     assert any("coverage_0p80" in name for name in names)
     assert any("coverage_0p90" in name for name in names)

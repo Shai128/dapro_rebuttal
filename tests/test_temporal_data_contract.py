@@ -351,6 +351,7 @@ def test_oracle_metrics_include_events_on_the_final_turn():
 
     assert math.isclose(metrics["cjr"], 2 / 3, rel_tol=1e-7)
     assert math.isclose(metrics["rmttu"], 2.0)
+    assert math.isclose(metrics["restricted_mean_time_to_event"], 7 / 3)
 
 
 class _FirstAcquisition:

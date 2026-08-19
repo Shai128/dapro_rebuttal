@@ -66,6 +66,17 @@ def test_parse_compact_lpb_result_path():
     assert result.dapro_n1 is None
 
 
+def test_parse_current_compact_lpb_result_path_without_lpb_token():
+    path = Path("results/merged_calibration_dfs") / (
+        f"{SETUP}_20_calibration_schema_v1"
+    ) / "all_df.csv"
+    result = parse_lpb_result(path)
+
+    assert result is not None
+    assert result.budget_per_sample == 20
+    assert result.dapro_n1 is None
+
+
 def test_unsuffixed_lpb_result_is_not_part_of_matrix():
     path = Path("results/merged_calibration_dfs") / (
         f"{SETUP}_20.0_3000_0.56_10.0"
@@ -97,26 +108,26 @@ def test_n1_dependent_method_names_have_stable_labels():
     assert method_display_name(
         "calibration_dapro_soft_prefix_bins_2_metric_horizon_200_"
         "global_0p001_projection_margin_1p00_n1_50_allocation"
-    ) == "Generalized DAPRO (soft metric)"
+    ) == "DAPRO w/o CRC"
     assert method_display_name(
         "calibration_dapro_soft_prefix_bins_2_metric_horizon_200_"
         "global_0p001_budget_crc_control_25_row_cap_2p00x_budget_"
         "causal_shared_pav_v1_n1_50_allocation"
-    ) == "Soft-prefix DAPRO + CRC"
+    ) == "DAPRO"
     assert method_display_name(
         "calibration_dapro_soft_prefix_bins_2_lpb_alpha_0p10_"
         "global_0p001_projection_margin_1p00_n1_50_allocation"
-    ) == "Generalized DAPRO (soft LPB)"
+    ) == "DAPRO w/o CRC"
     assert method_display_name(
         "calibration_dapro_soft_prefix_bins_2_lpb_alpha_0p10_"
         "global_0p001_budget_crc_control_25_row_cap_2p00x_budget_"
         "causal_shared_pav_v1_n1_50_allocation"
-    ) == "Generalized DAPRO (soft LPB) + CRC"
+    ) == "DAPRO"
     assert method_display_name(
         "calibration_oracle_split_full_budget_allocation"
-    ) == "Full budget (calibration)"
+    ) == "Oracle"
     assert method_display_name(
         "full_calibration_test_oracle_full_budget_allocation"
-    ) == "Full budget (calibration+test)"
+    ) == "Oracle (calibration+test)"
     assert numeric_label(10.0) == "10"
     assert numeric_label(2.5) == "2p5"

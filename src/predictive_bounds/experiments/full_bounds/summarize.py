@@ -32,7 +32,6 @@ import seaborn as sns
 
 from src.predictive_bounds.experiments.full_bounds.config import (
     METHOD_COLORS,
-    METHOD_DISPLAY,
     METHOD_ORDER,
     TARGET_MODELS,
     UNCALIBRATED,
@@ -69,7 +68,21 @@ BOX_METRICS = {
             r"Mean raw-HT target weight $A_i/\pi_i$ "
             "(not AHT variance)"
         ),
-        "allocation_only": True,
+        "allocation_only": False,
+        "log_scale": True,
+        "group": "core",
+    },
+    "mean_prior_a_weighted_inverse_probability": {
+        "filename": "prior-target-weight.jpg",
+        "ylabel": r"Mean prior-target weight $A_i(q_{\tau_{prior}})/\pi_i$",
+        "allocation_only": False,
+        "log_scale": True,
+        "group": "core",
+    },
+    "mean_tau_0p10_a_weighted_inverse_probability": {
+        "filename": "tau-0p10-target-weight.jpg",
+        "ylabel": r"Mean $\tau=0.1$ target weight $A_i(q_{0.1})/\pi_i$",
+        "allocation_only": False,
         "log_scale": True,
         "group": "core",
     },
@@ -91,6 +104,12 @@ BOX_METRICS = {
         "ylabel": "Absolute coverage difference (pp)",
         "group": "core",
     },
+    "signed_coverage_difference_pct": {
+        "filename": "coverage-difference-signed.jpg",
+        "ylabel": "Coverage minus target (pp)",
+        "zero_line": True,
+        "group": "core",
+    },
     "size": {
         "filename": "bound-value.jpg",
         "ylabel": "Mean predictive-bound value",
@@ -103,10 +122,23 @@ BOX_METRICS = {
     },
     "budget_used_per_sample": {
         "filename": "realized-budget.jpg",
-        "ylabel": "Budget used per sample",
+        "ylabel": r"Assigned budget per sample $\sum_i C_i/n$",
         "reference": "target_budget",
         "allocation_only": True,
         "exclude_oracle": True,
+        "group": "core",
+    },
+    "actual_event_stopped_budget_per_sample": {
+        "filename": "event-stopped-budget.jpg",
+        "ylabel": r"Actually generated turns per sample $\sum_i\min(T_i,C_i)/n$",
+        "allocation_only": True,
+        "exclude_oracle": True,
+        "group": "diagnostics",
+    },
+    "n_observed_events": {
+        "filename": "observed-events.jpg",
+        "ylabel": "Number of observed events",
+        "allocation_only": False,
         "group": "core",
     },
     "total_expected_budget_per_sample": {
@@ -114,6 +146,7 @@ BOX_METRICS = {
         "ylabel": "Expected budget per sample",
         "reference": "target_budget",
         "allocation_only": True,
+        "exclude_oracle": True,
         "group": "diagnostics",
     },
     "max_weight": {
@@ -182,7 +215,12 @@ PLOT_COLUMNS = {
     "coverage",
     "mean_weight",
     "mean_a_weighted_inverse_probability",
+    "mean_calibrated_a_weighted_inverse_probability",
+    "mean_prior_a_weighted_inverse_probability",
+    "mean_tau_0p10_a_weighted_inverse_probability",
     "budget_used",
+    "actual_event_stopped_budget_per_sample",
+    "n_observed_events",
     "max_weight",
     "total_expected_budget_per_sample",
     "a_weighted_effective_sample_size",
@@ -327,9 +365,12 @@ def _prepare_frame(
     frame["target_coverage_pct"] = 100 * config.target_coverage
     frame["target_budget"] = config.budget_per_sample
     frame["coverage_pct"] = 100 * frame["coverage"]
-    frame["coverage_diff_pct"] = (
+    frame["signed_coverage_difference_pct"] = (
         frame["coverage_pct"] - frame["target_coverage_pct"]
-    ).abs()
+    )
+    frame["coverage_diff_pct"] = (
+        frame["signed_coverage_difference_pct"].abs()
+    )
     frame["infinite_bound_rate_pct"] = 100 * frame["infinite_bound_rate"]
     frame["mean_a_weight"] = frame[
         "mean_a_weighted_inverse_probability"
@@ -340,7 +381,6 @@ def _prepare_frame(
     raw = frame["calibration_name"] == UNCALIBRATED
     frame.loc[raw, [
         "mean_weight",
-        "mean_a_weight",
         "budget_used_per_sample",
         "max_weight",
         "total_expected_budget_per_sample",
@@ -517,6 +557,7 @@ def load_lpb_matrix(
         frame["method"] = frame["calibration_name"].map(
             method_display_name
         )
+        frame = frame[frame["method"].isin(METHOD_ORDER)].copy()
         frame = frame[
             ~frame["method"].isin(EXCLUDED_DISPLAY_METHODS)
         ].copy()
@@ -540,9 +581,12 @@ def load_lpb_matrix(
         frame["target_coverage_pct"] = 90.0
         frame["target_budget"] = metadata.budget_per_sample
         frame["coverage_pct"] = 100 * frame["coverage"]
-        frame["coverage_diff_pct"] = (
+        frame["signed_coverage_difference_pct"] = (
             frame["coverage_pct"] - frame["target_coverage_pct"]
-        ).abs()
+        )
+        frame["coverage_diff_pct"] = (
+            frame["signed_coverage_difference_pct"].abs()
+        )
         frame["mean_a_weight"] = frame[
             "mean_a_weighted_inverse_probability"
         ]
@@ -553,7 +597,6 @@ def load_lpb_matrix(
         raw = frame["calibration_name"] == UNCALIBRATED
         frame.loc[raw, [
             "mean_weight",
-            "mean_a_weight",
             "budget_used_per_sample",
             "max_weight",
             "total_expected_budget_per_sample",
@@ -662,9 +705,12 @@ def load_upb_matrix(
             frame["target_coverage_pct"] = 100 * target_coverage
             frame["target_budget"] = metadata.budget_per_sample
             frame["coverage_pct"] = 100 * frame["coverage"]
-            frame["coverage_diff_pct"] = (
+            frame["signed_coverage_difference_pct"] = (
                 frame["coverage_pct"] - frame["target_coverage_pct"]
-            ).abs()
+            )
+            frame["coverage_diff_pct"] = (
+                frame["signed_coverage_difference_pct"].abs()
+            )
             frame["infinite_bound_rate_pct"] = (
                 100 * frame["infinite_bound_rate"]
             )
@@ -734,6 +780,34 @@ def coverage_variance_frame(frame: pd.DataFrame) -> pd.DataFrame:
         .var(ddof=1)
         .rename(columns={"coverage_pct": "coverage_variance_pp2"})
     )
+
+
+def normalized_size_variance_frame(frame: pd.DataFrame) -> pd.DataFrame:
+    """Return across-split bound-size variance normalized to Static=1."""
+    keys = [
+        "dataset_key",
+        "dataset_display",
+        "bound_type",
+        "target_model",
+        "target_coverage_pct",
+        "target_budget",
+    ]
+    variance = (
+        frame.groupby(keys + ["method"], observed=True, as_index=False)["size"]
+        .var(ddof=1)
+        .rename(columns={"size": "size_variance"})
+    )
+    static = variance.loc[
+        variance["method"] == "Static", keys + ["size_variance"]
+    ].rename(columns={"size_variance": "static_size_variance"})
+    variance = variance.merge(static, on=keys, how="left", validate="many_to_one")
+    positive = variance["static_size_variance"] > 0
+    variance["normalized_size_variance"] = np.where(
+        positive,
+        variance["size_variance"] / variance["static_size_variance"],
+        np.nan,
+    )
+    return variance
 
 
 def _ordered_present(values: pd.Series, order: tuple[str, ...]) -> list[str]:
@@ -836,7 +910,7 @@ def _plot_box_metric(
         ~plot_frame["method"].isin(EXCLUDED_DISPLAY_METHODS)
     ]
     if specification.get("allocation_only"):
-        plot_frame = plot_frame[plot_frame["method"] != "Raw"]
+        plot_frame = plot_frame[plot_frame["method"] != "Uncalibrated"]
     if specification.get("exclude_oracle"):
         plot_frame = plot_frame[plot_frame["method"] != "Oracle"]
     hue_order = _ordered_present(plot_frame["method"], METHOD_ORDER)
@@ -875,6 +949,10 @@ def _plot_box_metric(
                 values[0], color="#c62828", linestyle="--", linewidth=1.8,
                 label="Target",
             )
+    if specification.get("zero_line"):
+        axis.axhline(
+            0.0, color="#c62828", linestyle="--", linewidth=1.8
+        )
     _style_axis(axis, specification["ylabel"])
     dataset_name = str(plot_frame["dataset_display"].iloc[0])
     context = ""
@@ -934,6 +1012,50 @@ def _plot_coverage_variance(
     return variance
 
 
+def _plot_normalized_size_variance(
+        frame: pd.DataFrame,
+        path: Path,
+        quality: str,
+) -> pd.DataFrame:
+    variance = normalized_size_variance_frame(
+        frame[~frame["method"].isin(EXCLUDED_DISPLAY_METHODS)]
+    ).dropna(subset=["normalized_size_variance", "method"])
+    if variance.empty:
+        return variance
+    hue_order = _ordered_present(variance["method"], METHOD_ORDER)
+    target_order = _ordered_present(
+        variance["target_model"], TARGET_MODEL_ORDER
+    )
+    figure, axis = plt.subplots(figsize=(11.5, 5.8))
+    sns.barplot(
+        data=variance,
+        x="target_model",
+        y="normalized_size_variance",
+        hue="method",
+        order=target_order,
+        hue_order=hue_order,
+        palette=_method_palette(hue_order),
+        errorbar=None,
+        ax=axis,
+    )
+    axis.axhline(1.0, color="#1f77b4", linestyle="--", linewidth=1.4)
+    _style_axis(axis, "Bound-size variance (Static normalized to 1)")
+    dataset_name = str(variance["dataset_display"].iloc[0])
+    context = ""
+    if "plot_context" in frame:
+        values = frame["plot_context"].dropna().unique()
+        if len(values) == 1:
+            context = f" ({values[0]})"
+    figure.suptitle(
+        f"{dataset_name}: normalized bound-size variance{context}", y=0.995
+    )
+    _place_legend(axis, figure)
+    figure.tight_layout(rect=(0, 0, 1, 0.72))
+    _save_jpeg(figure, path, quality)
+    plt.close(figure)
+    return variance
+
+
 def generate_all_figures(
         frame: pd.DataFrame,
         output_dir: Path,
@@ -945,6 +1067,7 @@ def generate_all_figures(
     generated = []
     manifest_rows = []
     variance_frames = []
+    size_variance_frames = []
     for dataset_key, dataset_frame in frame.groupby(
             "dataset_key", sort=False, observed=True
     ):
@@ -982,12 +1105,49 @@ def generate_all_figures(
             "label": "Coverage variance",
             "path": variance_path.relative_to(output_dir).as_posix(),
         })
+        size_variance_path = (
+            output_dir / dataset_key / "core" / "size-variance-normalized.jpg"
+        )
+        size_variance = _plot_normalized_size_variance(
+            dataset_frame,
+            size_variance_path,
+            quality,
+        )
+        if not size_variance.empty:
+            size_variance_frames.append(size_variance)
+            generated.append(size_variance_path)
+            manifest_rows.append({
+                "dataset": dataset_key,
+                "group": "core",
+                "metric": "normalized_size_variance",
+                "label": "Bound-size variance (Static=1)",
+                "path": size_variance_path.relative_to(output_dir).as_posix(),
+            })
 
     data_dir = output_dir / "data"
     data_dir.mkdir(parents=True, exist_ok=True)
     frame.to_csv(data_dir / "plot-data.csv", index=False)
     pd.concat(variance_frames, ignore_index=True).to_csv(
         data_dir / "coverage-variances.csv", index=False
+    )
+    size_variance_output = (
+        pd.concat(size_variance_frames, ignore_index=True)
+        if size_variance_frames
+        else pd.DataFrame(columns=[
+            "dataset_key",
+            "dataset_display",
+            "bound_type",
+            "target_model",
+            "target_coverage_pct",
+            "target_budget",
+            "method",
+            "size_variance",
+            "static_size_variance",
+            "normalized_size_variance",
+        ])
+    )
+    size_variance_output.to_csv(
+        data_dir / "size-variances-normalized.csv", index=False
     )
     manifest = pd.DataFrame(manifest_rows)
     manifest["size_kib"] = [
@@ -1123,6 +1283,7 @@ def _write_figure_readme(output_dir: Path, manifest: pd.DataFrame) -> None:
         "",
         "- [Seed-level plot data](data/plot-data.csv)",
         "- [Coverage variances](data/coverage-variances.csv)",
+        "- [Static-normalized size variances](data/size-variances-normalized.csv)",
         "- [Machine-readable figure index](figure-index.csv)",
         "",
     ])

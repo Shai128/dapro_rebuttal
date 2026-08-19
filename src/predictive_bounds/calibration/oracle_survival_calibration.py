@@ -110,7 +110,9 @@ class OracleSurvivalCalibration(SurvivalLPBCalibration):
         prior_observed_f_lower_c = (f_prior.squeeze() <= C.squeeze()).float().sum().item()
         prior_observed_both = (
                 (f_prior.squeeze() <= C.squeeze()) & (t.squeeze() < f_prior.squeeze())).float().sum().item()
-        n_observed_events = (C.squeeze() >= t).float().sum().item()
+        n_observed_events = (
+            (C.squeeze() >= t) & (t.reshape(-1) <= 200)
+        ).float().sum().item()
         n_achieved_q_prior1 = (C.squeeze() >= f_prior).float().sum().item()
         n_achieved_q_prior2 = (C.squeeze() > f_prior).float().sum().item()
 
@@ -132,6 +134,16 @@ class OracleSurvivalCalibration(SurvivalLPBCalibration):
             latent_a.to(torch.float64)
             * inverse_probability.reshape(-1, 1)
         )
+        prior_a = (
+            t.reshape(-1) < get_prior(
+                f, self.taus_range, self.tau_prior
+            ).reshape(-1)
+        ).to(torch.float64)
+        tau_point_one_a = (
+            t.reshape(-1) < get_prior(
+                f, self.taus_range, 0.10
+            ).reshape(-1)
+        ).to(torch.float64)
         selected_f_observed = (
             calibrated_test_quantile_est
             <= C.reshape(-1, 1)
@@ -149,6 +161,8 @@ class OracleSurvivalCalibration(SurvivalLPBCalibration):
             "mean_a_weighted_inverse_probability_minus_one":
                 torch.zeros_like(a_inverse_probability.mean(dim=0)),
             "mean_a_weighted_inverse_probability":
+                a_inverse_probability.mean(dim=0),
+            "mean_calibrated_a_weighted_inverse_probability":
                 a_inverse_probability.mean(dim=0),
             "variance_a_weighted_inverse_probability":
                 a_inverse_probability.var(dim=0, unbiased=False),
@@ -168,6 +182,13 @@ class OracleSurvivalCalibration(SurvivalLPBCalibration):
             'budget_used': budget_used,
             'mean_weight': mean_weight,
             'max_weight': max_weight,
+            'mean_prior_a_weighted_inverse_probability': (
+                prior_a.mean().item()
+            ),
+            'mean_tau_0p10_a_weighted_inverse_probability': (
+                tau_point_one_a.mean().item()
+            ),
+            'tau_0p10_target_a_rate': tau_point_one_a.mean().item(),
             **indexed_metrics,
             **additional_metrics
         }
@@ -260,15 +281,29 @@ class OracleSurvivalUPBCalibration(SurvivalUPBCalibration):
         positions = self._selected_positions(target_taus)
         selected_f = f[:, positions]
         infinite = selected_f == 201
+        # The UPB allocation target is miscoverage, A_i(f)=1{T_i>f_i},
+        # rather than the complementary coverage indicator.
         latent_a = (
-            (t.reshape(-1, 1) <= selected_f)
+            (t.reshape(-1, 1) > selected_f)
             & ~infinite
         )
         a_weight = latent_a.to(torch.float64)
+        f_prior = get_prior(f, self.taus_range, self.tau_prior)
+        tau_point_one_f = get_prior(f, self.taus_range, 0.10)
+        prior_a = (
+            (f_prior < 201) & (t.reshape(-1) > f_prior)
+        ).to(torch.float64)
+        tau_point_one_a = (
+            (tau_point_one_f < 201)
+            & (t.reshape(-1) > tau_point_one_f)
+        ).to(torch.float64)
         indexed_metrics = indexed_tensor_metrics({
             "mean_a_weighted_inverse_probability_minus_one":
                 torch.zeros_like(a_weight.mean(dim=0)),
             "mean_a_weighted_inverse_probability": a_weight.mean(dim=0),
+            "mean_calibrated_a_weighted_inverse_probability": (
+                a_weight.mean(dim=0)
+            ),
             "variance_a_weighted_inverse_probability":
                 a_weight.var(dim=0, unbiased=False),
             "all_observed_jailbreaks": latent_a.to(f.dtype).sum(dim=0),
@@ -289,6 +324,14 @@ class OracleSurvivalUPBCalibration(SurvivalUPBCalibration):
             "mean_weight": 1.0,
             "max_weight": 1.0,
             "variance_weight": 0.0,
+            "n_observed_events": (t.reshape(-1) <= 200).sum().item(),
+            "mean_prior_a_weighted_inverse_probability": (
+                prior_a.mean().item()
+            ),
+            "mean_tau_0p10_a_weighted_inverse_probability": (
+                tau_point_one_a.mean().item()
+            ),
+            "tau_0p10_target_a_rate": tau_point_one_a.mean().item(),
             **indexed_metrics,
             **extra,
         }

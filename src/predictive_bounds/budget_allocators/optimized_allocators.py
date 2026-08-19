@@ -39,10 +39,15 @@ class OptimizedBudgetAllocator(BudgetAllocator):
         C_probs = torch.Tensor(C_probs).to(device)
 
         C = sample_c(C_probs, prior_quantile_est)
-        total_budget_used = torch.minimum(
+        actual_event_stopped_budget = torch.minimum(
             t.reshape(-1),
             C.reshape(-1).to(t.dtype),
         ).sum().item()
+        # The paper reports the budget assigned by Static, sum_i C_i.  This
+        # deliberately does not refund the unused suffix when T_i < C_i.
+        # Preserve the actually generated/event-stopped cost as a separate
+        # diagnostic so the two semantics cannot be confused downstream.
+        total_budget_used = C.to(torch.float64).sum().item()
         probabilities = C_probs.reshape(-1).to(torch.float64)
         executed_horizons = prior_quantile_est.reshape(-1).to(torch.float64)
         solver_horizons = trimmed_prior_quantile_est.reshape(-1).to(
@@ -74,6 +79,17 @@ class OptimizedBudgetAllocator(BudgetAllocator):
             "static_expected_assigned_horizon_per_sample": (
                 expected_assigned_horizons.mean().item()
             ),
+            "reported_assigned_budget_total": total_budget_used,
+            "reported_assigned_budget_per_sample": (
+                total_budget_used / len(probabilities)
+            ),
+            "actual_event_stopped_budget_total": (
+                actual_event_stopped_budget
+            ),
+            "actual_event_stopped_budget_per_sample": (
+                actual_event_stopped_budget / len(probabilities)
+            ),
+            "reported_budget_semantics": "sum_assigned_C_i",
             "optimization_constraint_expected_horizon_total": (
                 solver_expected_assigned_horizons.sum().item()
             ),

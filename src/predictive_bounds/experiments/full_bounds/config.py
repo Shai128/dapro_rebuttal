@@ -262,20 +262,15 @@ GLOBAL_DAPRO_ORACLE = (
 )
 
 METHOD_ORDER = (
+    "Uncalibrated",
     "Static",
-    "Soft-prefix DAPRO",
-    "Soft-prefix DAPRO + CRC",
-    "Information-gain + sequential AHT",
-    "Information-gain + sequential AHT + CRC",
-    "Residual + sequential AHT",
-    "Residual + sequential AHT + CRC",
-    "Endpoint/block + terminal residual AHT",
-    "Endpoint/block + terminal residual AHT + CRC",
+    "DAPRO w/o CRC",
+    "DAPRO",
     "Oracle",
 )
 
 METHOD_DISPLAY = {
-    UNCALIBRATED: "Raw",
+    UNCALIBRATED: "Uncalibrated",
     LPB_ORACLE: "Oracle",
     UPB_ORACLE: "Oracle",
     STATIC: "Static",
@@ -288,19 +283,20 @@ METHOD_DISPLAY = {
     LEGACY_CRC_DAPRO: "Legacy DAPRO + CRC",
     TARGET_A_CRC_DAPRO: "Target-A DAPRO + CRC",
     LPB_DAPRO: "DAPRO + CRC",
-    GENERALIZED_LPB_DAPRO: "Generalized DAPRO (soft LPB)",
-    GENERALIZED_LPB_CRC_DAPRO: "Generalized DAPRO (soft LPB) + CRC",
-    GENERALIZED_UPB_DAPRO: "Generalized DAPRO (soft UPB)",
-    GENERALIZED_UPB_CRC_DAPRO: "Generalized DAPRO (soft UPB) + CRC",
+    GENERALIZED_LPB_DAPRO: "DAPRO w/o CRC",
+    GENERALIZED_LPB_CRC_DAPRO: "DAPRO",
+    GENERALIZED_UPB_DAPRO: "DAPRO w/o CRC",
+    GENERALIZED_UPB_CRC_DAPRO: "DAPRO",
     SPLIT_DAPRO_ORACLE: "DAPRO Oracle (split)",
     CRC_DAPRO_ORACLE: "DAPRO Oracle + CRC",
     GLOBAL_DAPRO_ORACLE: "DAPRO Oracle (global)",
 }
 
 METHOD_COLORS = {
+    "Uncalibrated": "#7f7f7f",
     "Static": "#1f77b4",
-    "Soft-prefix DAPRO": "#665191",
-    "Soft-prefix DAPRO + CRC": "#d45087",
+    "DAPRO w/o CRC": "#665191",
+    "DAPRO": "#d45087",
     "Information-gain + sequential AHT": "#2ca02c",
     "Information-gain + sequential AHT + CRC": "#006d2c",
     "Residual + sequential AHT": "#ff9f40",
@@ -316,6 +312,8 @@ def method_display_name(calibration_name: str) -> str | None:
     name = str(calibration_name)
     if name in {LPB_ORACLE, UPB_ORACLE}:
         return "Oracle"
+    if name == UNCALIBRATED:
+        return "Uncalibrated"
     if name == STATIC:
         return "Static"
     crc = "budget_crc" in name or "_crc_control_" in name
@@ -330,7 +328,7 @@ def method_display_name(calibration_name: str) -> str | None:
     elif "dapro_soft_prefix_bins_2" in name and (
             "lpb_alpha" in name or "upb_endpoint_dynamic_aht" in name
     ):
-        base = "Soft-prefix DAPRO"
+        return "DAPRO" if crc else "DAPRO w/o CRC"
     else:
         return METHOD_DISPLAY.get(name)
     return f"{base} + CRC" if crc else base
@@ -343,8 +341,6 @@ def calibration_names(bound_type: str) -> tuple[str, ...]:
     methods = [
         UNCALIBRATED,
         STATIC,
-        CONSTANT,
-        POWER_REACH,
         oracle,
     ]
     if bound_type == "lpb":

@@ -153,6 +153,17 @@ def test_requested_inverse_probability_metrics_are_exact():
         2.0,
     )
     np.testing.assert_allclose(
+        metrics["mean_tau_0p10_a_weighted_inverse_probability"],
+        2 / 3,
+    )
+    np.testing.assert_allclose(
+        metrics["mean_calibrated_a_weighted_inverse_probability_0"],
+        metrics["mean_a_weighted_inverse_probability_0"],
+    )
+    assert metrics["budget_used"] == 9
+    assert metrics["actual_event_stopped_budget_total"] == 6
+    assert metrics["reported_budget_semantics"] == "sum_assigned_C_i"
+    np.testing.assert_allclose(
         metrics["mean_a_weighted_inverse_probability_minus_one_0"],
         1 / 3,
     )
@@ -286,6 +297,20 @@ def test_upb_selected_a_weight_metrics_use_the_upper_tail_event():
         metrics["mean_a_weighted_inverse_probability_0"],
         4 / 3,
     )
+    np.testing.assert_allclose(
+        metrics["mean_prior_a_weighted_inverse_probability"],
+        4 / 3,
+    )
+    np.testing.assert_allclose(
+        metrics["mean_tau_0p10_a_weighted_inverse_probability"],
+        5 / 3,
+    )
+    np.testing.assert_allclose(
+        metrics["mean_calibrated_a_weighted_inverse_probability_0"],
+        4 / 3,
+    )
+    assert metrics["budget_used"] == 12
+    assert metrics["actual_event_stopped_budget_total"] == 9
     np.testing.assert_allclose(
         metrics["variance_a_weighted_inverse_probability_0"],
         32 / 9,

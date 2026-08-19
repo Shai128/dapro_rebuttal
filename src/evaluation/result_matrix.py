@@ -34,11 +34,11 @@ _SHORT_COMPACT_METRIC_RE = re.compile(
 )
 _COMPACT_LPB_RE = re.compile(
     r"^(?P<setup>dataset_.+)_(?P<budget>\d+(?:\.\d+)?)_"
-    r"calibration_lpb(?:_.+)?$"
+    r"calibration(?:_lpb)?(?:_.+)?$"
 )
 _COMPACT_UPB_RE = re.compile(
     r"^(?P<setup>dataset_.+)_(?P<budget>\d+(?:\.\d+)?)_"
-    r"calibration_upb(?:_.+)?$"
+    r"calibration(?:_.+)?$"
 )
 
 
@@ -206,13 +206,13 @@ def numeric_label(value: float) -> str:
 def method_display_name(name: str) -> str:
     """Map N1-dependent canonical names to stable plot labels."""
     if name == "uncalibrated":
-        return "Raw"
+        return "Uncalibrated"
     if name in {"oracle_survival_calibration", "oracle_survival_upb_calibration"}:
         return "Oracle"
     if "oracle_split_full_budget" in name:
-        return "Full budget (calibration)"
+        return "Oracle"
     if "oracle_full_budget" in name:
-        return "Full budget (calibration+test)"
+        return "Oracle (calibration+test)"
     if "metric_optimal_pooled_time" in name and "crc_control" in name:
         return "Pooled-Neyman schedule + CRC"
     if "metric_optimal_pooled_time_model_budget" in name:
@@ -228,13 +228,9 @@ def method_display_name(name: str) -> str:
         and "metric_horizon" in name
         and "budget_crc" in name
     ):
-        return "Soft-prefix DAPRO + CRC"
+        return "DAPRO"
     if "dapro_soft_prefix" in name and "metric_horizon" in name:
-        return (
-            "Soft-prefix DAPRO"
-            if "projection_margin_0p00" in name
-            else "Generalized DAPRO (soft metric)"
-        )
+        return "DAPRO w/o CRC"
     if "dapro_information_gain" in name and "metric_m" in name:
         base = "Information-gain + sequential AHT"
         return f"{base} + CRC" if "budget_crc" in name else base
@@ -249,9 +245,9 @@ def method_display_name(name: str) -> str:
         and "lpb_alpha" in name
         and "budget_crc" in name
     ):
-        return "Generalized DAPRO (soft LPB) + CRC"
+        return "DAPRO"
     if "dapro_soft_prefix" in name and "lpb_alpha" in name:
-        return "Generalized DAPRO (soft LPB)"
+        return "DAPRO w/o CRC"
     if "UnweightedUniformBudgetAllocator" in name:
         return "Uniform (unweighted)"
     if "UniformBudgetAllocator" in name:
@@ -291,16 +287,11 @@ def method_display_name(name: str) -> str:
 
 
 METHOD_ORDER = (
+    "Uncalibrated",
     "Static",
-    "Soft-prefix DAPRO",
-    "Soft-prefix DAPRO + CRC",
-    "Information-gain + sequential AHT",
-    "Information-gain + sequential AHT + CRC",
-    "Residual + sequential AHT",
-    "Residual + sequential AHT + CRC",
-    "Endpoint/block + terminal residual AHT",
-    "Endpoint/block + terminal residual AHT + CRC",
-    "Full budget (calibration)",
+    "DAPRO w/o CRC",
+    "DAPRO",
+    "Oracle",
 )
 
 DAPRO_ORACLE_METHODS = frozenset({
@@ -311,10 +302,12 @@ DAPRO_ORACLE_METHODS = frozenset({
 
 
 METHOD_COLORS = {
-    "Raw": "#d62728",
+    "Uncalibrated": "#7f7f7f",
     "Uniform (unweighted)": "#7f7f7f",
     "Uniform + reweighting": "#4c78a8",
     "Static": "#1f77b4",
+    "DAPRO w/o CRC": "#665191",
+    "DAPRO": "#d45087",
     "Constant + CRC": "#9467bd",
     "Local + CRC": "#bcbd22",
     "Metric-optimal PMF": "#003f5c",

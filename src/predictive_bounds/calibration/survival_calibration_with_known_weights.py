@@ -166,15 +166,26 @@ class SurvivalCalibrationWithKnownWeights(SurvivalLPBCalibration):
             mean_weight = inverse_probability.mean().item()
         if max_weight is None:
             max_weight = inverse_probability.max().item()
-        budget_used = self.allocation_result.total_budget_used
-        if budget_used is None:
-            budget_used = C.sum().item()
+        allocator_reported_budget = self.allocation_result.total_budget_used
+        observation_horizon = float(
+            getattr(self.budget_allocator, "m_upper_bound", 200)
+        )
+        # Report assigned acquisition horizons for every finite-budget method.
+        # In particular this is sum_i C_i even when an event occurs before C_i.
+        budget_used = C.to(torch.float64).sum().item()
+        actual_event_stopped_budget = torch.minimum(
+            t.reshape(-1).to(torch.float64).clamp(max=observation_horizon),
+            C.reshape(-1).to(torch.float64),
+        ).sum().item()
         f_prior = get_prior(f, self.taus_range, self.tau_prior)
         prior_observed_jailbreaks = (t.squeeze() < f_prior.squeeze()).float().sum().item()
         prior_observed_f_lower_c = (f_prior.squeeze() <= C.squeeze()).float().sum().item()
         prior_observed_both = (
                 (f_prior.squeeze() <= C.squeeze()) & (t.squeeze() < f_prior.squeeze())).float().sum().item()
-        n_observed_events = (C.squeeze() >= t.squeeze()).float().sum().item()
+        n_observed_events = (
+            (C.squeeze() >= t.squeeze())
+            & (t.squeeze() <= observation_horizon)
+        ).float().sum().item()
         n_achieved_q_prior1 = (C.squeeze() >= f_prior).float().sum().item()
         n_achieved_q_prior2 = (C.squeeze() > f_prior).float().sum().item()
 
@@ -232,6 +243,13 @@ class SurvivalCalibrationWithKnownWeights(SurvivalLPBCalibration):
         mean_prior_a_inverse_probability = (
             prior_a_inverse_probability.mean().item()
         )
+        tau_point_one_f = get_prior(f, self.taus_range, 0.10)
+        tau_point_one_a = (
+            t.reshape(-1) < tau_point_one_f.reshape(-1)
+        ).to(torch.float64)
+        tau_point_one_a_inverse_probability = (
+            tau_point_one_a * inverse_probability
+        )
 
         selected_f_observed = (
             calibrated_test_quantile_est
@@ -258,6 +276,8 @@ class SurvivalCalibrationWithKnownWeights(SurvivalLPBCalibration):
                 mean_a_variance_proxy,
             "mean_a_weighted_inverse_probability":
                 mean_a_inverse_probability,
+            "mean_calibrated_a_weighted_inverse_probability":
+                mean_a_inverse_probability,
             "variance_a_weighted_inverse_probability":
                 variance_a_inverse_probability,
             "conditional_variance_of_ht_mean":
@@ -280,6 +300,14 @@ class SurvivalCalibrationWithKnownWeights(SurvivalLPBCalibration):
             'n_achieved_q_prior1': n_achieved_q_prior1,
             'n_achieved_q_prior2': n_achieved_q_prior2,
             'budget_used': budget_used,
+            'reported_assigned_budget_total': budget_used,
+            'reported_assigned_budget_per_sample': budget_used / len(t),
+            'actual_event_stopped_budget_total': actual_event_stopped_budget,
+            'actual_event_stopped_budget_per_sample': (
+                actual_event_stopped_budget / len(t)
+            ),
+            'allocator_reported_budget_total': allocator_reported_budget,
+            'reported_budget_semantics': 'sum_assigned_C_i',
             'mean_weight': mean_weight,
             'max_weight': max_weight,
             'variance_weight': variance_weight,
@@ -293,6 +321,15 @@ class SurvivalCalibrationWithKnownWeights(SurvivalLPBCalibration):
             'mean_prior_a_weighted_inverse_probability': (
                 mean_prior_a_inverse_probability
             ),
+            'mean_tau_0p10_a_weighted_inverse_probability': (
+                tau_point_one_a_inverse_probability.mean().item()
+            ),
+            'variance_tau_0p10_a_weighted_inverse_probability': (
+                tau_point_one_a_inverse_probability.var(
+                    unbiased=False
+                ).item()
+            ),
+            'tau_0p10_target_a_rate': tau_point_one_a.mean().item(),
             'variance_prior_a_weighted_inverse_probability': (
                 prior_a_inverse_probability.var(unbiased=False).item()
             ),
