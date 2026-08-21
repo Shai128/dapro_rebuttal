@@ -53,11 +53,13 @@ def main():
     model = SentenceTransformer(args.model, device=args.device)
 
     # Configuration mappings
+    attacker_model = 'gemma3_12b_it'
+
     datasets = {
         'toxicity': ['detoxify'],
         'red_team': ['llm-judge', 'llama_guard'],
-        'hallucination': ['llm-judge'],
-        'autoif': ['llm-judge']
+        'hallucination': [f'llm-judge_{attacker_model}'],
+        'autoif': [f'llm-judge_{attacker_model}']
     }
     attacker_name = {
         'toxicity': 'toxic',
@@ -67,7 +69,6 @@ def main():
     }
 
     target_models = ['qwen25_14b_instruct', 'llama_31_8B_instruct', 'mini_phi_4_instruct', 'gemma3_4b_it']
-    attacker_model = 'gemma3_12b_it'
 
     # Build the list of method strings dynamically
     methods = []
