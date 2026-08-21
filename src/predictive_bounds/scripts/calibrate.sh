@@ -7,7 +7,7 @@
 #
 # Each dataset/model/budget job constructs all seeds and then merges them. A
 # failed job is reported but does not stop the other jobs. Both task suites run:
-#   * optimized Static and the full-budget oracle;
+#   * the raw Uncalibrated predictor, optimized Static, and full-budget oracle;
 #   * soft-prefix history-adaptive Generalized DAPRO;
 #   * information-gain schedule + sequential AHT;
 #   * residual schedule + sequential AHT;

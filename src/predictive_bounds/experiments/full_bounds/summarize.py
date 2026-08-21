@@ -59,6 +59,7 @@ BOX_METRICS = {
         "filename": "mean-weight.jpg",
         "ylabel": "Mean inverse-probability weight",
         "allocation_only": True,
+        "exclude_oracle": True,
         "log_scale": True,
         "group": "core",
     },
@@ -68,21 +69,24 @@ BOX_METRICS = {
             r"Mean raw-HT target weight $A_i/\pi_i$ "
             "(not AHT variance)"
         ),
-        "allocation_only": False,
+        "allocation_only": True,
+        "exclude_oracle": True,
         "log_scale": True,
         "group": "core",
     },
     "mean_prior_a_weighted_inverse_probability": {
         "filename": "prior-target-weight.jpg",
         "ylabel": r"Mean prior-target weight $A_i(q_{\tau_{prior}})/\pi_i$",
-        "allocation_only": False,
+        "allocation_only": True,
+        "exclude_oracle": True,
         "log_scale": True,
         "group": "core",
     },
     "mean_tau_0p10_a_weighted_inverse_probability": {
         "filename": "tau-0p10-target-weight.jpg",
-        "ylabel": r"Mean $\tau=0.1$ target weight $A_i(q_{0.1})/\pi_i$",
-        "allocation_only": False,
+        "ylabel": r"Mean $\alpha=0.1$ target weight $A_i(q_{0.1})/\pi_i$",
+        "allocation_only": True,
+        "exclude_oracle": True,
         "log_scale": True,
         "group": "core",
     },
@@ -122,7 +126,7 @@ BOX_METRICS = {
     },
     "budget_used_per_sample": {
         "filename": "realized-budget.jpg",
-        "ylabel": r"Assigned budget per sample $\sum_i C_i/n$",
+        "ylabel": "Budget Used per Sample",
         "reference": "target_budget",
         "allocation_only": True,
         "exclude_oracle": True,
@@ -138,7 +142,8 @@ BOX_METRICS = {
     "n_observed_events": {
         "filename": "observed-events.jpg",
         "ylabel": "Number of observed events",
-        "allocation_only": False,
+        "allocation_only": True,
+        "exclude_oracle": True,
         "group": "core",
     },
     "total_expected_budget_per_sample": {
@@ -376,7 +381,13 @@ def _prepare_frame(
         "mean_a_weighted_inverse_probability"
     ]
     calibration_size = frame["configured_cal_size"].fillna(config.cal_size)
-    frame["budget_used_per_sample"] = frame["budget_used"] / calibration_size
+    assigned_budget = frame["budget_used"] / calibration_size
+    frame["budget_used_per_sample"] = assigned_budget
+    dapro = frame["method"].isin({"DAPRO", "DAPRO w/o CRC"})
+    frame.loc[dapro, "budget_used_per_sample"] = pd.to_numeric(
+        frame.loc[dapro, "actual_event_stopped_budget_per_sample"],
+        errors="coerce",
+    )
 
     raw = frame["calibration_name"] == UNCALIBRATED
     frame.loc[raw, [
@@ -591,8 +602,12 @@ def load_lpb_matrix(
             "mean_a_weighted_inverse_probability"
         ]
         calibration_size = frame["configured_cal_size"].fillna(3000)
-        frame["budget_used_per_sample"] = (
-            frame["budget_used"] / calibration_size
+        assigned_budget = frame["budget_used"] / calibration_size
+        frame["budget_used_per_sample"] = assigned_budget
+        dapro = frame["method"].isin({"DAPRO", "DAPRO w/o CRC"})
+        frame.loc[dapro, "budget_used_per_sample"] = pd.to_numeric(
+            frame.loc[dapro, "actual_event_stopped_budget_per_sample"],
+            errors="coerce",
         )
         raw = frame["calibration_name"] == UNCALIBRATED
         frame.loc[raw, [
@@ -718,8 +733,12 @@ def load_upb_matrix(
                 "mean_a_weighted_inverse_probability"
             ]
             calibration_size = frame["configured_cal_size"].fillna(3000)
-            frame["budget_used_per_sample"] = (
-                frame["budget_used"] / calibration_size
+            assigned_budget = frame["budget_used"] / calibration_size
+            frame["budget_used_per_sample"] = assigned_budget
+            dapro = frame["method"].isin({"DAPRO", "DAPRO w/o CRC"})
+            frame.loc[dapro, "budget_used_per_sample"] = pd.to_numeric(
+                frame.loc[dapro, "actual_event_stopped_budget_per_sample"],
+                errors="coerce",
             )
 
             for n1, crc in configurations:

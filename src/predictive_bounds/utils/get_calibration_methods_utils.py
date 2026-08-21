@@ -80,10 +80,101 @@ from src.predictive_bounds.budget_allocators.metric_optimal_allocator import (
     MetricPrefixNeymanCRCAllocator,
     MetricOptimalPooledTimeAllocator,
 )
+from src.predictive_bounds.budget_allocators.dapro_ablation import (
+    AblationSoftTargetCRCDAPRO,
+    AblationSoftTargetDAPRO,
+)
 from src.predictive_bounds.budget_allocators.uncalibrated_metric_allocator import (
     UncalibratedMetricAllocator,
 )
 from typing import List
+
+
+def get_dapro_ablation_calibrations(
+        conditional_grid,
+        budget_per_sample,
+        taus_range,
+        tau_prior,
+        m_upper_bound,
+        *,
+        ablation_kind: str,
+        dapro_n1_values=(50, 100, 200, 300, 400),
+        score_noise_lambdas=(0.0, 0.1, 0.25, 0.5, 0.75, 1.0),
+        score_noise_seed: int = 314159,
+) -> List[SurvivalLPBCalibration]:
+    """Return Static plus paired raw/CRC DAPRO LPB ablations.
+
+    The caller controls which configurations coexist in an experiment:
+    ``n1`` instantiates every requested Phase-I size, ``score_noise`` every
+    requested lambda at the single supplied N1, and ``budget`` one paired
+    DAPRO configuration at the single supplied N1.  Static is evaluated once
+    and is replicated across x-axis values only by the summarizer.
+    """
+    kind = str(ablation_kind).lower()
+    if kind not in {"n1", "score_noise", "budget"}:
+        raise ValueError("DAPRO ablations support n1, score_noise, or budget.")
+    n1_values = tuple(dict.fromkeys(int(value) for value in dapro_n1_values))
+    if not n1_values or any(value < 2 for value in n1_values):
+        raise ValueError("DAPRO N1 values must be integers of at least two.")
+    lambdas = tuple(dict.fromkeys(float(value) for value in score_noise_lambdas))
+    if not lambdas or any(not 0.0 <= value <= 1.0 for value in lambdas):
+        raise ValueError("Score-noise lambdas must be distinct values in [0, 1].")
+    if kind in {"score_noise", "budget"} and len(n1_values) != 1:
+        raise ValueError(f"The {kind} ablation requires exactly one N1 value.")
+
+    static = OptimizedBudgetAllocator(
+        budget_per_sample, taus_range, tau_prior, m_upper_bound
+    )
+    calibrations: list[SurvivalLPBCalibration] = [
+        SurvivalCalibrationWithKnownWeights(static, taus_range, tau_prior),
+    ]
+    common = dict(
+        conditional_grid=conditional_grid,
+        budget_per_sample=budget_per_sample,
+        taus_range=taus_range,
+        tau_prior=tau_prior,
+        m_upper_bound=m_upper_bound,
+        target_alpha=0.10,
+        score_bin_count=2,
+    )
+    configurations: list[tuple[int, float, float]]
+    if kind == "n1":
+        configurations = [
+            (n1, float(n1), 0.0) for n1 in n1_values
+        ]
+    elif kind == "score_noise":
+        configurations = [
+            (n1_values[0], lam, lam) for lam in lambdas
+        ]
+    else:
+        configurations = [
+            (n1_values[0], float(budget_per_sample), 0.0)
+        ]
+
+    for n1, factor_value, noise_lambda in configurations:
+        raw = AblationSoftTargetDAPRO(
+            **common,
+            n1=n1,
+            projection_budget_margin=0.0,
+            ablation_kind=kind,
+            ablation_value=factor_value,
+            score_noise_lambda=noise_lambda,
+            score_noise_seed=score_noise_seed,
+        )
+        crc = AblationSoftTargetCRCDAPRO(
+            **common,
+            n1=n1,
+            budget_control_size=n1 // 2,
+            ablation_kind=kind,
+            ablation_value=factor_value,
+            score_noise_lambda=noise_lambda,
+            score_noise_seed=score_noise_seed,
+        )
+        calibrations.extend([
+            SurvivalCalibrationWithKnownWeights(raw, taus_range, tau_prior),
+            SurvivalCalibrationWithKnownWeights(crc, taus_range, tau_prior),
+        ])
+    return calibrations
 
 
 def get_unified_bound_calibrations(

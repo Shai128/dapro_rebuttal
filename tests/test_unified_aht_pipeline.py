@@ -120,9 +120,28 @@ def test_unified_upb_registry_separates_three_policy_targets():
     )
     names = [calibration.name for calibration in calibrations]
     assert len(names) == len(set(names)) == 9
+    assert names[0] == "uncalibrated"
+    assert "oracle_survival_upb_calibration" in names
     assert any("coverage_0p70" in name for name in names)
     assert any("coverage_0p80" in name for name in names)
     assert any("coverage_0p90" in name for name in names)
     # UPB CRC intentionally uses the full 200-turn support rather than the
     # shared-PAV cap.
     assert not any("causal_shared_pav" in name for name in names)
+
+
+def test_unified_lpb_registry_includes_uncalibrated_and_oracle():
+    taus = torch.arange(0.01, 1.0, 0.01)
+    calibrations = get_unified_bound_calibrations(
+        _grid(20),
+        2.0,
+        taus,
+        0.56,
+        2,
+        bound_type="lpb",
+        dapro_n1_values=(10,),
+        target_coverages=(0.90,),
+    )
+    names = [calibration.name for calibration in calibrations]
+    assert names[0] == "uncalibrated"
+    assert "oracle_survival_calibration" in names

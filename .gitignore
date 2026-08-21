@@ -149,6 +149,8 @@ plots/
 */plots/
 plots
 */paper_figures
+!src/paper_figures/
+!src/paper_figures/**
 
 
 *.npz

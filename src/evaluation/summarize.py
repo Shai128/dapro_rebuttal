@@ -47,6 +47,13 @@ FULL_OBSERVATION_COST_METRICS = {
     "budget_per_sample",
     "total_budget_utilized",
 }
+ALLOCATION_DIAGNOSTIC_METRICS = FULL_OBSERVATION_COST_METRICS | {
+    "actual_event_stopped_budget_per_sample",
+    "mean_weight",
+    "mean_a_weighted_weight",
+    "mean_metric_target_a_weighted_inverse_probability",
+    "num_events_observed",
+}
 INCLUDED_DISPLAY_METHODS = frozenset({
     "Uncalibrated",
     "Static",
@@ -78,7 +85,7 @@ METRICS = {
     "estimated_conditional_variance_restricted_mean_time_to_event_estimator": (
         "Observed-only variance estimate for restricted mean"
     ),
-    "budget_per_sample": r"Assigned budget per sample $\sum_i C_i/n$",
+    "budget_per_sample": "Budget Used per Sample",
     "total_budget_utilized": r"Total assigned budget $\sum_i C_i$",
     "actual_event_stopped_budget_per_sample": (
         "Actually generated turns per sample"
@@ -99,6 +106,34 @@ METRICS = {
 
 def _display_name(name: str) -> str:
     return method_display_name(name)
+
+
+def _use_realized_dapro_budget(
+    frame: pd.DataFrame, *, method_column: str
+) -> None:
+    """Use assigned Static cost and actual event-stopped DAPRO cost."""
+    if "budget_per_sample" not in frame:
+        return
+    assigned = pd.to_numeric(frame["budget_per_sample"], errors="coerce")
+    frame["assigned_budget_per_sample"] = assigned
+    realized = pd.to_numeric(
+        frame.get(
+            "actual_event_stopped_budget_per_sample",
+            pd.Series(np.nan, index=frame.index),
+        ),
+        errors="coerce",
+    )
+    dapro = frame[method_column].isin({"DAPRO", "DAPRO w/o CRC"})
+    frame.loc[dapro, "budget_per_sample"] = realized.loc[dapro]
+    frame["budget_used_semantics"] = np.where(
+        dapro,
+        "actual_event_stopped_turns_per_sample",
+        np.where(
+            frame[method_column].eq("Static"),
+            "assigned_sum_C_i_per_sample",
+            "not_applicable",
+        ),
+    )
 
 
 def _safe_filename(metric: str) -> str:
@@ -200,7 +235,7 @@ def _plot_metric(
     plot_frame = plot_frame[
         plot_frame["method_display"].isin(INCLUDED_DISPLAY_METHODS)
     ]
-    if metric in FULL_OBSERVATION_COST_METRICS:
+    if metric in ALLOCATION_DIAGNOSTIC_METRICS:
         plot_frame = plot_frame[
             ~plot_frame["method_display"].isin({"Uncalibrated", "Oracle"})
         ]
@@ -282,6 +317,7 @@ def summarize_experiment(
     frame = frame[
         frame["method_display"].isin(INCLUDED_DISPLAY_METHODS)
     ].copy()
+    _use_realized_dapro_budget(frame, method_column="method_display")
     metadata = parse_metric_result(csv_path)
     if metadata is not None:
         frame["target_budget"] = metadata.budget_per_sample
@@ -364,6 +400,7 @@ def load_metric_matrix(
         frame = frame[
             frame["method_display"].isin(INCLUDED_DISPLAY_METHODS)
         ].copy()
+        _use_realized_dapro_budget(frame, method_column="method_display")
         hidden_budget = frame["method_display"].isin({
             "Uncalibrated",
             "Oracle",
@@ -465,7 +502,7 @@ def _plot_grouped_metric(
     plot_frame = plot_frame[
         plot_frame["method_display"].isin(INCLUDED_DISPLAY_METHODS)
     ]
-    if metric in FULL_OBSERVATION_COST_METRICS:
+    if metric in ALLOCATION_DIAGNOSTIC_METRICS:
         plot_frame = plot_frame[
             ~plot_frame["method_display"].isin({"Uncalibrated", "Oracle"})
         ]
@@ -592,7 +629,7 @@ def _plot_grouped_variance(
     plot_frame = plot_frame[
         plot_frame["method_display"].isin(INCLUDED_DISPLAY_METHODS)
     ]
-    if metric in FULL_OBSERVATION_COST_METRICS:
+    if metric in ALLOCATION_DIAGNOSTIC_METRICS:
         plot_frame = plot_frame[
             ~plot_frame["method_display"].isin({"Uncalibrated", "Oracle"})
         ]

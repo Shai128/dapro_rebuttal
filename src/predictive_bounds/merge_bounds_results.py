@@ -13,6 +13,7 @@ from src.predictive_bounds.calibration.oracle_survival_calibration import (
 from src.predictive_bounds.calibration.survival_calibration_with_known_weights import get_gamma, SurvivalCalibrationWithKnownWeights
 from src.predictive_bounds.utils.get_calibration_methods_utils import (
     get_baseline_calibrations,
+    get_dapro_ablation_calibrations,
     get_new_allocation_algorithms,
     get_upb_calibrations,
     get_unified_bound_calibrations,
@@ -81,7 +82,24 @@ def get_calibration_methods(conditional_grid, budget_per_sample, taus_range, tau
                             device, bound_type, dapro_n1_values=(200,),
                             definitive_dapro_margins=(1.0,),
                             method_suite="legacy",
-                            target_coverages=(0.90,)):
+                            target_coverages=(0.90,),
+                            dapro_ablation_kind="n1",
+                            score_noise_lambdas=(0.0, 0.1, 0.25, 0.5, 0.75, 1.0),
+                            score_noise_seed=314159):
+    if method_suite == "dapro_ablation":
+        if bound_type != "lpb":
+            raise ValueError("The DAPRO ablation suite is LPB-only.")
+        return get_dapro_ablation_calibrations(
+            conditional_grid,
+            budget_per_sample,
+            taus_range,
+            tau_prior,
+            m_upper_bound,
+            ablation_kind=dapro_ablation_kind,
+            dapro_n1_values=dapro_n1_values,
+            score_noise_lambdas=score_noise_lambdas,
+            score_noise_seed=score_noise_seed,
+        )
     if method_suite == "unified_aht":
         return get_unified_bound_calibrations(
             conditional_grid,
@@ -135,7 +153,10 @@ def get_calibration_methods(conditional_grid, budget_per_sample, taus_range, tau
 def merge_results(experiments_name, seeds, budget_per_sample, taus_range, tau_prior, m_upper_bound, target_taus_list,
                   allocations, device, bound_type, calibration_names=None,
                   dapro_n1_values=(200,), definitive_dapro_margins=(1.0,),
-                  method_suite="legacy", target_coverages=(0.90,)):
+                  method_suite="legacy", target_coverages=(0.90,),
+                  dapro_ablation_kind="n1",
+                  score_noise_lambdas=(0.0, 0.1, 0.25, 0.5, 0.75, 1.0),
+                  score_noise_seed=314159):
     all_dfs = []
     errors = []
     for seed in tqdm.tqdm(range(seeds[0], seeds[1]), desc="merging csvs"):
@@ -145,7 +166,10 @@ def merge_results(experiments_name, seeds, budget_per_sample, taus_range, tau_pr
                                                    dapro_n1_values=dapro_n1_values,
                                                    definitive_dapro_margins=definitive_dapro_margins,
                                                    method_suite=method_suite,
-                                                   target_coverages=target_coverages)
+                                                   target_coverages=target_coverages,
+                                                   dapro_ablation_kind=dapro_ablation_kind,
+                                                   score_noise_lambdas=score_noise_lambdas,
+                                                   score_noise_seed=score_noise_seed)
         if calibration_names:
             available = {calibration.name for calibration in all_calibrations}
             missing = sorted(set(calibration_names) - available)
@@ -232,8 +256,22 @@ def main():
         help="Optional suffix used to isolate this run from existing results.",
     )
     parser.add_argument(
-        '--method-suite', choices=['legacy', 'unified_aht'], default='legacy'
+        '--method-suite',
+        choices=['legacy', 'unified_aht', 'dapro_ablation'],
+        default='legacy'
     )
+    parser.add_argument(
+        '--dapro-ablation-kind',
+        choices=['n1', 'score_noise', 'budget'],
+        default='n1',
+    )
+    parser.add_argument(
+        '--score-noise-lambdas',
+        type=float,
+        nargs='+',
+        default=[0.0, 0.1, 0.25, 0.5, 0.75, 1.0],
+    )
+    parser.add_argument('--score-noise-seed', type=int, default=314159)
     parser.add_argument('--target-coverages', type=float, nargs='+', default=None)
     parser.add_argument(
         '--calibration-names',
@@ -325,6 +363,19 @@ def main():
     )
     if any(not 0 < value < 1 for value in target_coverages):
         parser.error('--target-coverages values must lie in (0, 1).')
+    if args.method_suite == 'dapro_ablation' and bound_type != 'lpb':
+        parser.error('--method-suite dapro_ablation is available only for LPB.')
+    if any(not 0.0 <= value <= 1.0 for value in args.score_noise_lambdas):
+        parser.error('--score-noise-lambdas values must lie in [0, 1].')
+    if (
+            args.method_suite == 'dapro_ablation'
+            and args.dapro_ablation_kind in {'score_noise', 'budget'}
+            and len(args.dapro_n1_values) != 1
+    ):
+        parser.error(
+            'score_noise and budget ablations require exactly one '
+            '--dapro-n1-values entry.'
+        )
 
     budget_per_sample = args.budget_per_sample
 
@@ -375,7 +426,10 @@ def main():
                       args.definitive_dapro_margins
                   ),
                   method_suite=args.method_suite,
-                  target_coverages=target_coverages)
+                  target_coverages=target_coverages,
+                  dapro_ablation_kind=args.dapro_ablation_kind,
+                  score_noise_lambdas=tuple(args.score_noise_lambdas),
+                  score_noise_seed=args.score_noise_seed)
 
     print("Finished")
 
