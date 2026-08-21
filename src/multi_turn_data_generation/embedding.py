@@ -72,10 +72,10 @@ def main():
     # Build the list of method strings dynamically
     methods = []
     for ds, judges in datasets.items():
-        attacker_name = attacker_name[ds]
+        curr_attacker_name = attacker_name[ds]
         for target in target_models:
             for judge in judges:
-                method_name = f"attack_{attacker_name}_attack_{attacker_model}_lm_target_{target}_judge_{judge}"
+                method_name = f"attack_{curr_attacker_name}_attack_{attacker_model}_lm_target_{target}_judge_{judge}"
                 methods.append({'ds': ds, 'name': method_name})
 
     for entry in methods:
