@@ -67,7 +67,7 @@ def main():
     }
 
     target_models = ['qwen25_14b_instruct', 'llama_31_8B_instruct', 'mini_phi_4_instruct', 'gemma3_4b_it']
-    attacker_model = 'qwen25_14b_instruct'
+    attacker_model = 'gemma3_12b_it'
 
     # Build the list of method strings dynamically
     methods = []
