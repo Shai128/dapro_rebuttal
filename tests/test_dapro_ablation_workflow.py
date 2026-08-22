@@ -137,9 +137,13 @@ def test_summarizer_uses_assigned_static_and_realized_dapro_budget(tmp_path):
     assert data.groupby(["factor_value", "method"])["seed"].nunique().eq(2).all()
 
     output = tmp_path / "figure.jpg"
-    generate_ablation_figure(
+    statistics = generate_ablation_figure(
         data, kind="score_noise", output_path=output, quality="low"
     )
+    assert {"mean", "variance", "std", "count", "metric"}.issubset(
+        statistics.columns
+    )
+    assert statistics["count"].eq(2).all()
     assert output.exists()
     assert output.stat().st_size < 120 * 1024
 

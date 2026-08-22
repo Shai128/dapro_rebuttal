@@ -353,7 +353,9 @@ def run_experiments(cal_size, is_real, device, dataset_name, data_setup, experim
                     target_coverages=(0.90,),
                     dapro_ablation_kind="n1",
                     score_noise_lambdas=(0.0, 0.1, 0.25, 0.5, 0.75, 1.0),
-                    score_noise_seed=314159):
+                    score_noise_seed=314159,
+                    test_dataset_name=None,
+                    test_data_setup=None):
     max_time, t_tilde_cal_test, quantile_est_cal_test, probability_est, conditional_grid, test_size = setup_experiment_data(
         cal_size, is_real, device, dataset_name, data_setup, taus_range,
         m_upper_bound, bound_type=bound_type,
@@ -841,9 +843,26 @@ def main():
         choices=['legacy', 'unified_aht', 'dapro_ablation'],
         default='legacy'
     )
+    shifted_test_data = None
+    if test_dataset_name is not None or test_data_setup is not None:
+        if not test_dataset_name or not test_data_setup:
+            raise ValueError(
+                "Both shifted-test dataset arguments must be provided."
+            )
+        shifted_test_data = setup_experiment_data(
+            cal_size, is_real, device, test_dataset_name, test_data_setup,
+            taus_range, m_upper_bound, bound_type=bound_type,
+        )
+        if shifted_test_data[-1] != test_size:
+            raise ValueError(
+                "Source and shifted-test setups must have the same test size."
+            )
     parser.add_argument(
         '--dapro-ablation-kind',
-        choices=['n1', 'score_noise', 'budget'],
+        choices=[
+            'n1', 'score_noise', 'budget', 'hard_soft',
+            'representation', 'score', 'attacker_shift',
+        ],
         default='n1',
         help='Factor varied by the dedicated LPB DAPRO ablation suite.',
     )
@@ -990,11 +1009,11 @@ def main():
         parser.error('--score-noise-lambdas values must lie in [0, 1].')
     if (
             args.method_suite == 'dapro_ablation'
-            and args.dapro_ablation_kind in {'score_noise', 'budget'}
+            and args.dapro_ablation_kind != 'n1'
             and len(args.dapro_n1_values) != 1
     ):
         parser.error(
-            'score_noise and budget ablations require exactly one '
+            'Every ablation except n1 requires exactly one '
             '--dapro-n1-values entry.'
         )
 

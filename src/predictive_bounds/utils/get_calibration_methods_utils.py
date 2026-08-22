@@ -81,6 +81,8 @@ from src.predictive_bounds.budget_allocators.metric_optimal_allocator import (
     MetricOptimalPooledTimeAllocator,
 )
 from src.predictive_bounds.budget_allocators.dapro_ablation import (
+    AblationHardTargetCRCDAPRO,
+    AblationHardTargetDAPRO,
     AblationSoftTargetCRCDAPRO,
     AblationSoftTargetDAPRO,
 )
@@ -111,15 +113,19 @@ def get_dapro_ablation_calibrations(
     and is replicated across x-axis values only by the summarizer.
     """
     kind = str(ablation_kind).lower()
-    if kind not in {"n1", "score_noise", "budget"}:
-        raise ValueError("DAPRO ablations support n1, score_noise, or budget.")
+    supported = {
+        "n1", "score_noise", "budget", "hard_soft", "representation",
+        "score", "attacker_shift",
+    }
+    if kind not in supported:
+        raise ValueError(f"DAPRO ablations support {sorted(supported)}.")
     n1_values = tuple(dict.fromkeys(int(value) for value in dapro_n1_values))
     if not n1_values or any(value < 2 for value in n1_values):
         raise ValueError("DAPRO N1 values must be integers of at least two.")
     lambdas = tuple(dict.fromkeys(float(value) for value in score_noise_lambdas))
     if not lambdas or any(not 0.0 <= value <= 1.0 for value in lambdas):
         raise ValueError("Score-noise lambdas must be distinct values in [0, 1].")
-    if kind in {"score_noise", "budget"} and len(n1_values) != 1:
+    if kind != "n1" and len(n1_values) != 1:
         raise ValueError(f"The {kind} ablation requires exactly one N1 value.")
 
     static = OptimizedBudgetAllocator(
@@ -137,38 +143,96 @@ def get_dapro_ablation_calibrations(
         target_alpha=0.10,
         score_bin_count=2,
     )
-    configurations: list[tuple[int, float, float]]
+    configurations: list[dict]
     if kind == "n1":
         configurations = [
-            (n1, float(n1), 0.0) for n1 in n1_values
+            dict(n1=n1, value=float(n1), label=f"N1={n1}")
+            for n1 in n1_values
         ]
     elif kind == "score_noise":
         configurations = [
-            (n1_values[0], lam, lam) for lam in lambdas
+            dict(
+                n1=n1_values[0], value=lam, label=f"lambda={lam:g}",
+                noise=lam,
+            )
+            for lam in lambdas
         ]
-    else:
+    elif kind == "budget":
         configurations = [
-            (n1_values[0], float(budget_per_sample), 0.0)
+            dict(
+                n1=n1_values[0], value=float(budget_per_sample),
+                label=f"B={budget_per_sample:g}",
+            )
+        ]
+    elif kind == "hard_soft":
+        configurations = [
+            dict(n1=n1_values[0], value=0.0, label="Hard", hard=True,
+                 global_regularization=0.0),
+            dict(n1=n1_values[0], value=1.0, label="Soft", hard=False,
+                 global_regularization=0.0),
+        ]
+    elif kind == "representation":
+        configurations = [
+            dict(n1=n1_values[0], value=float(k), label=f"K={k}", bins=k)
+            for k in (1, 2, 4, 8)
+        ] + [
+            dict(
+                n1=n1_values[0], value=9.0, label="Continuous",
+                bins=4, smooth=True,
+            )
+        ]
+    elif kind == "score":
+        configurations = [
+            dict(n1=n1_values[0], value=float(index), label=label,
+                 score_kind=score_kind, bins=4)
+            for index, (score_kind, label) in enumerate([
+                ("hazard", "Current hazard"),
+                ("remaining_quantile", "Remaining-time quantile"),
+                ("target_value", "Causal target value"),
+                ("random", "Random"),
+                ("oracle_remaining_time", "Oracle remaining time"),
+            ])
+        ]
+    else:  # attacker_shift
+        configurations = [
+            dict(
+                n1=n1_values[0], value=0.0,
+                label="Source calibration -> shifted test",
+            )
         ]
 
-    for n1, factor_value, noise_lambda in configurations:
-        raw = AblationSoftTargetDAPRO(
+    for configuration in configurations:
+        n1 = int(configuration["n1"])
+        allocator_common = {
             **common,
-            n1=n1,
-            projection_budget_margin=0.0,
-            ablation_kind=kind,
-            ablation_value=factor_value,
-            score_noise_lambda=noise_lambda,
-            score_noise_seed=score_noise_seed,
+            "n1": n1,
+            "score_bin_count": int(configuration.get("bins", 2)),
+            "smooth_score_rank_map": bool(configuration.get("smooth", False)),
+            "global_regularization": float(
+                configuration.get("global_regularization", 0.001)
+            ),
+            "ablation_kind": kind,
+            "ablation_value": float(configuration["value"]),
+            "ablation_label": str(configuration["label"]),
+            "score_kind": str(configuration.get("score_kind", "hazard")),
+            "score_noise_lambda": float(configuration.get("noise", 0.0)),
+            "score_noise_seed": score_noise_seed,
+        }
+        hard = bool(configuration.get("hard", False))
+        raw_class = AblationHardTargetDAPRO if hard else AblationSoftTargetDAPRO
+        crc_class = (
+            AblationHardTargetCRCDAPRO
+            if hard else AblationSoftTargetCRCDAPRO
         )
-        crc = AblationSoftTargetCRCDAPRO(
-            **common,
-            n1=n1,
+        raw = raw_class(
+            **allocator_common,
+            projection_budget_margin=0.0,
+        )
+        crc_kwargs = dict(allocator_common)
+        # Hard and soft CRC wrappers expose the same public control size.
+        crc = crc_class(
+            **crc_kwargs,
             budget_control_size=n1 // 2,
-            ablation_kind=kind,
-            ablation_value=factor_value,
-            score_noise_lambda=noise_lambda,
-            score_noise_seed=score_noise_seed,
         )
         calibrations.extend([
             SurvivalCalibrationWithKnownWeights(raw, taus_range, tau_prior),

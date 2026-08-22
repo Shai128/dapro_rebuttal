@@ -747,6 +747,7 @@ def solve_binned_deployable_policy(
         objective_weights: torch.Tensor | np.ndarray | None,
         n_bins: int,
         objective_masses: torch.Tensor | np.ndarray | None = None,
+        smooth_rank_lookup: bool = False,
 ) -> tuple[np.ndarray, torch.Tensor, torch.Tensor, dict]:
     """Optimize a score-bin policy that deploys without regression.
 
@@ -858,14 +859,55 @@ def solve_binned_deployable_policy(
                 table[bin_index, step] = table[nearest, step]
             table[:, step] = np.maximum.accumulate(table[:, step])
 
-    validation_policy = table[
-        validation_bins,
-        np.arange(width)[None, :],
-    ]
-    deployment_policy = table[
-        deployment_bins,
-        np.arange(width)[None, :],
-    ]
+    if smooth_rank_lookup and n_bins < 2:
+        raise ValueError("A smooth rank lookup requires at least two knots.")
+
+    if smooth_rank_lookup:
+        # Interpolate the optimized monotone table in empirical score-rank
+        # space.  Interpolation is geometric (linear in log continuation),
+        # which preserves positivity and monotonicity.  The empirical CDF and
+        # table are both frozen on the policy-fit fold before deployment.
+        knot_ranks = (np.arange(n_bins, dtype=np.float64) + 0.5) / n_bins
+
+        def smooth_policy(score_matrix: np.ndarray) -> np.ndarray:
+            policy = np.ones((len(score_matrix), width), dtype=np.float64)
+            for step in range(width):
+                active = lengths_np > step
+                if not np.any(active):
+                    continue
+                reference = np.sort(
+                    validation_np[active, step], kind="stable"
+                )
+                left = np.searchsorted(
+                    reference, score_matrix[:, step], side="left"
+                )
+                right = np.searchsorted(
+                    reference, score_matrix[:, step], side="right"
+                )
+                ranks = (left + 0.5 * (right - left)) / len(reference)
+                log_table = np.log(np.clip(
+                    table[:, step], np.finfo(np.float64).tiny, 1.0
+                ))
+                policy[:, step] = np.exp(np.interp(
+                    ranks,
+                    knot_ranks,
+                    log_table,
+                    left=log_table[0],
+                    right=log_table[-1],
+                ))
+            return policy
+
+        validation_policy = smooth_policy(validation_np)
+        deployment_policy = smooth_policy(deployment_np)
+    else:
+        validation_policy = table[
+            validation_bins,
+            np.arange(width)[None, :],
+        ]
+        deployment_policy = table[
+            deployment_bins,
+            np.arange(width)[None, :],
+        ]
     return (
         optimal,
         torch.as_tensor(
@@ -888,6 +930,7 @@ def solve_binned_deployable_policy(
             "direct_score_bin_unique_cutpoints_mean": float(np.mean([
                 len(edges) for edges in cutpoints
             ])),
+            "direct_score_smooth_rank_lookup": int(smooth_rank_lookup),
         },
     )
 

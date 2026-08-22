@@ -262,7 +262,10 @@ def main():
     )
     parser.add_argument(
         '--dapro-ablation-kind',
-        choices=['n1', 'score_noise', 'budget'],
+        choices=[
+            'n1', 'score_noise', 'budget', 'hard_soft',
+            'representation', 'score', 'attacker_shift',
+        ],
         default='n1',
     )
     parser.add_argument(
@@ -369,11 +372,11 @@ def main():
         parser.error('--score-noise-lambdas values must lie in [0, 1].')
     if (
             args.method_suite == 'dapro_ablation'
-            and args.dapro_ablation_kind in {'score_noise', 'budget'}
+            and args.dapro_ablation_kind != 'n1'
             and len(args.dapro_n1_values) != 1
     ):
         parser.error(
-            'score_noise and budget ablations require exactly one '
+            'Every ablation except n1 requires exactly one '
             '--dapro-n1-values entry.'
         )
 

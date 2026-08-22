@@ -1,3 +1,5 @@
+import re
+
 import numpy as np
 
 from src.predictive_bounds.budget_allocators.budget_allocator import (
@@ -461,11 +463,10 @@ class LegacyMeanWeightDAPRO(BudgetAllocator):
             raise ValueError(
                 "Random slack filling requires a Random-anchored policy."
             )
-        risk_compatible_projections = {
-            "direct_time",
-            "direct_bins_2",
-            "direct_bins_4",
-        }
+        direct_bins_match = re.fullmatch(r"direct_bins_([1-9][0-9]*)", projection)
+        risk_compatible_projections = {"direct_time"}
+        if direct_bins_match is not None:
+            risk_compatible_projections.add(projection)
         if (
                 (budget_control_mode is not None
                  or random_anchor_target_fraction is not None)
@@ -515,9 +516,7 @@ class LegacyMeanWeightDAPRO(BudgetAllocator):
             'beta',
             'cumulative_platt',
             'direct_time',
-            'direct_bins_2',
-            'direct_bins_4',
-        ]:
+        ] and direct_bins_match is None:
             raise Exception(f"unknown projection {projection}, must be ir or platt")
         if score not in ['prob', 'quantile']:
             raise Exception(f"unknown projection {score}, must be 'prob', 'quantile'")
@@ -631,6 +630,21 @@ class LegacyMeanWeightDAPRO(BudgetAllocator):
         step = torch.arange(width, device=self.conditional_grid.device)
         return self.conditional_grid[:, step, step]
 
+    def policy_scores_for_allocation(
+            self,
+            quantile_est: torch.Tensor,
+            event_times: torch.Tensor,
+    ) -> torch.Tensor:
+        """Score hook with latent times available to explicit oracle ablations.
+
+        Production policies ignore ``event_times`` and remain predictable.
+        A separate hook avoids weakening the causal signature of
+        :meth:`policy_scores`, while allowing a clearly marked full-information
+        score-quality upper anchor in controlled experiments.
+        """
+        del event_times
+        return self.policy_scores(quantile_est)
+
     def allocate_budget(self, probability_est: torch.Tensor, x: torch.Tensor, t: torch.Tensor,
                         quantile_est: torch.Tensor) -> BudgetAllocationResult:
         device = self.conditional_grid.device
@@ -641,7 +655,7 @@ class LegacyMeanWeightDAPRO(BudgetAllocator):
             quantile_est, self.taus_range, self.tau_prior
         ).clamp(max=T_max_curr)
         if self.score == 'prob':
-            scores = self.policy_scores(quantile_est)
+            scores = self.policy_scores_for_allocation(quantile_est, t)
         elif self.score == 'quantile':
             quantile_counts = quantiles_to_interaction_counts(
                 compute_quantile_survival_time(
@@ -722,10 +736,14 @@ class LegacyMeanWeightDAPRO(BudgetAllocator):
                 - policy_fit_realized_cost_total
             ) / remaining_count_after_fit
         direct_time_projection = self.projection == 'direct_time'
-        direct_bin_count = {
-            'direct_bins_2': 2,
-            'direct_bins_4': 4,
-        }.get(self.projection)
+        direct_bins_match = re.fullmatch(
+            r"direct_bins_([1-9][0-9]*)", self.projection
+        )
+        direct_bin_count = (
+            int(direct_bins_match.group(1))
+            if direct_bins_match is not None
+            else None
+        )
         cumulative_projection = self.projection == 'cumulative_platt'
         if policy_fit_masses is not None and direct_time_projection:
             raise ValueError(
@@ -1109,6 +1127,9 @@ class LegacyMeanWeightDAPRO(BudgetAllocator):
                     solver_policy_fit_weights,
                     direct_bin_count,
                     objective_masses=policy_fit_masses,
+                    smooth_rank_lookup=getattr(
+                        self, "smooth_score_rank_map", False
+                    ),
                 )
                 raw_policy_fit_conditionals = optimal_fit
                 fit_raw_cumulative = p_fit_binned.cumprod(dim=1)
@@ -1454,6 +1475,9 @@ class LegacyMeanWeightDAPRO(BudgetAllocator):
                     solver_policy_fit_weights,
                     direct_bin_count,
                     objective_masses=policy_fit_masses,
+                    smooth_rank_lookup=getattr(
+                        self, "smooth_score_rank_map", False
+                    ),
                 )
                 raw_policy_fit_conditionals = optimal_P
                 projected_probabilities = torch.cat(
@@ -2820,6 +2844,7 @@ class DefinitiveDAPRO(RegularizedTargetAWeightedDAPRO):
             metric_estimation_horizon: int | None = None,
             global_regularization: float = DEFAULT_GLOBAL_REGULARIZATION,
             score_bin_count: int = SCORE_BIN_COUNT,
+            smooth_score_rank_map: bool = False,
             projection_budget_margin: float = (
                 DEFAULT_PROJECTION_BUDGET_MARGIN
             ),
@@ -2831,9 +2856,14 @@ class DefinitiveDAPRO(RegularizedTargetAWeightedDAPRO):
             budget_candidate_count: int = 401,
             risk_candidate_row_cost_cap: float | None = None,
     ):
-        if score_bin_count not in {2, 4}:
-            raise ValueError("`score_bin_count` must be either 2 or 4.")
+        if not isinstance(score_bin_count, int) or score_bin_count < 1:
+            raise ValueError("`score_bin_count` must be a positive integer.")
         self.score_bin_count = int(score_bin_count)
+        self.smooth_score_rank_map = bool(smooth_score_rank_map)
+        if self.smooth_score_rank_map and self.score_bin_count < 2:
+            raise ValueError(
+                "A continuous smooth-rank map requires at least two knots."
+            )
         super().__init__(
             conditional_grid,
             budget_per_sample,
@@ -2875,6 +2905,8 @@ class DefinitiveDAPRO(RegularizedTargetAWeightedDAPRO):
             f"_global_{regularization}"
             f"_projection_margin_{margin}"
         )
+        if self.smooth_score_rank_map:
+            base += "_continuous_rank"
         base += self.budget_control_name_suffix
         return f"{base}_n1_{self.n1}"
 
@@ -2891,6 +2923,9 @@ class DefinitiveDAPRO(RegularizedTargetAWeightedDAPRO):
             "definitive_score_bin_count": self.score_bin_count,
             "definitive_projection_budget_margin": (
                 self.projection_budget_margin
+            ),
+            "definitive_smooth_score_rank_map": int(
+                self.smooth_score_rank_map
             ),
             "definitive_budget_control_mode": (
                 self.budget_control_mode
@@ -2940,6 +2975,8 @@ class SoftTargetDAPRO(DefinitiveDAPRO):
             f"{target}_global_{regularization}"
             f"_projection_margin_{margin}"
         )
+        if self.smooth_score_rank_map:
+            base += "_continuous_rank"
         base += self.budget_control_name_suffix
         return f"{base}_n1_{self.n1}"
 
@@ -3035,6 +3072,8 @@ class DefinitiveCRCDAPRO(DefinitiveDAPRO):
             global_regularization: float = (
                 DefinitiveDAPRO.DEFAULT_GLOBAL_REGULARIZATION
             ),
+            score_bin_count: int = DefinitiveDAPRO.SCORE_BIN_COUNT,
+            smooth_score_rank_map: bool = False,
             terminal_pi_min: float = 0.005,
             budget_candidate_count: int = 401,
             row_cost_cap_multiplier: float | None = (
@@ -3068,6 +3107,8 @@ class DefinitiveCRCDAPRO(DefinitiveDAPRO):
             target_alpha=target_alpha,
             metric_estimation_horizon=metric_estimation_horizon,
             global_regularization=global_regularization,
+            score_bin_count=score_bin_count,
+            smooth_score_rank_map=smooth_score_rank_map,
             projection_budget_margin=0.0,
             terminal_pi_min=terminal_pi_min,
             reach_t_max_is_success=reach_t_max_is_success,
@@ -3142,6 +3183,7 @@ class SoftTargetCRCDAPRO(SoftTargetDAPRO):
                 DefinitiveDAPRO.DEFAULT_GLOBAL_REGULARIZATION
             ),
             score_bin_count: int = DefinitiveDAPRO.SCORE_BIN_COUNT,
+            smooth_score_rank_map: bool = False,
             terminal_pi_min: float = 0.005,
             budget_candidate_count: int = 401,
             row_cost_cap_multiplier: float | None = (
@@ -3176,6 +3218,7 @@ class SoftTargetCRCDAPRO(SoftTargetDAPRO):
             metric_estimation_horizon=metric_estimation_horizon,
             global_regularization=global_regularization,
             score_bin_count=score_bin_count,
+            smooth_score_rank_map=smooth_score_rank_map,
             projection_budget_margin=0.0,
             terminal_pi_min=terminal_pi_min,
             reach_t_max_is_success=reach_t_max_is_success,
@@ -3206,6 +3249,8 @@ class SoftTargetCRCDAPRO(SoftTargetDAPRO):
             f"{target}_global_{regularization}_budget_crc"
             f"_control_{self.budget_control_size}"
         )
+        if self.smooth_score_rank_map:
+            base += "_continuous_rank"
         if self.row_cost_cap_multiplier is not None:
             multiplier = self._format_parameter(
                 self.row_cost_cap_multiplier,

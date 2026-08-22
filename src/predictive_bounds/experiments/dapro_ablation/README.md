@@ -42,3 +42,7 @@ python -m src.predictive_bounds.experiments.dapro_ablation.summarize_paper \
 Figures and their seed-level plotting data are written to
 `figures/paper/ablations`.  In the budget panel, Static is charged its assigned
 `sum(C_i)/n`, while DAPRO is charged actual event-stopped interactions.
+Each panel is a mean line with a shaded plus/minus-one-standard-deviation band
+across splits; the exact mean, variance, SD, and cell count are also written to
+`dapro_ablation_mean_variance.csv`.  Budget ticks remain numeric, with the
+paired budget-to-N1 mapping shown once below the figure to avoid overlap.

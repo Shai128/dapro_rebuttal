@@ -61,22 +61,24 @@ def main():
         'toxicity': 'toxic',
         'red_team': 'default',
         'hallucination': 'hallucination',
-        'autoif': 'autoif_helper'
+        'autoif': 'autoif'
     }
     for attacker_model in attacker_models:
         datasets = {
-            'toxicity': ['detoxify'],
-            'red_team': ['llama_guard', f'llm-judge_{attacker_model}'],
-            'hallucination': [f'llm-judge_{attacker_model}'],
+            # 'toxicity': ['detoxify'],
+            # 'red_team': ['llama_guard', f'llm-judge_{attacker_model}'],
+            # 'hallucination': [f'llm-judge_{attacker_model}'],
             'autoif': [f'llm-judge_{attacker_model}', f'autoif']
         }
-
+        "attack_autoif_helper_attack_qwen25_14b_instruct_lm_target_qwen25_14b_instruct_judge_autoif"
         # Build the list of method strings dynamically
         for ds, judges in datasets.items():
             curr_attacker_name = attacker_name[ds]
             for target in target_models:
                 for judge in judges:
                     method_name = f"attack_{curr_attacker_name}_attack_{attacker_model}_lm_target_{target}_judge_{judge}"
+                    if 'autoif' in method_name:
+                        method_name = f"attack_{curr_attacker_name}_helper_{attacker_model}_lm_target_{target}_judge_{judge}"
                     methods.append({'ds': ds, 'name': method_name})
 
     for entry in methods:
