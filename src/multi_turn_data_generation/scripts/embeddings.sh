@@ -5,4 +5,6 @@ srun -A galileo -p galileo  -c 4 --gres=gpu:1 python -m src.multi_turn_data_gene
 srun -A galileo -p galileo  -c 4 --gres=gpu:1 python -m src.multi_turn_data_generation.embedding --idx-start 6000 --idx-end 8000 &
 srun -A galileo -p galileo  -c 4 --gres=gpu:1 python -m src.multi_turn_data_generation.embedding --idx-start 8000 --idx-end 10000 &
 
+
+
 tar -czf embeddings.tar.gz results/embedding/dataset_red_team/

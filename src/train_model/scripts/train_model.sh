@@ -4,6 +4,20 @@ conda activate torchenv
 
 squeue -u $USER | awk '{print $1}' | tail -n+2 | xargs scancel
 
+srun -A galileo -p galileo  -c 4 --gres=gpu:1 python -m src.train_model.train_model \
+   --dataset-setup attack_toxic_attack_gemma3_12b_it_lm_target_llama_31_8B_instruct_judge_detoxify\
+    --dataset-name dataset_toxicity \
+    --acquisition-strategy naive --last-round-epochs 500\
+   --n-seed 3600 --epochs 2 --device cuda:0 --total-budget 10 --acquire-full-time 0 --data-type real &
+
+
+srun -A galileo -p galileo  -c 4 --gres=gpu:1 python -m src.train_model.train_model \
+   --dataset-setup attack_default_attack_gemma3_12b_it_lm_target_llama_31_8B_instruct_judge_llm-judge_gemma3_12b_it \
+    --dataset-name dataset_red_team \
+    --acquisition-strategy naive --last-round-epochs 500\
+   --n-seed 3600 --epochs 2 --device cuda:0 --total-budget 10 --acquire-full-time 0 --data-type real &
+
+
 
 
 
