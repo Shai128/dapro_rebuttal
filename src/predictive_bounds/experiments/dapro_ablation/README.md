@@ -1,48 +1,52 @@
-# LPB DAPRO ablations
+# DAPRO LPB ablations
 
-This workflow evaluates Static, soft-prefix Generalized DAPRO without CRC,
-and the same DAPRO policy with CRC on the Toxicity/Qwen-to-Qwen setup.  Every
-cell uses 50 paired random calibration/test splits and 90% target coverage.
-
-Run on a Linux/Ubuntu Slurm server:
+Run the complete 50-split suite from the repository root:
 
 ```bash
 bash src/predictive_bounds/experiments/dapro_ablation/scripts/run.sh \
-  --slurm --parallel-jobs 8 --cpu
+  --slurm --parallel-jobs 20 --cpu
 ```
 
-Omit `--cpu` to request the configured GPU resource.  Use `--dry-run` to print
-all commands, or edit the documented configuration block at the top of
-`scripts/run.sh`.
+Omit `--cpu` to request the configured GPU resource. `--local`, `--dry-run`,
+`--available-only`, `--seed-start`, `--seed-end`, and `--experiment-suffix`
+are also supported. A failed configuration is recorded and does not cancel the
+remaining configurations. Each construction job is merged immediately.
 
-The launcher runs:
+The main LPB studies use Toxicity/Qwen2.5-14B, target coverage 90%, budget 20,
+and `N1=50`, except for the pre-existing N1 and budget sweeps:
 
-- `N1`: 50, 100, 200, 300, 400 at budget 20;
-- score noise: lambda = 0, .1, .25, .5, .75, 1 at N1=100 and budget 20;
-- budget: 5, 10, 20, 30, 40, 50 with N1 = 25, 50, 100, 150, 200, 250.
+- hard realized Target-A versus soft model-integrated prefix mass;
+- `K=1,2,4,8` quantile-bin maps and a continuous monotone four-knot rank map;
+- current hazard, remaining-time quantile, causal target value, random rank,
+  and a clearly tagged noncausal oracle remaining-time score;
+- Gemma-to-Qwen attacker shifts for Red Team and Toxicity;
+- the existing N1, score-noise, and budget sweeps.
 
-The score corruption is
+Every cell contains Static, raw zero-margin DAPRO, and DAPRO+CRC. The oracle
+score is an efficiency upper anchor only (`ablation_score_is_causal=0`) and
+must not be presented as deployable.
 
-```text
-S_lambda = (1-lambda) S + lambda S_permuted,
-```
+The score study fixes `K=4` and the controller within each raw/CRC comparison.
+“Remaining-time quantile” is the inverse conditional median number of turns
+remaining (larger means a predicted earlier event). “Causal target value” is
+the current-prefix probability
+`P(t < T < q_alpha(X) | T > t, X_it)`. The random anchor independently
+permutes the hazard ranks at every time. The oracle anchor uses the latent
+target indicator divided by true remaining time and is therefore explicitly
+noncausal.
 
-where `S_permuted` is an independently permuted copy of the same time
-column.  It therefore preserves the time-specific marginal scale and isolates
-loss of row-level ranking information.  The permutation seed is fixed, so all
-lambda values are paired.
-
-After downloading the merged result directories, generate paper figures with:
+Generate paper figures and machine-readable means/variances with:
 
 ```bash
 python -m src.predictive_bounds.experiments.dapro_ablation.summarize_paper \
-  --quality high --strict-seeds
+  --quality low
 ```
 
-Figures and their seed-level plotting data are written to
-`figures/paper/ablations`.  In the budget panel, Static is charged its assigned
-`sum(C_i)/n`, while DAPRO is charged actual event-stopped interactions.
-Each panel is a mean line with a shaded plus/minus-one-standard-deviation band
-across splits; the exact mean, variance, SD, and cell count are also written to
-`dapro_ablation_mean_variance.csv`.  Budget ticks remain numeric, with the
-paired budget-to-N1 mapping shown once below the figure to avoid overlap.
+The standard four-panel figure reports coverage, realized DAPRO budget
+(assigned/static truncation budget for Static), absolute coverage deviation,
+and the selected-target mean inverse-propensity weight. The representation
+study additionally writes `dapro_representation_diagnostics.jpg`, containing
+the Phase-I fitted objective, Phase-II hard target-weight objective, and
+coverage variance across random splits. Exact plotted means, variances,
+standard deviations, and sample counts are stored in
+`dapro_ablation_mean_variance.csv`.

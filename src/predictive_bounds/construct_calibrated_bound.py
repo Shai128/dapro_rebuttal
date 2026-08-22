@@ -360,6 +360,20 @@ def run_experiments(cal_size, is_real, device, dataset_name, data_setup, experim
         cal_size, is_real, device, dataset_name, data_setup, taus_range,
         m_upper_bound, bound_type=bound_type,
     )
+    shifted_test_data = None
+    if test_dataset_name is not None or test_data_setup is not None:
+        if not test_dataset_name or not test_data_setup:
+            raise ValueError(
+                "Both shifted-test dataset arguments must be provided."
+            )
+        shifted_test_data = setup_experiment_data(
+            cal_size, is_real, device, test_dataset_name, test_data_setup,
+            taus_range, m_upper_bound, bound_type=bound_type,
+        )
+        if shifted_test_data[-1] != test_size:
+            raise ValueError(
+                "Source and shifted-test setups must have the same test size."
+            )
     source_fingerprint = _predictive_bounds_source_fingerprint()
     execution_device = str(conditional_grid.device)
     cuda_device_name = (
@@ -384,6 +398,20 @@ def run_experiments(cal_size, is_real, device, dataset_name, data_setup, experim
         x_cal, x_test, t_tilde_cal, probability_est_cal, quantile_est_cal, t_tilde_test, quantile_est_test, \
             probability_est_test, cal_idx, test_idx = split_data(data_seed, cal_size, test_size, None, t_tilde_cal_test,
                                                                  probability_est, quantile_est_cal_test)
+
+        if shifted_test_data is not None:
+            (
+                _shift_max_time, shift_times, shift_quantiles,
+                shift_probabilities, _shift_grid, shift_test_size,
+            ) = shifted_test_data
+            (
+                _shift_x_cal, x_test, _shift_t_cal, _shift_p_cal,
+                _shift_q_cal, t_tilde_test, quantile_est_test,
+                probability_est_test, _shift_cal_idx, test_idx,
+            ) = split_data(
+                data_seed, cal_size, shift_test_size, None, shift_times,
+                shift_probabilities, shift_quantiles,
+            )
 
         curr_conditional_grid = conditional_grid[cal_idx]
         acquisition_uniforms = _make_common_acquisition_uniforms(
@@ -418,6 +446,15 @@ def run_experiments(cal_size, is_real, device, dataset_name, data_setup, experim
             "acquisition_common_random_numbers": 1,
             "acquisition_uniforms_sha256": (
                 acquisition_uniforms_fingerprint
+            ),
+            "attacker_shift_enabled": int(shifted_test_data is not None),
+            "attacker_shift_source_dataset_name": dataset_name,
+            "attacker_shift_source_dataset_setup": data_setup,
+            "attacker_shift_test_dataset_name": (
+                test_dataset_name if shifted_test_data is not None else dataset_name
+            ),
+            "attacker_shift_test_dataset_setup": (
+                test_data_setup if shifted_test_data is not None else data_setup
             ),
         }
 
@@ -816,6 +853,14 @@ def main():
     parser.add_argument('--data-type', type=str, default='real')
     parser.add_argument('--dataset-name', type=str, default='')
     parser.add_argument('--dataset-setup', type=str, default='')
+    parser.add_argument(
+        '--test-dataset-name', type=str, default=None,
+        help='Optional shifted test dataset; calibration remains on dataset-name.',
+    )
+    parser.add_argument(
+        '--test-dataset-setup', type=str, default=None,
+        help='Optional shifted test setup paired with --test-dataset-name.',
+    )
     parser.add_argument('--budget-per-sample', type=float, default=1)
     parser.add_argument('--cal-size', type=int, default=4000)
     parser.add_argument('--tau-prior', type=float, default=None, help="Prior for tau (defaults depend on bound-type)")
@@ -843,20 +888,6 @@ def main():
         choices=['legacy', 'unified_aht', 'dapro_ablation'],
         default='legacy'
     )
-    shifted_test_data = None
-    if test_dataset_name is not None or test_data_setup is not None:
-        if not test_dataset_name or not test_data_setup:
-            raise ValueError(
-                "Both shifted-test dataset arguments must be provided."
-            )
-        shifted_test_data = setup_experiment_data(
-            cal_size, is_real, device, test_dataset_name, test_data_setup,
-            taus_range, m_upper_bound, bound_type=bound_type,
-        )
-        if shifted_test_data[-1] != test_size:
-            raise ValueError(
-                "Source and shifted-test setups must have the same test size."
-            )
     parser.add_argument(
         '--dapro-ablation-kind',
         choices=[
@@ -1083,7 +1114,9 @@ def main():
                     target_coverages=target_coverages,
                     dapro_ablation_kind=args.dapro_ablation_kind,
                     score_noise_lambdas=tuple(args.score_noise_lambdas),
-                    score_noise_seed=args.score_noise_seed)
+                    score_noise_seed=args.score_noise_seed,
+                    test_dataset_name=args.test_dataset_name,
+                    test_data_setup=args.test_dataset_setup)
 
     print("Finished")
 

@@ -2734,9 +2734,9 @@ class RegularizedTargetAWeightedDAPRO(TargetAWeightedDAPRO):
     ):
         kwargs["anchor_kind"] = anchor_kind
         super().__init__(*args, **kwargs)
-        if not 0 < global_regularization <= 1:
+        if not 0 <= global_regularization <= 1:
             raise ValueError(
-                "`global_regularization` must lie in (0, 1]."
+                "`global_regularization` must lie in [0, 1]."
             )
         self.global_regularization = float(global_regularization)
 

@@ -70,7 +70,8 @@ def main():
             # 'hallucination': [f'llm-judge_{attacker_model}'],
             'autoif': [f'llm-judge_{attacker_model}', f'autoif']
         }
-        "attack_autoif_helper_attack_qwen25_14b_instruct_lm_target_qwen25_14b_instruct_judge_autoif"
+        "attack_autoif_helper_qwen25_14b_instruct_lm_target_qwen25_14b_instruct_judge_autoif"
+        "attack_autoif_helper_gemma3_12b_it_lm_target_llama_31_8B_instruct_judge_autoif"
         # Build the list of method strings dynamically
         for ds, judges in datasets.items():
             curr_attacker_name = attacker_name[ds]

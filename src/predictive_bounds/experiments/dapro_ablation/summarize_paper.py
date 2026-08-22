@@ -38,6 +38,22 @@ FACTOR_SPECS = {
         "xlabel": r"Target budget per sample (paired $N_1$ shown)",
         "title": r"Budget ablation",
     },
+    "hard_soft": {
+        "xlabel": "Target coefficient",
+        "title": "Hard-vs-soft target ablation",
+    },
+    "representation": {
+        "xlabel": "Score-map representation",
+        "title": "Representation-capacity ablation",
+    },
+    "score": {
+        "xlabel": "Score definition",
+        "title": "Score-function ablation",
+    },
+    "attacker_shift": {
+        "xlabel": "Calibration attacker to test attacker",
+        "title": "Attacker-shift ablation",
+    },
 }
 SOURCE_COLUMNS = {
     "seed",
@@ -51,12 +67,28 @@ SOURCE_COLUMNS = {
     "mean_a_weighted_inverse_probability",
     "ablation_kind",
     "ablation_value",
+    "ablation_label",
     "ablation_n1",
     "ablation_crc_control_size",
     "ablation_uses_crc",
     "ablation_score_noise_lambda",
     "ablation_score_mean_timewise_pearson_correlation",
     "ablation_score_original_k2_bin_agreement",
+    "ablation_score_kind",
+    "ablation_score_is_causal",
+    "ablation_score_bin_count",
+    "ablation_continuous_score_map",
+    "ablation_coefficient_kind",
+    "phase1_oracle_optimized_objective",
+    "phase1_projected_mean_objective_variance_proxy",
+    "soft_mass_phase1_raw_policy_fit_mean_variance_proxy",
+    "phase2_mean_objective_variance_proxy",
+    "soft_mass_phase2_frozen_policy_mean_variance_proxy",
+    "attacker_shift_enabled",
+    "attacker_shift_source_dataset_name",
+    "attacker_shift_source_dataset_setup",
+    "attacker_shift_test_dataset_name",
+    "attacker_shift_test_dataset_setup",
 }
 
 
@@ -72,7 +104,13 @@ def _read_available(path: Path) -> pd.DataFrame:
 def _discover(input_dir: Path, suffix: str) -> list[Path]:
     paths = [
         path for path in input_dir.rglob("all_df.csv")
-        if path.parent.name.endswith(f"_{suffix}")
+        if (
+            path.parent.name.endswith(f"_{suffix}")
+            or (
+                suffix.endswith("_attacker_shift")
+                and f"_{suffix}_" in path.parent.name
+            )
+        )
     ]
     if not paths:
         raise FileNotFoundError(
@@ -87,6 +125,15 @@ def _first_available(frame: pd.DataFrame, *columns: str) -> pd.Series:
         values = pd.to_numeric(frame[column], errors="coerce")
         result = result.where(result.notna(), values)
     return result
+
+
+def _ablation_method_name(calibration_name: str) -> str | None:
+    name = str(calibration_name)
+    if name == "calibration_optimized_allocation":
+        return "Static"
+    if "_ablation_" in name and "dapro_" in name:
+        return "DAPRO" if "budget_crc" in name else "DAPRO w/o CRC"
+    return method_display_name(name)
 
 
 def load_ablation_data(
@@ -106,7 +153,9 @@ def load_ablation_data(
             0.90,
             atol=5e-7,
         )].copy()
-        frame["method"] = frame["calibration_name"].map(method_display_name)
+        frame["method"] = frame["calibration_name"].map(
+            _ablation_method_name
+        )
         frame = frame[frame["method"].isin(METHOD_ORDER)].copy()
         dynamic = frame["method"].isin({"DAPRO", "DAPRO w/o CRC"})
         dynamic_rows = frame[dynamic].copy()
@@ -158,6 +207,26 @@ def load_ablation_data(
     data["factor_value"] = pd.to_numeric(
         data["ablation_value"], errors="coerce"
     )
+    if kind == "attacker_shift":
+        dynamic = data[~data["method"].eq("Static")].copy()
+        setups = sorted(
+            dynamic[
+                [
+                    "attacker_shift_source_dataset_name",
+                    "attacker_shift_source_dataset_setup",
+                    "attacker_shift_test_dataset_setup",
+                ]
+            ].drop_duplicates().itertuples(index=False, name=None)
+        )
+        setup_index = {setup: float(index) for index, setup in enumerate(setups)}
+        for row_index, row in data.iterrows():
+            setup = (
+                row["attacker_shift_source_dataset_name"],
+                row["attacker_shift_source_dataset_setup"],
+                row["attacker_shift_test_dataset_setup"],
+            )
+            if setup in setup_index:
+                data.at[row_index, "factor_value"] = setup_index[setup]
     data["coverage_pct"] = 100 * pd.to_numeric(
         data["coverage"], errors="coerce"
     )
@@ -176,6 +245,17 @@ def load_ablation_data(
         "mean_calibrated_a_weighted_inverse_probability",
         "mean_a_weighted_inverse_probability",
     )
+    data["phase1_objective"] = _first_available(
+        data,
+        "soft_mass_phase1_raw_policy_fit_mean_variance_proxy",
+        "phase1_projected_mean_objective_variance_proxy",
+        "phase1_oracle_optimized_objective",
+    )
+    data["phase2_target_weight_objective"] = _first_available(
+        data,
+        "phase2_mean_objective_variance_proxy",
+        "soft_mass_phase2_frozen_policy_mean_variance_proxy",
+    )
     if kind == "n1":
         data["factor_label"] = data["factor_value"].round().astype("Int64").astype(str)
     elif kind == "budget":
@@ -184,6 +264,24 @@ def load_ablation_data(
             data["ablation_n1"], errors="coerce"
         ).round().astype("Int64").astype(str)
         data["factor_label"] = budget_label + "\n" + r"($N_1$=" + n1_label + ")"
+    elif kind in {"hard_soft", "representation", "score"}:
+        labels = (
+            data.loc[~data["method"].eq("Static"), ["factor_value", "ablation_label"]]
+            .dropna().drop_duplicates("factor_value")
+            .set_index("factor_value")["ablation_label"].to_dict()
+        )
+        data["factor_label"] = data["factor_value"].map(labels)
+    elif kind == "attacker_shift":
+        def shift_label(row) -> str:
+            dataset = str(row["attacker_shift_source_dataset_name"])
+            task = "Red team" if "red_team" in dataset else "Toxicity"
+            return task + "\nGemma $\\to$ Qwen"
+        dynamic_labels = data[~data["method"].eq("Static")].copy()
+        dynamic_labels["label"] = dynamic_labels.apply(shift_label, axis=1)
+        labels = dynamic_labels.drop_duplicates("factor_value").set_index(
+            "factor_value"
+        )["label"].to_dict()
+        data["factor_label"] = data["factor_value"].map(labels)
     else:
         data["factor_label"] = data["factor_value"].map(lambda value: f"{value:g}")
 
@@ -266,8 +364,22 @@ def _draw_line(
             linewidth=0,
             zorder=1,
         )
+    labels = (
+        data[["factor_value", "factor_label"]]
+        .dropna().drop_duplicates("factor_value")
+        .set_index("factor_value")["factor_label"].to_dict()
+    )
     axis.set_xticks(values)
-    axis.set_xticklabels([f"{value:g}" for value in values])
+    tick_labels = (
+        [f"{value:g}" for value in values]
+        if xlabel.startswith("Target budget")
+        else [labels.get(value, f"{value:g}") for value in values]
+    )
+    axis.set_xticklabels(
+        tick_labels,
+        rotation=18 if len(values) >= 5 and not xlabel.startswith("Target budget") else 0,
+        ha="right" if len(values) >= 5 and not xlabel.startswith("Target budget") else "center",
+    )
     _style(axis, xlabel=xlabel, ylabel=ylabel)
     return statistics
 
@@ -371,6 +483,75 @@ def generate_ablation_figure(
     return pd.concat(all_statistics, ignore_index=True)
 
 
+def generate_representation_diagnostics(
+        data: pd.DataFrame,
+        *,
+        output_path: Path,
+        quality: str,
+) -> pd.DataFrame:
+    """Plot the extra diagnostics requested for representation capacity."""
+    dynamic = data[~data["method"].eq("Static")].copy()
+    values = sorted(dynamic["factor_value"].dropna().unique())
+    figure, axes = plt.subplots(1, 3, figsize=(13.0, 3.7))
+    output = []
+    for axis, metric, title, ylabel in (
+        (
+            axes[0], "phase1_objective", "Phase-I Objective",
+            "Mean fitted variance proxy",
+        ),
+        (
+            axes[1], "phase2_target_weight_objective",
+            "Phase-II Target-Weight Objective",
+            r"Mean $A_i(1/\pi_i-1)$",
+        ),
+    ):
+        statistics = _draw_line(
+            axis, dynamic, metric=metric, ylabel=ylabel,
+            xlabel="Score-map representation", values=values,
+        )
+        statistics["metric"] = metric
+        output.append(statistics)
+        axis.set_title(title)
+
+    variance = (
+        dynamic.groupby(["factor_value", "method"], observed=True)["coverage_pct"]
+        .agg(variance="var", count="count").reset_index()
+    )
+    variance["mean"] = variance["variance"]
+    variance["std"] = np.nan
+    variance["metric"] = "coverage_variance"
+    labels = (
+        dynamic[["factor_value", "factor_label"]].drop_duplicates("factor_value")
+        .set_index("factor_value")["factor_label"].to_dict()
+    )
+    for method, style, marker in (
+        ("DAPRO", "-", "o"), ("DAPRO w/o CRC", "-.", "s")
+    ):
+        rows = variance[variance["method"].eq(method)].set_index(
+            "factor_value"
+        ).reindex(values)
+        axes[2].plot(
+            values, rows["variance"], label=method,
+            color=METHOD_COLORS[method], linestyle=style, marker=marker,
+        )
+    axes[2].set_xticks(values)
+    axes[2].set_xticklabels(
+        [labels.get(value, f"{value:g}") for value in values],
+        rotation=18, ha="right",
+    )
+    _style(
+        axes[2], xlabel="Score-map representation",
+        ylabel=r"Variance of coverage (pp$^2$)",
+    )
+    axes[2].set_title("Coverage Variance")
+    axes[1].legend(title="Method", loc="best", fontsize=8, framealpha=.9)
+    figure.tight_layout(w_pad=1.5)
+    save_jpeg(figure, output_path, quality)
+    plt.close(figure)
+    output.append(variance)
+    return pd.concat(output, ignore_index=True, sort=False)
+
+
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -438,6 +619,23 @@ def main() -> None:
             "generated": path.exists(),
         })
         print(f"Generated {path}")
+        if kind == "representation":
+            diagnostic_path = (
+                args.output_dir / "dapro_representation_diagnostics.jpg"
+            )
+            diagnostic_statistics = generate_representation_diagnostics(
+                data,
+                output_path=diagnostic_path,
+                quality=args.quality,
+            )
+            diagnostic_statistics["ablation_kind"] = kind
+            all_statistics.append(diagnostic_statistics)
+            manifest.append({
+                "ablation_kind": "representation_diagnostics",
+                "figure": str(diagnostic_path),
+                "generated": diagnostic_path.exists(),
+            })
+            print(f"Generated {diagnostic_path}")
     pd.concat(all_data, ignore_index=True).to_csv(
         args.output_dir / "dapro_ablation_plot_data.csv", index=False
     )
