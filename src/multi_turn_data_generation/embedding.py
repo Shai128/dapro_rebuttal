@@ -53,31 +53,31 @@ def main():
     model = SentenceTransformer(args.model, device=args.device)
 
     # Configuration mappings
-    attacker_model = 'gemma3_12b_it'
+    attacker_models = ['gemma3_12b_it', 'qwen25_14b_instruct']
+    target_models = ['qwen25_14b_instruct', 'llama_31_8B_instruct', 'mini_phi_4_instruct', 'gemma3_4b_it']
+    methods = []
 
-    datasets = {
-        'toxicity': ['detoxify'],
-        'red_team': ['llm-judge', 'llama_guard'],
-        'hallucination': [f'llm-judge_{attacker_model}'],
-        'autoif': [f'llm-judge_{attacker_model}']
-    }
     attacker_name = {
         'toxicity': 'toxic',
         'red_team': 'default',
         'hallucination': 'hallucination',
         'autoif': 'autoif_helper'
     }
+    for attacker_model in attacker_models:
+        datasets = {
+            'toxicity': ['detoxify'],
+            'red_team': ['llama_guard', f'llm-judge_{attacker_model}'],
+            'hallucination': [f'llm-judge_{attacker_model}'],
+            'autoif': [f'llm-judge_{attacker_model}', f'autoif']
+        }
 
-    target_models = ['qwen25_14b_instruct', 'llama_31_8B_instruct', 'mini_phi_4_instruct', 'gemma3_4b_it']
-
-    # Build the list of method strings dynamically
-    methods = []
-    for ds, judges in datasets.items():
-        curr_attacker_name = attacker_name[ds]
-        for target in target_models:
-            for judge in judges:
-                method_name = f"attack_{curr_attacker_name}_attack_{attacker_model}_lm_target_{target}_judge_{judge}"
-                methods.append({'ds': ds, 'name': method_name})
+        # Build the list of method strings dynamically
+        for ds, judges in datasets.items():
+            curr_attacker_name = attacker_name[ds]
+            for target in target_models:
+                for judge in judges:
+                    method_name = f"attack_{curr_attacker_name}_attack_{attacker_model}_lm_target_{target}_judge_{judge}"
+                    methods.append({'ds': ds, 'name': method_name})
 
     for entry in methods:
         dataset_name = f"dataset_{entry['ds']}"
