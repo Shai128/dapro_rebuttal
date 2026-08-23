@@ -31,6 +31,7 @@ N1_VALUES=(50 100 200 300 400)
 SCORE_REFERENCE_N1=50
 METRIC_DAPRO_N1=50
 METRIC_CRC_CONTROL_SIZE=25
+ATTACKER_SHIFT_BUDGET=10
 SCORE_NOISE_LAMBDAS=(0 0.1 0.25 0.5 0.75 1)
 BUDGET_VALUES=(5 10 20 30 40 50)
 # Matching entries: lower budgets receive smaller Phase-I samples.
@@ -182,7 +183,7 @@ run_shift_configuration() {
   common=(
     --bound-type lpb --data-type real
     --dataset-name "$dataset" --dataset-setup "$source_setup"
-    --budget-per-sample 20 --cal-size "$CAL_SIZE"
+    --budget-per-sample "$ATTACKER_SHIFT_BUDGET" --cal-size "$CAL_SIZE"
     --tau-prior "$TAU_PRIOR" --m-upper-bound "$M_UPPER_BOUND"
     --device "$DEVICE" --allocations none
     --experiment-suffix "$suffix" --method-suite dapro_ablation
@@ -191,7 +192,7 @@ run_shift_configuration() {
     --seed-start "$SEED_START" --seed-end "$SEED_END"
   )
   construct=("${common[@]}" --test-dataset-name "$dataset" --test-dataset-setup "$test_setup")
-  echo "[attacker shift $label] source=$source_setup -> test=$test_setup"
+  echo "[attacker shift $label | B=$ATTACKER_SHIFT_BUDGET] source=$source_setup -> test=$test_setup"
   if ! run_module "shift_${label}_construct" src.predictive_bounds.construct_calibrated_bound "${construct[@]}"; then
     echo "ERROR: construction failed for attacker shift $label; merge skipped." >&2
     return 1

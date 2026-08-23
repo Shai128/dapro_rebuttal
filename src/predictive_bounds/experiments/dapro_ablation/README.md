@@ -13,13 +13,14 @@ are also supported. A failed configuration is recorded and does not cancel the
 remaining configurations. Each construction job is merged immediately.
 
 The main LPB studies use Toxicity/Qwen2.5-14B, target coverage 90%, budget 20,
-and `N1=50`, except for the pre-existing N1 and budget sweeps:
+and `N1=50`, except for the pre-existing N1 and budget sweeps and the
+attacker-shift studies, which use budget 10:
 
 - hard realized Target-A versus soft model-integrated prefix mass;
 - `K=1,2,4,8` quantile-bin maps and a continuous monotone four-knot rank map;
 - current hazard, remaining-time quantile, causal target value, random rank,
   and a clearly tagged noncausal oracle remaining-time score;
-- Gemma-to-Qwen attacker shifts for Red Team and Toxicity;
+- Gemma-to-Qwen attacker shifts for Red Team and Toxicity at `B=10`;
 - the existing N1, score-noise, and budget sweeps.
 
 Every cell contains Static, raw zero-margin DAPRO, and DAPRO+CRC. The oracle

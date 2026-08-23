@@ -26,6 +26,7 @@ from src.predictive_bounds.experiments.full_bounds.config import (  # noqa: E402
 
 
 METHOD_ORDER = ("Static", "DAPRO", "DAPRO w/o CRC")
+ATTACKER_SHIFT_BUDGET = 10.0
 SCORE_DISPLAY_LABELS = {
     "Current hazard": "Current\nhazard",
     "Remaining-time quantile": "Remaining-time\nquantile",
@@ -120,8 +121,17 @@ def _read_available(path: Path) -> pd.DataFrame:
 
 
 def _discover(input_dir: Path, suffix: str) -> list[Path]:
+    # Long Windows experiment names may fit directly below ``results`` but
+    # exceed MAX_PATH after adding ``merged_calibration_dfs``.  Accept those
+    # downloaded merged directories in the parent as a short-path fallback;
+    # the canonical nested location remains preferred and duplicate paths are
+    # removed below.
+    candidates = list(input_dir.rglob("all_df.csv"))
+    if input_dir.name in {
+            "merged_calibration_dfs", "merged_metric_calibration_dfs"}:
+        candidates.extend(input_dir.parent.glob("*/all_df.csv"))
     paths = [
-        path for path in input_dir.rglob("all_df.csv")
+        path for path in candidates
         if (
             path.parent.name.endswith(f"_{suffix}")
             or (
@@ -130,11 +140,12 @@ def _discover(input_dir: Path, suffix: str) -> list[Path]:
             )
         )
     ]
+    paths = sorted(set(paths))
     if not paths:
         raise FileNotFoundError(
             f"No merged ablation results ending in _{suffix} below {input_dir}."
         )
-    return sorted(paths)
+    return paths
 
 
 def _first_available(frame: pd.DataFrame, *columns: str) -> pd.Series:
@@ -171,6 +182,19 @@ def load_ablation_data(
             0.90,
             atol=5e-7,
         )].copy()
+        # Attacker-shift experiments use B=10.  The result root may still
+        # contain historical B=20 files with the same experiment suffix, so
+        # filter by recorded configuration before combining paths.  This
+        # prevents silently pooling two different budget regimes.
+        if kind == "attacker_shift":
+            configured_budget = pd.to_numeric(
+                frame["configured_budget_per_sample"], errors="coerce"
+            )
+            frame = frame[np.isclose(
+                configured_budget,
+                ATTACKER_SHIFT_BUDGET,
+                atol=5e-7,
+            )].copy()
         frame["method"] = frame["calibration_name"].map(
             _ablation_method_name
         )
@@ -219,7 +243,14 @@ def load_ablation_data(
             "row_count": len(selected),
         })
     if not frames:
-        raise ValueError(f"No usable {kind} ablation rows were found.")
+        detail = (
+            f" at configured budget {ATTACKER_SHIFT_BUDGET:g}"
+            if kind == "attacker_shift"
+            else ""
+        )
+        raise ValueError(
+            f"No usable {kind} ablation rows{detail} were found."
+        )
 
     data = pd.concat(frames, ignore_index=True, sort=False)
     data["factor_value"] = pd.to_numeric(
@@ -705,7 +736,31 @@ def generate_categorical_box_figure(
         if metric == "coverage_pct":
             axis.axhline(90.0, color="#D62728", linestyle="--", linewidth=1.2)
         elif metric == "budget_used_per_sample":
-            axis.axhline(20.0, color="#D62728", linestyle="--", linewidth=1.2)
+            configured_budgets = pd.to_numeric(
+                plot_data.get(
+                    "configured_budget_per_sample",
+                    pd.Series(np.nan, index=plot_data.index),
+                ),
+                errors="coerce",
+            ).dropna().unique()
+            if len(configured_budgets) > 1:
+                raise ValueError(
+                    f"{kind} figure mixes configured budgets: "
+                    f"{sorted(configured_budgets.tolist())}."
+                )
+            reference_budget = (
+                float(configured_budgets[0])
+                if len(configured_budgets) == 1
+                else ATTACKER_SHIFT_BUDGET
+                if kind == "attacker_shift"
+                else 20.0
+            )
+            axis.axhline(
+                reference_budget,
+                color="#D62728",
+                linestyle="--",
+                linewidth=1.2,
+            )
     handles, legend_labels = axes.flat[1].get_legend_handles_labels()
     if handles:
         axes.flat[1].legend(
@@ -717,8 +772,13 @@ def generate_categorical_box_figure(
         legend = axis.get_legend()
         if legend is not None:
             legend.remove()
+    budget_note = (
+        f", $B={ATTACKER_SHIFT_BUDGET:g}$"
+        if kind == "attacker_shift"
+        else ""
+    )
     figure.suptitle(
-        f"{spec['title']} (50 random calibration/test splits)",
+        f"{spec['title']} (50 random calibration/test splits{budget_note})",
         y=0.995,
         fontsize=13,
     )
