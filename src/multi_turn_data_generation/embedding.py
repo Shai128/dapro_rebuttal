@@ -66,12 +66,10 @@ def main():
     for attacker_model in attacker_models:
         datasets = {
             # 'toxicity': ['detoxify'],
-            # 'red_team': ['llama_guard', f'llm-judge_{attacker_model}'],
+            'red_team': ['llama_guard', f'llm-judge_{attacker_model}'],
             # 'hallucination': [f'llm-judge_{attacker_model}'],
-            'autoif': [f'llm-judge_{attacker_model}', f'autoif']
+            # 'autoif': [f'llm-judge_{attacker_model}', f'autoif']
         }
-        "attack_autoif_helper_qwen25_14b_instruct_lm_target_qwen25_14b_instruct_judge_autoif"
-        "attack_autoif_helper_gemma3_12b_it_lm_target_llama_31_8B_instruct_judge_autoif"
         # Build the list of method strings dynamically
         for ds, judges in datasets.items():
             curr_attacker_name = attacker_name[ds]

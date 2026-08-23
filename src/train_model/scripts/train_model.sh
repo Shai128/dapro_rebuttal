@@ -17,6 +17,23 @@ srun -A galileo -p galileo  -c 4 --gres=gpu:1 python -m src.train_model.train_mo
     --acquisition-strategy naive --last-round-epochs 500\
    --n-seed 3600 --epochs 2 --device cuda:0 --total-budget 10 --acquire-full-time 0 --data-type real &
 
+attack_autoif_helper_qwen25_14b_instruct_lm_target_gemma3_4b_it_judge_autoif
+srun -A galileo -p galileo  -c 4 --gres=gpu:1 python -m src.train_model.train_model \
+   --dataset-setup attack_autoif_helper_qwen25_14b_instruct_lm_target_gemma3_4b_it_judge_autoif \
+    --dataset-name dataset_autoif \
+    --acquisition-strategy naive --last-round-epochs 500\
+   --n-seed 3600 --epochs 2 --device cuda:0 --total-budget 10 --acquire-full-time 0 --data-type real &
+
+srun -A galileo -p galileo  -c 4 --gres=gpu:1 python -m src.train_model.train_model \
+   --dataset-setup attack_autoif_helper_qwen25_14b_instruct_lm_target_mini_phi_4_instruct_judge_autoif \
+    --dataset-name dataset_autoif  --acquisition-strategy naive --last-round-epochs 500 \
+   --n-seed 3600 --epochs 2 --device cuda:0 --total-budget 10 --acquire-full-time 0 --data-type real &
+
+srun -A galileo -p galileo  -c 4 --gres=gpu:1 python -m src.train_model.train_model \
+   --dataset-setup attack_hallucination_attack_qwen25_14b_instruct_lm_target_gemma3_4b_it_judge_llm-judge_qwen25_14b_instruct  \
+    --dataset-name dataset_hallucination \
+    --acquisition-strategy naive --last-round-epochs 500\
+   --n-seed 3600 --epochs 2 --device cuda:0 --total-budget 10 --acquire-full-time 0 --data-type real &
 
 
 
