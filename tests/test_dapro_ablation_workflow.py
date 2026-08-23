@@ -11,13 +11,16 @@ from src.predictive_bounds.budget_allocators.dapro_ablation import (
 )
 from src.predictive_bounds.experiments.dapro_ablation.summarize_paper import (
     generate_ablation_figure,
+    generate_metric_ablation_figure,
     load_ablation_data,
+    load_metric_ablation_data,
 )
 from src.predictive_bounds.budget_allocators.optimization_solver_utils import (
     solve_binned_deployable_policy,
 )
 from src.predictive_bounds.utils.get_calibration_methods_utils import (
     get_dapro_ablation_calibrations,
+    get_metric_dapro_ablation_allocators,
 )
 from src.predictive_bounds import construct_calibrated_bound
 
@@ -169,6 +172,12 @@ def test_server_launcher_exposes_slurm_cpu_and_parallel_controls():
     assert "representation" in script
     assert "attacker_shift" in script
     assert "--test-dataset-setup" in script
+    assert "src.evaluation.estimate" in script
+    assert "src.evaluation.merge_results" in script
+    assert "METRIC_DAPRO_N1=50" in script
+    assert "METRIC_CRC_CONTROL_SIZE=25" in script
+    assert "metric_score_noise" in script
+    assert "metric_score" in script
 
 
 def test_attacker_shift_setup_is_not_executed_before_main_parses_args():
@@ -300,3 +309,127 @@ def test_continuous_rank_lookup_is_monotone_and_not_a_hard_bin_table():
     assert np.all(np.diff(values) >= -1e-12)
     assert len(np.unique(np.round(values, 10))) > 4
     assert diagnostics["direct_score_smooth_rank_lookup"] == 1
+
+
+def test_metric_registry_uses_event_rate_target_and_paired_controllers():
+    taus = torch.arange(0.01, 0.5, 0.01)
+    noise = get_metric_dapro_ablation_allocators(
+        None, 20, taus, .56, 200,
+        ablation_kind="score_noise", dapro_n1=50, crc_control_size=25,
+        score_noise_lambdas=(0.0, .5, 1.0),
+    )
+    assert len(noise) == 7
+    assert len({allocator.name for allocator in noise}) == 7
+    assert sum("budget_crc" in allocator.name for allocator in noise) == 3
+    score = get_metric_dapro_ablation_allocators(
+        None, 20, taus, .56, 200,
+        ablation_kind="score", dapro_n1=50, crc_control_size=25,
+    )
+    assert len(score) == 11
+    dynamic = [
+        allocator for allocator in score
+        if hasattr(allocator, "ablation_score_kind")
+    ]
+    assert {allocator.ablation_score_kind for allocator in dynamic} == {
+        "hazard", "remaining_quantile", "target_value", "random",
+        "oracle_remaining_time",
+    }
+    assert all(allocator.metric_estimation_horizon == 200 for allocator in dynamic)
+    assert all(allocator.score_bin_count == 4 for allocator in dynamic)
+    assert all(
+        allocator.objective_metadata()["ablation_target_definition"]
+        == "1{T<=200}"
+        for allocator in dynamic
+    )
+
+
+def test_metric_target_value_and_oracle_scores_use_non_strict_horizon():
+    pmf = torch.tensor([.1, .2, .3, .1, .3], dtype=torch.float64)
+    grid = pmf.repeat(4, 4, 1)
+    taus = torch.arange(0.01, 0.5, 0.01)
+    quantiles = torch.full((4, len(taus)), 4.0)
+    target = AblationSoftTargetDAPRO(
+        grid, 2.0, taus, .56, 4,
+        n1=2, target_alpha=.10, metric_estimation_horizon=4,
+        score_bin_count=4, projection_budget_margin=0.0,
+        ablation_kind="score", ablation_value=2,
+        ablation_label="Causal event-rate target value",
+        score_kind="target_value",
+    )
+    scores = target.policy_scores(quantiles)
+    assert np.isclose(scores[0, 0].item(), .7)
+    assert np.isclose(scores[0, 2].item(), .4 / .7)
+
+    oracle = AblationSoftTargetDAPRO(
+        grid, 2.0, taus, .56, 4,
+        n1=2, target_alpha=.10, metric_estimation_horizon=4,
+        score_bin_count=4, projection_budget_margin=0.0,
+        ablation_kind="score", ablation_value=4,
+        ablation_label="Oracle remaining time",
+        score_kind="oracle_remaining_time",
+    )
+    event_times = torch.tensor([4, 5, 2, 5], dtype=torch.float64)
+    oracle_scores = oracle.policy_scores_for_allocation(quantiles, event_times)
+    assert oracle_scores[0, 0] > 0  # T=4 is in the inclusive metric target.
+    assert oracle_scores[1].eq(0).all()  # T=5 is outside horizon M=4.
+
+
+def test_metric_summarizer_reports_error_and_across_split_variance(tmp_path):
+    rows = []
+    for seed, event_rate in enumerate((48.0, 52.0, 50.0)):
+        for method, name in (
+            ("Static", "calibration_optimized_allocation"),
+            (
+                "DAPRO w/o CRC",
+                "calibration_dapro_soft_prefix_ablation_score_noise_raw_allocation",
+            ),
+            (
+                "DAPRO",
+                "calibration_dapro_soft_prefix_budget_crc_ablation_score_noise_allocation",
+            ),
+        ):
+            for value in ((np.nan,) if method == "Static" else (0.0, 1.0)):
+                rows.append({
+                    "seed": seed,
+                    "allocator_name": name,
+                    "calibration_name": name,
+                    "estimated_cjr": event_rate + (1 if method == "DAPRO" else 0),
+                    "oracle_cjr": 50.0,
+                    "full_benchmark_cjr": 50.0,
+                    "abs_diff_cjr": abs(event_rate - 50.0),
+                    "reported_assigned_budget_per_sample": 20.0,
+                    "actual_event_stopped_budget_per_sample": 19.0,
+                    "num_events_observed": 300 + seed,
+                    "mean_metric_target_a_weighted_inverse_probability": 2.0,
+                    "conditional_variance_unsafe_event_rate_estimator": .001,
+                    "ablation_kind": np.nan if method == "Static" else "score_noise",
+                    "ablation_value": np.nan if method == "Static" else value,
+                    "ablation_label": np.nan if method == "Static" else f"lambda={value:g}",
+                    "ablation_n1": np.nan if method == "Static" else 50,
+                })
+    parent = tmp_path / "toxicity_20_m_test_score_noise"
+    parent.mkdir()
+    pd.DataFrame(rows).to_csv(parent / "all_df.csv", index=False)
+    data, _ = load_metric_ablation_data(
+        tmp_path, experiment_prefix="test", kind="score_noise"
+    )
+    assert set(data["method"]) == {"Static", "DAPRO", "DAPRO w/o CRC"}
+    assert data.groupby(["factor_value", "method"])["seed"].nunique().eq(3).all()
+    # Static event rates are 48, 52, 50 in percent, so sample variance is 4.
+    assert np.allclose(
+        data.loc[
+            data["method"].eq("Static"),
+            "event_rate_across_split_variance_pp2",
+        ],
+        4.0,
+    )
+    output = tmp_path / "metric.jpg"
+    statistics = generate_metric_ablation_figure(
+        data, kind="score_noise", output_path=output, quality="low"
+    )
+    assert output.exists()
+    assert {
+        "event_rate_pct", "event_rate_abs_error_pp",
+        "event_rate_across_split_variance_pp2", "budget_used_per_sample",
+        "observed_events", "mean_target_a_weight",
+    }.issubset(set(statistics["metric"]))

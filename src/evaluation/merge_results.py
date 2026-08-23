@@ -73,6 +73,9 @@ def merge_results(
         exclude_locally_adaptive=False,
         allocator_names=None,
         method_suite="legacy",
+        dapro_ablation_kind="score_noise",
+        score_noise_lambdas=(0.0, 0.1, 0.25, 0.5, 0.75, 1.0),
+        score_noise_seed=314159,
 ):
     all_dfs = []
     num_cpus = os.cpu_count()
@@ -98,6 +101,9 @@ def merge_results(
             include_legacy_dapro=not exclude_legacy_dapro,
             include_locally_adaptive=not exclude_locally_adaptive,
             method_suite=method_suite,
+            dapro_ablation_kind=dapro_ablation_kind,
+            score_noise_lambdas=score_noise_lambdas,
+            score_noise_seed=score_noise_seed,
         )
         for calibration in calibrations:
             entry = calibrations_by_name.setdefault(
@@ -212,8 +218,22 @@ def main():
     )
     parser.add_argument('--experiment-suffix', type=str, default='')
     parser.add_argument(
-        '--method-suite', choices=['legacy', 'unified_aht'], default='legacy'
+        '--method-suite',
+        choices=['legacy', 'unified_aht', 'dapro_ablation'],
+        default='legacy',
     )
+    parser.add_argument(
+        '--dapro-ablation-kind',
+        choices=['score_noise', 'score'],
+        default='score_noise',
+    )
+    parser.add_argument(
+        '--score-noise-lambdas',
+        type=float,
+        nargs='+',
+        default=[0.0, 0.1, 0.25, 0.5, 0.75, 1.0],
+    )
+    parser.add_argument('--score-noise-seed', type=int, default=314159)
     parser.add_argument('--exclude-legacy-dapro', action='store_true')
     parser.add_argument('--exclude-locally-adaptive', action='store_true')
     parser.add_argument(
@@ -270,6 +290,9 @@ def main():
         exclude_locally_adaptive=args.exclude_locally_adaptive,
         allocator_names=args.allocator_names,
         method_suite=args.method_suite,
+        dapro_ablation_kind=args.dapro_ablation_kind,
+        score_noise_lambdas=args.score_noise_lambdas,
+        score_noise_seed=args.score_noise_seed,
     )
 
 

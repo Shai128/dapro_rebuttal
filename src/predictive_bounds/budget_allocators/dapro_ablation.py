@@ -1,4 +1,4 @@
-"""Controlled LPB ablations for history-adaptive DAPRO.
+"""Controlled LPB and metric ablations for history-adaptive DAPRO.
 
 The production allocator defaults are intentionally unchanged. These wrappers
 expose orthogonal experimental axes: coefficient estimator, representation,
@@ -92,27 +92,60 @@ class _DAPROAblationMixin:
             min=1, max=self.conditional_grid.shape[1]
         )
 
+    def _task_target_horizons(
+            self, quantile_est: torch.Tensor) -> tuple[torch.Tensor, bool]:
+        """Return row horizons and whether the target endpoint is strict.
+
+        LPB uses ``1{T < q_alpha(X)}``.  Metric estimation instead targets
+        the unsafe-event rate ``1{T <= M}``, where ``M`` is the fixed metric
+        horizon.  Keeping this choice in one helper makes every score-quality
+        anchor use exactly the same target as the fitted DAPRO objective.
+        """
+        metric_horizon = getattr(self, "metric_estimation_horizon", None)
+        if metric_horizon is None:
+            return self._fixed_alpha_horizons(quantile_est), True
+        horizons = torch.full(
+            (len(quantile_est),),
+            int(metric_horizon),
+            dtype=torch.long,
+            device=quantile_est.device,
+        )
+        return horizons, False
+
     def _target_value_scores(
             self, quantile_est: torch.Tensor) -> torch.Tensor:
-        """Causal probability of ``t < T < q_alpha(X)`` at every prefix."""
+        """Causal remaining probability of the task-specific target event.
+
+        For LPB this is ``P(t < T < q_alpha(X) | T > t, X_it)``.  For the
+        event-rate metric it is ``P(t < T <= M | T > t, X_it)``.  PMF outcome
+        column zero corresponds to event time one, hence the strict LPB and
+        inclusive metric targets differ by one column at the upper endpoint.
+        """
         grid = self.conditional_grid
         width = grid.shape[1]
-        horizons = self._fixed_alpha_horizons(quantile_est).to(torch.long)
+        horizons, strict = self._task_target_horizons(quantile_est)
+        horizons = horizons.to(torch.long)
         result = torch.zeros(
             (len(grid), width), dtype=torch.float64, device=grid.device
         )
         for step in range(width):
             pmf = grid[:, step, :]
             cumulative = pmf.cumsum(dim=1)
-            upper = (horizons - 2).clamp(min=0, max=pmf.shape[1] - 1)
+            upper_offset = 2 if strict else 1
+            upper = (horizons - upper_offset).clamp(
+                min=0, max=pmf.shape[1] - 1
+            )
             mass = cumulative.gather(1, upper[:, None]).squeeze(1)
             if step:
                 mass = mass - cumulative[:, step - 1]
             future_mass = pmf[:, step:].sum(dim=1).clamp_min(
                 torch.finfo(pmf.dtype).tiny
             )
+            target_is_still_possible = (
+                horizons > step + 1 if strict else horizons >= step + 1
+            )
             result[:, step] = torch.where(
-                horizons > step + 1,
+                target_is_still_possible,
                 mass.clamp_min(0).to(torch.float64)
                 / future_mass.to(torch.float64),
                 0.0,
@@ -200,9 +233,12 @@ class _DAPROAblationMixin:
         if self.ablation_score_kind != "oracle_remaining_time":
             return self.policy_scores(quantile_est)
         width = self.conditional_grid.shape[1]
-        horizons = self._fixed_alpha_horizons(quantile_est).to(event_times.device)
+        horizons, strict = self._task_target_horizons(quantile_est)
+        horizons = horizons.to(event_times.device)
         times = event_times.reshape(-1).to(torch.float64)
-        target = (times < horizons).to(torch.float64)
+        target = (
+            times < horizons if strict else times <= horizons
+        ).to(torch.float64)
         step = torch.arange(width, device=times.device, dtype=torch.float64)
         remaining = (times[:, None] - step[None, :]).clamp_min(1.0)
         # Intentionally noncausal: a full-information score-quality anchor.
@@ -210,8 +246,16 @@ class _DAPROAblationMixin:
 
     def objective_metadata(self) -> dict:
         metadata = super().objective_metadata()
+        is_metric = getattr(self, "metric_estimation_horizon", None) is not None
         metadata.update({
-            "ablation_study": "dapro_lpb",
+            "ablation_study": (
+                "dapro_metric_event_rate" if is_metric else "dapro_lpb"
+            ),
+            "ablation_task": "metric" if is_metric else "lpb",
+            "ablation_target_definition": (
+                f"1{{T<={self.metric_estimation_horizon}}}"
+                if is_metric else "1{T<q_alpha(X)}"
+            ),
             "ablation_kind": self.ablation_kind,
             "ablation_value": self.ablation_value,
             "ablation_label": self.ablation_label,

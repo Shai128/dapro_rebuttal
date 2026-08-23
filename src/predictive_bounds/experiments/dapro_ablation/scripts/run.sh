@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# LPB ablations for soft-prefix Generalized DAPRO on Toxicity/Qwen.
+# LPB and metric ablations for soft-prefix Generalized DAPRO on Toxicity/Qwen.
 #
 # Examples:
 #   bash src/predictive_bounds/experiments/dapro_ablation/scripts/run.sh --local --cpu
@@ -7,7 +7,9 @@
 #   bash src/predictive_bounds/experiments/dapro_ablation/scripts/run.sh --slurm --parallel-jobs 8
 #
 # Each configuration runs 50 paired calibration/test splits, then merges its
-# own rows.  A failed configuration is reported without cancelling the rest.
+# own rows.  The metric additions cover the score-function and score-noise
+# studies without replacing any LPB ablation. A failed configuration is
+# reported without cancelling the rest.
 set -uo pipefail
 
 # ======================== EDITABLE CONFIGURATION ========================
@@ -22,9 +24,13 @@ CAL_SIZE=3000
 TAU_PRIOR=0.56
 M_UPPER_BOUND=200
 BASE_EXPERIMENT_SUFFIX="dapro_lpb_ablation_v1"
+METRIC_EXPERIMENT_SUFFIX="dapro_metric_ablation_v1"
+PYTHON_BIN="${PYTHON_BIN:-python}"
 
 N1_VALUES=(50 100 200 300 400)
 SCORE_REFERENCE_N1=50
+METRIC_DAPRO_N1=50
+METRIC_CRC_CONTROL_SIZE=25
 SCORE_NOISE_LAMBDAS=(0 0.1 0.25 0.5 0.75 1)
 BUDGET_VALUES=(5 10 20 30 40 50)
 # Matching entries: lower budgets receive smaller Phase-I samples.
@@ -99,13 +105,41 @@ print_command() { printf '  '; printf '%q ' "$@"; printf '\n'; }
 
 run_module() {
   local job_name="$1"; shift
-  local command=(python -m "$@")
+  local command=("$PYTHON_BIN" -m "$@")
   if [[ "$RUN_MODE" == "slurm" ]]; then
     local prefix=(srun -A "$SLURM_ACCOUNT" -p "$SLURM_PARTITION" -c "$SLURM_CPUS" -J "${SLURM_JOB_NAME}_${job_name}")
     if [[ -n "$SLURM_GRES" ]]; then prefix+=(--gres="$SLURM_GRES"); fi
     command=("${prefix[@]}" "${command[@]}")
   fi
   if (( DRY_RUN == 1 )); then print_command "${command[@]}"; else "${command[@]}"; fi
+}
+
+run_metric_configuration() {
+  local kind="$1" suffix="$2"
+  local -a noise_args common
+  noise_args=("${SCORE_NOISE_LAMBDAS[@]}")
+  common=(
+    --data-type real
+    --dataset-name "$DATASET_NAME" --dataset-setup "$DATASET_SETUP"
+    --budget-per-sample 20 --cal-size "$CAL_SIZE"
+    --tau-prior "$TAU_PRIOR" --device "$DEVICE"
+    --experiment-suffix "$suffix" --method-suite dapro_ablation
+    --dapro-ablation-kind "$kind"
+    --dapro-n1 "$METRIC_DAPRO_N1"
+    --crc-control-size "$METRIC_CRC_CONTROL_SIZE"
+    --score-noise-lambdas "${noise_args[@]}"
+    --score-noise-seed 314159
+    --seed-start "$SEED_START" --seed-end "$SEED_END"
+  )
+  echo "[metric $kind | B=20 | N1=$METRIC_DAPRO_N1] estimating event rate"
+  if ! run_module "metric_${kind}_estimate" src.evaluation.estimate "${common[@]}"; then
+    echo "ERROR: metric estimation failed for $kind; merge skipped." >&2
+    return 1
+  fi
+  if ! run_module "metric_${kind}_merge" src.evaluation.merge_results "${common[@]}"; then
+    echo "ERROR: metric merge failed for $kind." >&2
+    return 1
+  fi
 }
 
 run_configuration() {
@@ -184,6 +218,12 @@ submit() {
   PIDS+=("$!"); LABELS+=("$label")
   if (( ${#PIDS[@]} >= PARALLEL_JOBS )); then wait_batch; fi
 }
+submit_metric() {
+  local label="$1"; shift
+  run_metric_configuration "$@" &
+  PIDS+=("$!"); LABELS+=("$label")
+  if (( ${#PIDS[@]} >= PARALLEL_JOBS )); then wait_batch; fi
+}
 
 N1_CSV="$(IFS=,; echo "${N1_VALUES[*]}")"
 submit "N1" n1 20 "$N1_CSV" "${BASE_EXPERIMENT_SUFFIX}_n1"
@@ -191,6 +231,12 @@ submit "score_noise" score_noise 20 "$SCORE_REFERENCE_N1" "${BASE_EXPERIMENT_SUF
 submit "hard_soft" hard_soft 20 50 "${BASE_EXPERIMENT_SUFFIX}_hard_soft"
 submit "representation" representation 20 50 "${BASE_EXPERIMENT_SUFFIX}_representation"
 submit "score" score 20 50 "${BASE_EXPERIMENT_SUFFIX}_score"
+# Metric estimation additions: same Toxicity/Qwen cache, B=20, N1=50,
+# Static + raw DAPRO + CRC DAPRO, and 50 paired outer splits.
+submit_metric "metric_score_noise" score_noise \
+  "${METRIC_EXPERIMENT_SUFFIX}_score_noise"
+submit_metric "metric_score" score \
+  "${METRIC_EXPERIMENT_SUFFIX}_score"
 for i in "${!BUDGET_VALUES[@]}"; do
   submit "budget=${BUDGET_VALUES[$i]}" budget "${BUDGET_VALUES[$i]}" \
     "${BUDGET_N1_VALUES[$i]}" "${BASE_EXPERIMENT_SUFFIX}_budget"
@@ -208,8 +254,12 @@ if (( ${#PIDS[@]} > 0 )); then wait_batch; fi
 if (( DRY_RUN == 1 )); then echo "Dry run complete."; exit 0; fi
 
 ARCHIVE="results/${BASE_EXPERIMENT_SUFFIX}.tar.gz"
-mapfile -t MERGED < <(find results/merged_calibration_dfs -type f \
-  -path "*_${BASE_EXPERIMENT_SUFFIX}_*/all_df.csv" | sort)
+mapfile -t MERGED < <(
+  find results/merged_calibration_dfs -type f \
+    -path "*_${BASE_EXPERIMENT_SUFFIX}_*/all_df.csv"
+  find results/merged_metric_calibration_dfs -type f \
+    -path "*_${METRIC_EXPERIMENT_SUFFIX}_*/all_df.csv"
+)
 if (( ${#MERGED[@]} > 0 )); then
   tar -czf "$ARCHIVE" "${MERGED[@]}"
   echo "Archived ${#MERGED[@]} merged files at $ARCHIVE"

@@ -1,4 +1,4 @@
-"""Create paper-style figures for the Toxicity/Qwen LPB DAPRO ablations."""
+"""Create paper-style Toxicity/Qwen LPB and metric DAPRO ablations."""
 
 from __future__ import annotations
 
@@ -25,6 +25,14 @@ from src.predictive_bounds.experiments.full_bounds.config import (  # noqa: E402
 
 
 METHOD_ORDER = ("Static", "DAPRO", "DAPRO w/o CRC")
+SCORE_DISPLAY_LABELS = {
+    "Current hazard": "Current\nhazard",
+    "Remaining-time quantile": "Remaining-time\nquantile",
+    "Causal target value": "Causal target\nvalue",
+    "Causal event-rate target value": "Causal target\nvalue",
+    "Random": "Random",
+    "Oracle remaining time": "Oracle remaining\ntime",
+}
 FACTOR_SPECS = {
     "n1": {
         "xlabel": r"Phase-I sample size $N_1$",
@@ -57,6 +65,7 @@ FACTOR_SPECS = {
 }
 SOURCE_COLUMNS = {
     "seed",
+    "allocator_name",
     "calibration_name",
     "target_coverage",
     "coverage",
@@ -89,6 +98,14 @@ SOURCE_COLUMNS = {
     "attacker_shift_source_dataset_setup",
     "attacker_shift_test_dataset_name",
     "attacker_shift_test_dataset_setup",
+    "estimated_cjr",
+    "oracle_cjr",
+    "full_benchmark_cjr",
+    "abs_diff_cjr",
+    "num_events_observed",
+    "mean_metric_target_a_weighted_inverse_probability",
+    "conditional_variance_unsafe_event_rate_estimator",
+    "estimated_conditional_variance_unsafe_event_rate_estimator",
 }
 
 
@@ -271,6 +288,10 @@ def load_ablation_data(
             .set_index("factor_value")["ablation_label"].to_dict()
         )
         data["factor_label"] = data["factor_value"].map(labels)
+        if kind == "score":
+            data["factor_label"] = data["factor_label"].replace(
+                SCORE_DISPLAY_LABELS
+            )
     elif kind == "attacker_shift":
         def shift_label(row) -> str:
             dataset = str(row["attacker_shift_source_dataset_name"])
@@ -290,6 +311,139 @@ def load_ablation_data(
     if bool(duplicates.any()):
         raise ValueError(
             "Duplicate ablation rows detected:\n"
+            + data.loc[duplicates, duplicate_key + ["calibration_name"]]
+            .to_string(index=False)
+        )
+    return data, pd.DataFrame(inventory)
+
+
+def load_metric_ablation_data(
+        input_dir: Path,
+        *,
+        experiment_prefix: str,
+        kind: str,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Load metric score-ablation rows and pair Static at every x value."""
+    if kind not in {"score_noise", "score"}:
+        raise ValueError("Metric figures support score_noise and score only.")
+    suffix = f"{experiment_prefix}_{kind}"
+    frames: list[pd.DataFrame] = []
+    inventory: list[dict] = []
+    for path in _discover(input_dir, suffix):
+        frame = _read_available(path)
+        frame["method"] = frame["calibration_name"].map(
+            _ablation_method_name
+        )
+        frame = frame[frame["method"].isin(METHOD_ORDER)].copy()
+        dynamic_rows = frame[
+            frame["method"].isin({"DAPRO", "DAPRO w/o CRC"})
+            & frame["ablation_kind"].astype(str).eq(kind)
+        ].copy()
+        values = sorted(
+            pd.to_numeric(dynamic_rows["ablation_value"], errors="coerce")
+            .dropna().unique()
+        )
+        if not values:
+            continue
+        static = frame[frame["method"].eq("Static")].copy()
+        expanded_static = []
+        for value in values:
+            copy = static.copy()
+            copy["ablation_value"] = value
+            copy["ablation_n1"] = pd.to_numeric(
+                dynamic_rows.loc[
+                    np.isclose(
+                        pd.to_numeric(
+                            dynamic_rows["ablation_value"], errors="coerce"
+                        ),
+                        value,
+                    ),
+                    "ablation_n1",
+                ],
+                errors="coerce",
+            ).dropna().iloc[0]
+            expanded_static.append(copy)
+        selected = pd.concat(
+            [dynamic_rows, *expanded_static], ignore_index=True, sort=False
+        )
+        selected["source_file"] = str(path)
+        frames.append(selected)
+        inventory.append({
+            "task": "metric",
+            "kind": kind,
+            "source_file": str(path),
+            "factor_values": " ".join(f"{value:g}" for value in values),
+            "seed_count": int(selected["seed"].nunique()),
+            "row_count": len(selected),
+        })
+    if not frames:
+        raise ValueError(f"No usable metric {kind} ablation rows were found.")
+
+    data = pd.concat(frames, ignore_index=True, sort=False)
+    data["factor_value"] = pd.to_numeric(
+        data["ablation_value"], errors="coerce"
+    )
+    data["event_rate_pct"] = pd.to_numeric(
+        data["estimated_cjr"], errors="coerce"
+    )
+    data["event_rate_abs_error_pp"] = _first_available(
+        data, "abs_diff_cjr"
+    )
+    assigned = pd.to_numeric(
+        data["reported_assigned_budget_per_sample"], errors="coerce"
+    )
+    realized = pd.to_numeric(
+        data["actual_event_stopped_budget_per_sample"], errors="coerce"
+    )
+    data["budget_used_per_sample"] = np.where(
+        data["method"].eq("Static"), assigned, realized
+    )
+    data["mean_target_a_weight"] = _first_available(
+        data,
+        "mean_metric_target_a_weighted_inverse_probability",
+        "mean_a_weighted_inverse_probability",
+    )
+    data["observed_events"] = pd.to_numeric(
+        data["num_events_observed"], errors="coerce"
+    )
+    data["event_rate_conditional_variance_pp2"] = 10000 * _first_available(
+        data,
+        "conditional_variance_unsafe_event_rate_estimator",
+        "estimated_conditional_variance_unsafe_event_rate_estimator",
+    )
+    # The requested estimator variance is the empirical variance over the 50
+    # random calibration/test splits.  It is stored on every row in its cell
+    # solely to reuse the line-plot/statistics machinery below.
+    grouping = ["source_file", "factor_value", "method"]
+    data["event_rate_across_split_variance_pp2"] = data.groupby(
+        grouping, observed=True
+    )["event_rate_pct"].transform("var")
+    data["event_rate_truth_pct"] = _first_available(
+        data, "full_benchmark_cjr", "oracle_cjr"
+    )
+    if kind == "score":
+        labels = (
+            data.loc[
+                ~data["method"].eq("Static"),
+                ["factor_value", "ablation_label"],
+            ]
+            .dropna().drop_duplicates("factor_value")
+            .set_index("factor_value")["ablation_label"].to_dict()
+        )
+        data["factor_label"] = data["factor_value"].map(labels)
+        data["factor_label"] = data["factor_label"].replace(
+            SCORE_DISPLAY_LABELS
+        )
+    else:
+        data["factor_label"] = data["factor_value"].map(
+            lambda value: f"{value:g}"
+        )
+
+    duplicate_key = ["source_file", "seed", "method", "factor_value"]
+    duplicates = data.duplicated(duplicate_key, keep=False)
+    if bool(duplicates.any()):
+        raise ValueError(
+            "Duplicate metric-ablation rows detected:\n"
             + data.loc[duplicates, duplicate_key + ["calibration_name"]]
             .to_string(index=False)
         )
@@ -483,6 +637,84 @@ def generate_ablation_figure(
     return pd.concat(all_statistics, ignore_index=True)
 
 
+def generate_metric_ablation_figure(
+        data: pd.DataFrame,
+        *,
+        kind: str,
+        output_path: Path,
+        quality: str,
+) -> pd.DataFrame:
+    """Plot metric score quality, including variance over random splits."""
+    spec = FACTOR_SPECS[kind]
+    values = sorted(data["factor_value"].dropna().unique())
+    figure, axes = plt.subplots(3, 2, figsize=(11.2, 10.0))
+    panels = (
+        ("event_rate_pct", "Estimated Event Rate", "Event rate (%)"),
+        (
+            "event_rate_abs_error_pp", "Event-Rate Error",
+            "Absolute event-rate error (pp)",
+        ),
+        (
+            "event_rate_across_split_variance_pp2",
+            "Variance of Estimated Event Rate",
+            r"Across-split variance (pp$^2$)",
+        ),
+        (
+            "budget_used_per_sample", "Budget Used per Sample",
+            "Budget Used per Sample",
+        ),
+        ("observed_events", "Observed Events", "Number of observed events"),
+        (
+            "mean_target_a_weight", "Mean Metric Target-A Weight",
+            r"Mean $\mathbf{1}\{T_i\leq M\}/\pi_i$",
+        ),
+    )
+    all_statistics = []
+    for axis, (metric, panel_title, ylabel) in zip(axes.flat, panels):
+        statistics = _draw_line(
+            axis,
+            data,
+            metric=metric,
+            ylabel=ylabel,
+            xlabel=str(spec["xlabel"]),
+            values=values,
+        )
+        statistics["metric"] = metric
+        all_statistics.append(statistics)
+        axis.set_title(panel_title, fontsize=11)
+        if metric == "event_rate_pct":
+            truth = pd.to_numeric(
+                data["event_rate_truth_pct"], errors="coerce"
+            ).dropna()
+            if not truth.empty:
+                axis.axhline(
+                    float(truth.iloc[0]), color="#D62728",
+                    linestyle="--", linewidth=1.2,
+                )
+        elif metric == "budget_used_per_sample":
+            axis.axhline(
+                20.0, color="#D62728", linestyle="--", linewidth=1.2
+            )
+    axes.flat[0].legend(
+        title="Method", loc="best", frameon=True, framealpha=0.88,
+        fontsize=8.5, title_fontsize=9,
+    )
+    for axis in axes.flat[1:]:
+        legend = axis.get_legend()
+        if legend is not None:
+            legend.remove()
+    figure.suptitle(
+        "Metric " + str(spec["title"]).lower()
+        + " (mean $\\pm$ 1 SD across splits)",
+        y=0.995,
+        fontsize=13,
+    )
+    figure.tight_layout(rect=(0.0, 0.015, 1.0, 0.975), h_pad=2.0, w_pad=1.8)
+    save_jpeg(figure, output_path, quality)
+    plt.close(figure)
+    return pd.concat(all_statistics, ignore_index=True)
+
+
 def generate_representation_diagnostics(
         data: pd.DataFrame,
         *,
@@ -560,12 +792,27 @@ def _parse_args() -> argparse.Namespace:
         default=_ROOT / "results" / "merged_calibration_dfs",
     )
     parser.add_argument(
+        "--metric-input-dir",
+        type=Path,
+        default=_ROOT / "results" / "merged_metric_calibration_dfs",
+    )
+    parser.add_argument(
         "--output-dir",
         type=Path,
         default=_ROOT / "figures" / "paper" / "ablations",
     )
     parser.add_argument(
         "--experiment-prefix", default="dapro_lpb_ablation_v1"
+    )
+    parser.add_argument(
+        "--metric-experiment-prefix", default="dapro_metric_ablation_v1"
+    )
+    parser.add_argument(
+        "--tasks",
+        nargs="+",
+        choices=("lpb", "metric"),
+        default=["lpb", "metric"],
+        help="Generate LPB figures, metric figures, or both (default).",
     )
     parser.add_argument(
         "--kinds",
@@ -590,52 +837,99 @@ def main() -> None:
     all_inventory = []
     all_statistics = []
     manifest = []
-    for kind in args.kinds:
-        data, inventory = load_ablation_data(
-            args.input_dir,
-            experiment_prefix=args.experiment_prefix,
-            kind=kind,
-        )
-        counts = data.groupby(
-            ["factor_value", "method"], observed=True
-        )["seed"].nunique()
-        if args.strict_seeds and not bool(counts.eq(50).all()):
-            raise ValueError(
-                f"{kind} does not contain 50 splits in every cell:\n{counts}"
+    if "lpb" in args.tasks:
+        for kind in args.kinds:
+            data, inventory = load_ablation_data(
+                args.input_dir,
+                experiment_prefix=args.experiment_prefix,
+                kind=kind,
             )
-        path = args.output_dir / f"dapro_{kind}_ablation.jpg"
-        statistics = generate_ablation_figure(
-            data, kind=kind, output_path=path, quality=args.quality
-        )
-        statistics["ablation_kind"] = kind
-        data["ablation_kind"] = kind
-        inventory["ablation_kind"] = kind
-        all_data.append(data)
-        all_inventory.append(inventory)
-        all_statistics.append(statistics)
-        manifest.append({
-            "ablation_kind": kind,
-            "figure": str(path),
-            "generated": path.exists(),
-        })
-        print(f"Generated {path}")
-        if kind == "representation":
-            diagnostic_path = (
-                args.output_dir / "dapro_representation_diagnostics.jpg"
+            counts = data.groupby(
+                ["factor_value", "method"], observed=True
+            )["seed"].nunique()
+            if args.strict_seeds and not bool(counts.eq(50).all()):
+                raise ValueError(
+                    f"{kind} does not contain 50 splits in every cell:\n{counts}"
+                )
+            path = args.output_dir / f"dapro_{kind}_ablation.jpg"
+            statistics = generate_ablation_figure(
+                data, kind=kind, output_path=path, quality=args.quality
             )
-            diagnostic_statistics = generate_representation_diagnostics(
-                data,
-                output_path=diagnostic_path,
-                quality=args.quality,
-            )
-            diagnostic_statistics["ablation_kind"] = kind
-            all_statistics.append(diagnostic_statistics)
+            statistics["task"] = "lpb"
+            statistics["ablation_kind"] = kind
+            data["task"] = "lpb"
+            data["ablation_kind"] = kind
+            inventory["task"] = "lpb"
+            inventory["ablation_kind"] = kind
+            all_data.append(data)
+            all_inventory.append(inventory)
+            all_statistics.append(statistics)
             manifest.append({
-                "ablation_kind": "representation_diagnostics",
-                "figure": str(diagnostic_path),
-                "generated": diagnostic_path.exists(),
+                "task": "lpb",
+                "ablation_kind": kind,
+                "figure": str(path),
+                "generated": path.exists(),
             })
-            print(f"Generated {diagnostic_path}")
+            print(f"Generated {path}")
+            if kind == "representation":
+                diagnostic_path = (
+                    args.output_dir / "dapro_representation_diagnostics.jpg"
+                )
+                diagnostic_statistics = generate_representation_diagnostics(
+                    data,
+                    output_path=diagnostic_path,
+                    quality=args.quality,
+                )
+                diagnostic_statistics["task"] = "lpb"
+                diagnostic_statistics["ablation_kind"] = kind
+                all_statistics.append(diagnostic_statistics)
+                manifest.append({
+                    "task": "lpb",
+                    "ablation_kind": "representation_diagnostics",
+                    "figure": str(diagnostic_path),
+                    "generated": diagnostic_path.exists(),
+                })
+                print(f"Generated {diagnostic_path}")
+    if "metric" in args.tasks:
+        metric_kinds = [
+            kind for kind in args.kinds if kind in {"score_noise", "score"}
+        ]
+        for kind in metric_kinds:
+            data, inventory = load_metric_ablation_data(
+                args.metric_input_dir,
+                experiment_prefix=args.metric_experiment_prefix,
+                kind=kind,
+            )
+            counts = data.groupby(
+                ["factor_value", "method"], observed=True
+            )["seed"].nunique()
+            if args.strict_seeds and not bool(counts.eq(50).all()):
+                raise ValueError(
+                    f"metric {kind} does not contain 50 splits in every "
+                    f"cell:\n{counts}"
+                )
+            path = args.output_dir / f"dapro_metric_{kind}_ablation.jpg"
+            statistics = generate_metric_ablation_figure(
+                data, kind=kind, output_path=path, quality=args.quality
+            )
+            statistics["task"] = "metric"
+            statistics["ablation_kind"] = kind
+            data["task"] = "metric"
+            data["ablation_kind"] = kind
+            inventory["task"] = "metric"
+            inventory["ablation_kind"] = kind
+            all_data.append(data)
+            all_inventory.append(inventory)
+            all_statistics.append(statistics)
+            manifest.append({
+                "task": "metric",
+                "ablation_kind": kind,
+                "figure": str(path),
+                "generated": path.exists(),
+            })
+            print(f"Generated {path}")
+    if not all_data:
+        raise ValueError("No requested ablation figures were generated.")
     pd.concat(all_data, ignore_index=True).to_csv(
         args.output_dir / "dapro_ablation_plot_data.csv", index=False
     )

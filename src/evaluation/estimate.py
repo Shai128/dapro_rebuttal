@@ -750,6 +750,9 @@ def run_experiments(
         allocator_names=None,
         include_dapro_comparison=False,
         method_suite="legacy",
+        dapro_ablation_kind="score_noise",
+        score_noise_lambdas=(0.0, 0.1, 0.25, 0.5, 0.75, 1.0),
+        score_noise_seed=314159,
 ):
     taus_range = torch.tensor(np.arange(0.01, 1.0, 0.01)).to(device)
     m_upper_bound = 200 if is_real else 20
@@ -790,6 +793,9 @@ def run_experiments(
             include_locally_adaptive=not exclude_locally_adaptive,
             include_dapro_comparison=include_dapro_comparison,
             method_suite=method_suite,
+            dapro_ablation_kind=dapro_ablation_kind,
+            score_noise_lambdas=score_noise_lambdas,
+            score_noise_seed=score_noise_seed,
         )
         if allocator_names is not None:
             requested = set(allocator_names)
@@ -867,10 +873,23 @@ def main():
     parser.add_argument('--experiment-suffix', type=str, default='')
     parser.add_argument(
         '--method-suite',
-        choices=['legacy', 'unified_aht'],
+        choices=['legacy', 'unified_aht', 'dapro_ablation'],
         default='legacy',
         help='Allocator registry to run. The paper launcher uses unified_aht.',
     )
+    parser.add_argument(
+        '--dapro-ablation-kind',
+        choices=['score_noise', 'score'],
+        default='score_noise',
+        help='Metric score ablation to instantiate with dapro_ablation suite.',
+    )
+    parser.add_argument(
+        '--score-noise-lambdas',
+        type=float,
+        nargs='+',
+        default=[0.0, 0.1, 0.25, 0.5, 0.75, 1.0],
+    )
+    parser.add_argument('--score-noise-seed', type=int, default=314159)
     parser.add_argument('--exclude-legacy-dapro', action='store_true')
     parser.add_argument('--exclude-locally-adaptive', action='store_true')
     parser.add_argument(
@@ -920,7 +939,10 @@ def main():
                     exclude_locally_adaptive=args.exclude_locally_adaptive,
                     allocator_names=args.allocator_names,
                     include_dapro_comparison=args.include_dapro_comparison,
-                    method_suite=args.method_suite)
+                    method_suite=args.method_suite,
+                    dapro_ablation_kind=args.dapro_ablation_kind,
+                    score_noise_lambdas=args.score_noise_lambdas,
+                    score_noise_seed=args.score_noise_seed)
     print("Finished Metrics Evaluation Suite.")
 
 

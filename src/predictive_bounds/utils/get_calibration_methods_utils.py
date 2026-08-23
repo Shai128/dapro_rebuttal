@@ -241,6 +241,108 @@ def get_dapro_ablation_calibrations(
     return calibrations
 
 
+def get_metric_dapro_ablation_allocators(
+        conditional_grid,
+        budget_per_sample,
+        taus_range,
+        tau_prior,
+        m_upper_bound,
+        *,
+        ablation_kind: str,
+        dapro_n1: int = 50,
+        crc_control_size: int = 25,
+        score_noise_lambdas=(0.0, 0.1, 0.25, 0.5, 0.75, 1.0),
+        score_noise_seed: int = 314159,
+) -> List[BudgetAllocator]:
+    """Return Static plus paired raw/CRC metric score ablations.
+
+    These allocators optimize the event-rate target
+    ``A_i = 1{T_i <= m_upper_bound}``.  The named score comparison uses four
+    bins for every score, while the score-noise study deliberately retains
+    the production two-bin hazard representation and changes only score
+    quality.  Thus neither study confounds its x-axis with the controller,
+    target, budget, or representation.
+    """
+    kind = str(ablation_kind).lower()
+    if kind not in {"score_noise", "score"}:
+        raise ValueError(
+            "Metric DAPRO ablations support only 'score_noise' and 'score'."
+        )
+    dapro_n1 = int(dapro_n1)
+    crc_control_size = int(crc_control_size)
+    if dapro_n1 < 2:
+        raise ValueError("`dapro_n1` must be at least two.")
+    if not 0 < crc_control_size < dapro_n1:
+        raise ValueError("CRC requires 0 < crc_control_size < dapro_n1.")
+    lambdas = tuple(dict.fromkeys(float(value) for value in score_noise_lambdas))
+    if not lambdas or any(not 0.0 <= value <= 1.0 for value in lambdas):
+        raise ValueError("Score-noise lambdas must lie in [0, 1].")
+
+    allocators: list[BudgetAllocator] = [
+        OptimizedBudgetAllocator(
+            budget_per_sample, taus_range, tau_prior, m_upper_bound
+        )
+    ]
+    if kind == "score_noise":
+        configurations = [
+            dict(
+                value=lam,
+                label=f"lambda={lam:g}",
+                score_kind="hazard",
+                noise=lam,
+                bins=2,
+            )
+            for lam in lambdas
+        ]
+    else:
+        configurations = [
+            dict(value=float(index), label=label, score_kind=score_kind,
+                 noise=0.0, bins=4)
+            for index, (score_kind, label) in enumerate([
+                ("hazard", "Current hazard"),
+                ("remaining_quantile", "Remaining-time quantile"),
+                ("target_value", "Causal event-rate target value"),
+                ("random", "Random"),
+                ("oracle_remaining_time", "Oracle remaining time"),
+            ])
+        ]
+
+    common = dict(
+        conditional_grid=conditional_grid,
+        budget_per_sample=budget_per_sample,
+        taus_range=taus_range,
+        tau_prior=tau_prior,
+        m_upper_bound=m_upper_bound,
+        n1=dapro_n1,
+        target_alpha=0.10,
+        metric_estimation_horizon=m_upper_bound,
+        global_regularization=0.001,
+    )
+    for configuration in configurations:
+        ablation = dict(
+            ablation_kind=kind,
+            ablation_value=float(configuration["value"]),
+            ablation_label=str(configuration["label"]),
+            score_kind=str(configuration["score_kind"]),
+            score_noise_lambda=float(configuration["noise"]),
+            score_noise_seed=score_noise_seed,
+            score_bin_count=int(configuration["bins"]),
+        )
+        allocators.extend([
+            AblationSoftTargetDAPRO(
+                **common,
+                **ablation,
+                projection_budget_margin=0.0,
+            ),
+            AblationSoftTargetCRCDAPRO(
+                **common,
+                **ablation,
+                budget_control_size=crc_control_size,
+            ),
+        ])
+    return allocators
+
+
 def get_unified_bound_calibrations(
         conditional_grid,
         budget_per_sample,
@@ -1038,6 +1140,9 @@ def get_metric_allocators(
         include_locally_adaptive=True,
         include_dapro_comparison=False,
         method_suite="legacy",
+        dapro_ablation_kind="score_noise",
+        score_noise_lambdas=(0.0, 0.1, 0.25, 0.5, 0.75, 1.0),
+        score_noise_seed=314159,
 ) -> List[BudgetAllocator]:
     """Return the exact server/local metric-estimation comparison.
 
@@ -1067,6 +1172,20 @@ def get_metric_allocators(
         m_upper_bound=m_upper_bound,
     )
     target = dict(metric_estimation_horizon=m_upper_bound)
+
+    if method_suite == "dapro_ablation":
+        return get_metric_dapro_ablation_allocators(
+            conditional_grid,
+            budget_per_sample,
+            taus_range,
+            tau_prior,
+            m_upper_bound,
+            ablation_kind=dapro_ablation_kind,
+            dapro_n1=dapro_n1,
+            crc_control_size=crc_control_size,
+            score_noise_lambdas=score_noise_lambdas,
+            score_noise_seed=score_noise_seed,
+        )
 
     if method_suite == "unified_aht":
         allocations = [
@@ -1139,7 +1258,8 @@ def get_metric_allocators(
         return allocations
     if method_suite != "legacy":
         raise ValueError(
-            "`method_suite` must be 'legacy' or 'unified_aht'."
+            "`method_suite` must be 'legacy', 'unified_aht', or "
+            "'dapro_ablation'."
         )
 
     allocators = [
