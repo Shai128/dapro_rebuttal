@@ -74,3 +74,7 @@ the Phase-I fitted objective, Phase-II hard target-weight objective, and
 coverage variance across random splits. Exact plotted means, variances,
 standard deviations, and sample counts are stored in
 `dapro_ablation_mean_variance.csv`.
+
+Ordered numerical sweeps are line plots with mean plus/minus one standard
+deviation. The categorical hard-vs-soft and attacker-shift studies are shown
+as boxplots over the 50 random splits.

@@ -12,6 +12,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+import seaborn as sns
 
 _ROOT = Path(__file__).resolve().parents[4]
 if str(_ROOT) not in sys.path:
@@ -545,6 +546,13 @@ def generate_ablation_figure(
         output_path: Path,
         quality: str,
 ) -> pd.DataFrame:
+    if kind in {"hard_soft", "attacker_shift"}:
+        return generate_categorical_box_figure(
+            data,
+            kind=kind,
+            output_path=output_path,
+            quality=quality,
+        )
     spec = FACTOR_SPECS[kind]
     values = sorted(data["factor_value"].dropna().unique())
     figure, axes = plt.subplots(2, 2, figsize=(11.2, 7.1))
@@ -632,6 +640,89 @@ def generate_ablation_figure(
             fontsize=8.5,
         )
     figure.tight_layout(rect=(0.0, bottom, 1.0, 0.97), h_pad=2.0, w_pad=1.7)
+    save_jpeg(figure, output_path, quality)
+    plt.close(figure)
+    return pd.concat(all_statistics, ignore_index=True)
+
+
+def generate_categorical_box_figure(
+        data: pd.DataFrame,
+        *,
+        kind: str,
+        output_path: Path,
+        quality: str,
+) -> pd.DataFrame:
+    """Use boxplots for categorical coefficient and distribution shifts."""
+    if kind not in {"hard_soft", "attacker_shift"}:
+        raise ValueError("Categorical boxplots support hard_soft/attacker_shift.")
+    spec = FACTOR_SPECS[kind]
+    values = sorted(data["factor_value"].dropna().unique())
+    labels = (
+        data[["factor_value", "factor_label"]]
+        .dropna().drop_duplicates("factor_value")
+        .set_index("factor_value")["factor_label"].to_dict()
+    )
+    plot_data = data.copy()
+    plot_data["factor_label"] = plot_data["factor_value"].map(labels)
+    order = [labels.get(value, f"{value:g}") for value in values]
+    figure, axes = plt.subplots(2, 2, figsize=(11.2, 7.1))
+    panels = (
+        ("coverage_pct", "Coverage Rate", "Coverage rate (%)"),
+        (
+            "budget_used_per_sample", "Budget Used per Sample",
+            "Budget Used per Sample",
+        ),
+        (
+            "coverage_diff_pct", "Coverage Difference",
+            "|Coverage - target| (pp)",
+        ),
+        (
+            "mean_target_a_weight", "Mean Target-A Weight",
+            r"Mean selected-target weight $A_i(q_{\hat\tau})/\pi_i$",
+        ),
+    )
+    all_statistics = []
+    for axis, (metric, panel_title, ylabel) in zip(axes.flat, panels):
+        panel = plot_data.dropna(subset=["factor_label", "method", metric])
+        sns.boxplot(
+            data=panel,
+            x="factor_label",
+            y=metric,
+            hue="method",
+            order=order,
+            hue_order=list(METHOD_ORDER),
+            palette={method: METHOD_COLORS[method] for method in METHOD_ORDER},
+            linewidth=0.9,
+            fliersize=2.2,
+            ax=axis,
+        )
+        _style(axis, xlabel=str(spec["xlabel"]), ylabel=ylabel)
+        axis.set_title(panel_title, fontsize=11)
+        axis.tick_params(axis="x", labelrotation=0)
+        statistics = summarize_line_statistics(data, metric=metric)
+        statistics["metric"] = metric
+        all_statistics.append(statistics)
+        if metric == "coverage_pct":
+            axis.axhline(90.0, color="#D62728", linestyle="--", linewidth=1.2)
+        elif metric == "budget_used_per_sample":
+            axis.axhline(20.0, color="#D62728", linestyle="--", linewidth=1.2)
+    handles, legend_labels = axes.flat[1].get_legend_handles_labels()
+    if handles:
+        axes.flat[1].legend(
+            handles, legend_labels,
+            title="Method", loc="best", frameon=True, framealpha=0.88,
+            fontsize=9, title_fontsize=9,
+        )
+    for axis in (axes.flat[0], axes.flat[2], axes.flat[3]):
+        legend = axis.get_legend()
+        if legend is not None:
+            legend.remove()
+    figure.suptitle(
+        f"{spec['title']} (50 random calibration/test splits)",
+        y=0.995,
+        fontsize=13,
+    )
+    figure.tight_layout(rect=(0.0, 0.02, 1.0, 0.97), h_pad=2.0, w_pad=1.7)
     save_jpeg(figure, output_path, quality)
     plt.close(figure)
     return pd.concat(all_statistics, ignore_index=True)

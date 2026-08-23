@@ -110,9 +110,9 @@ def _source_rank(task: str, path: Path) -> int:
     if current_schema_columns.issubset(columns):
         schema_score += 10_000
     preferences = {
-        "lpb": ("lpb_unified_aht_v1", "_calibration"),
-        "upb": ("upb_unified_aht_v2", "_calibration_upb"),
-        "metrics": ("metric_unified_aht_v1", "_m"),
+        "lpb": ("v3", "_calibration"),
+        "upb": ("v3", "_calibration_upb"),
+        "metrics": ("v3", "_m"),
     }[task]
     for index, token in enumerate(preferences):
         if token in name:

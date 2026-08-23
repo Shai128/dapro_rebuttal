@@ -5,6 +5,9 @@ import numpy as np
 import pandas as pd
 import torch
 
+from src.predictive_bounds.experiments.dapro_ablation import (
+    summarize_paper as ablation_summarizer,
+)
 from src.predictive_bounds.budget_allocators.dapro_ablation import (
     AblationHardTargetDAPRO,
     AblationSoftTargetDAPRO,
@@ -433,3 +436,35 @@ def test_metric_summarizer_reports_error_and_across_split_variance(tmp_path):
         "event_rate_across_split_variance_pp2", "budget_used_per_sample",
         "observed_events", "mean_target_a_weight",
     }.issubset(set(statistics["metric"]))
+
+
+def test_hard_soft_and_attacker_shift_dispatch_to_boxplots(
+        tmp_path, monkeypatch):
+    rows = []
+    for value, label in ((0.0, "Hard"), (1.0, "Soft")):
+        for method in ("Static", "DAPRO", "DAPRO w/o CRC"):
+            for seed in range(3):
+                rows.append({
+                    "factor_value": value,
+                    "factor_label": label,
+                    "method": method,
+                    "coverage_pct": 90 + seed / 10,
+                    "budget_used_per_sample": 19 + seed / 10,
+                    "coverage_diff_pct": seed / 10,
+                    "mean_target_a_weight": 1 + seed / 10,
+                })
+    data = pd.DataFrame(rows)
+    calls = []
+
+    def record_boxplot(*args, **kwargs):
+        calls.append(kwargs)
+        return kwargs["ax"]
+
+    monkeypatch.setattr(ablation_summarizer.sns, "boxplot", record_boxplot)
+    output = tmp_path / "hard_soft.jpg"
+    generate_ablation_figure(
+        data, kind="hard_soft", output_path=output, quality="low"
+    )
+    assert len(calls) == 4
+    assert all(call["hue"] == "method" for call in calls)
+    assert output.exists()
