@@ -40,10 +40,10 @@ BUDGET_N1_VALUES=(25 50 50 100 150 200)
 DATASET_NAME="dataset_toxicity"
 DATASET_SETUP="attack_toxic_attack_qwen25_14b_instruct_lm_target_qwen25_14b_instruct_judge_detoxify"
 
-RED_SHIFT_SOURCE="attack_default_attack_gemma3_12b_it_lm_target_llama_31_8B_instruct_judge_llm-judge_gemma3_12b_it"
-RED_SHIFT_TEST="attack_default_attack_qwen25_14b_instruct_lm_target_llama_31_8B_instruct_judge_llm-judge_qwen25_14b_instruct"
-TOX_SHIFT_SOURCE="attack_toxic_attack_gemma3_12b_it_lm_target_llama_31_8B_instruct_judge_detoxify"
-TOX_SHIFT_TEST="attack_toxic_attack_qwen25_14b_instruct_lm_target_llama_31_8B_instruct_judge_detoxify"
+RED_SHIFT_GEMMA="attack_default_attack_gemma3_12b_it_lm_target_llama_31_8B_instruct_judge_llm-judge_gemma3_12b_it"
+RED_SHIFT_QWEN="attack_default_attack_qwen25_14b_instruct_lm_target_llama_31_8B_instruct_judge_llm-judge_qwen25_14b_instruct"
+TOX_SHIFT_GEMMA="attack_toxic_attack_gemma3_12b_it_lm_target_llama_31_8B_instruct_judge_detoxify"
+TOX_SHIFT_QWEN="attack_toxic_attack_qwen25_14b_instruct_lm_target_llama_31_8B_instruct_judge_detoxify"
 
 SLURM_ACCOUNT="galileo"
 SLURM_PARTITION="galileo"
@@ -242,13 +242,21 @@ for i in "${!BUDGET_VALUES[@]}"; do
   submit "budget=${BUDGET_VALUES[$i]}" budget "${BUDGET_VALUES[$i]}" \
     "${BUDGET_N1_VALUES[$i]}" "${BASE_EXPERIMENT_SUFFIX}_budget"
 done
-run_shift_configuration "red" "dataset_red_team" "$RED_SHIFT_SOURCE" "$RED_SHIFT_TEST" \
+run_shift_configuration "red_gemma_to_qwen" "dataset_red_team" "$RED_SHIFT_GEMMA" "$RED_SHIFT_QWEN" \
   "${BASE_EXPERIMENT_SUFFIX}_attacker_shift_red" &
-PIDS+=("$!"); LABELS+=("attacker_shift_red")
+PIDS+=("$!"); LABELS+=("attacker_shift_red_gemma_to_qwen")
 if (( ${#PIDS[@]} >= PARALLEL_JOBS )); then wait_batch; fi
-run_shift_configuration "toxicity" "dataset_toxicity" "$TOX_SHIFT_SOURCE" "$TOX_SHIFT_TEST" \
+run_shift_configuration "red_qwen_to_gemma" "dataset_red_team" "$RED_SHIFT_QWEN" "$RED_SHIFT_GEMMA" \
+  "${BASE_EXPERIMENT_SUFFIX}_attacker_shift_red_reverse" &
+PIDS+=("$!"); LABELS+=("attacker_shift_red_qwen_to_gemma")
+if (( ${#PIDS[@]} >= PARALLEL_JOBS )); then wait_batch; fi
+run_shift_configuration "toxicity_gemma_to_qwen" "dataset_toxicity" "$TOX_SHIFT_GEMMA" "$TOX_SHIFT_QWEN" \
   "${BASE_EXPERIMENT_SUFFIX}_attacker_shift_toxicity" &
-PIDS+=("$!"); LABELS+=("attacker_shift_toxicity")
+PIDS+=("$!"); LABELS+=("attacker_shift_toxicity_gemma_to_qwen")
+if (( ${#PIDS[@]} >= PARALLEL_JOBS )); then wait_batch; fi
+run_shift_configuration "toxicity_qwen_to_gemma" "dataset_toxicity" "$TOX_SHIFT_QWEN" "$TOX_SHIFT_GEMMA" \
+  "${BASE_EXPERIMENT_SUFFIX}_attacker_shift_toxicity_reverse" &
+PIDS+=("$!"); LABELS+=("attacker_shift_toxicity_qwen_to_gemma")
 if (( ${#PIDS[@]} >= PARALLEL_JOBS )); then wait_batch; fi
 if (( ${#PIDS[@]} > 0 )); then wait_batch; fi
 

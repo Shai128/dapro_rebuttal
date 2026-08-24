@@ -20,7 +20,8 @@ attacker-shift studies, which use budget 10:
 - `K=1,2,4,8` quantile-bin maps and a continuous monotone four-knot rank map;
 - current hazard, remaining-time quantile, causal target value, random rank,
   and a clearly tagged noncausal oracle remaining-time score;
-- Gemma-to-Qwen attacker shifts for Red Team and Toxicity at `B=10`;
+- Gemma-to-Qwen and Qwen-to-Gemma attacker shifts for Red Team and Toxicity
+  at `B=10`;
 - the existing N1, score-noise, and budget sweeps.
 
 Every cell contains Static, raw zero-margin DAPRO, and DAPRO+CRC. The oracle

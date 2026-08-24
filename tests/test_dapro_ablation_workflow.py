@@ -182,6 +182,10 @@ def test_server_launcher_exposes_slurm_cpu_and_parallel_controls():
     assert "METRIC_CRC_CONTROL_SIZE=25" in script
     assert "ATTACKER_SHIFT_BUDGET=10" in script
     assert '--budget-per-sample "$ATTACKER_SHIFT_BUDGET"' in script
+    assert '"$RED_SHIFT_QWEN" "$RED_SHIFT_GEMMA"' in script
+    assert '"$TOX_SHIFT_QWEN" "$TOX_SHIFT_GEMMA"' in script
+    assert "attacker_shift_red_reverse" in script
+    assert "attacker_shift_toxicity_reverse" in script
     assert "metric_score_noise" in script
     assert "metric_score" in script
 
@@ -518,8 +522,12 @@ def test_attacker_shift_loader_uses_only_budget_ten(tmp_path):
                 "ablation_value": 0.0 if dynamic else np.nan,
                 "ablation_n1": 50 if dynamic else np.nan,
                 "attacker_shift_source_dataset_name": "dataset_red_team",
-                "attacker_shift_source_dataset_setup": "gemma_source",
-                "attacker_shift_test_dataset_setup": "qwen_test",
+                "attacker_shift_source_dataset_setup": (
+                    "attack_default_attack_gemma3_source"
+                ),
+                "attacker_shift_test_dataset_setup": (
+                    "attack_default_attack_qwen25_test"
+                ),
             })
         parent = tmp_path / (
             f"red_team_{budget}_calibration_"
@@ -536,3 +544,77 @@ def test_attacker_shift_loader_uses_only_budget_ten(tmp_path):
     assert set(data["configured_budget_per_sample"]) == {10}
     assert set(data["budget_used_per_sample"]) == {10}
     assert len(inventory) == 1
+
+
+def test_attacker_shift_loader_orders_and_labels_both_directions(tmp_path):
+    raw_name = (
+        "calibration_dapro_soft_prefix_bins_2_lpb_alpha_0p10_"
+        "projection_margin_0p00_n1_50_ablation_attacker_shift_0_allocation"
+    )
+    crc_name = (
+        "calibration_dapro_soft_prefix_bins_2_lpb_alpha_0p10_"
+        "budget_crc_control_25_n1_50_ablation_attacker_shift_0_allocation"
+    )
+    setups = (
+        ("dataset_red_team", "red_gemma", "red_qwen", "red"),
+        ("dataset_red_team", "red_qwen", "red_gemma", "red_reverse"),
+        ("dataset_toxicity", "tox_gemma", "tox_qwen", "toxicity"),
+        ("dataset_toxicity", "tox_qwen", "tox_gemma", "toxicity_reverse"),
+    )
+    expanded = {
+        "red_gemma": "attack_default_attack_gemma3_source",
+        "red_qwen": "attack_default_attack_qwen25_source",
+        "tox_gemma": "attack_toxic_attack_gemma3_source",
+        "tox_qwen": "attack_toxic_attack_qwen25_source",
+    }
+    for dataset, source, target, suffix in setups:
+        rows = []
+        for name in (
+            "calibration_optimized_allocation", raw_name, crc_name
+        ):
+            dynamic = "dapro_" in name
+            rows.append({
+                "seed": 0,
+                "calibration_name": name,
+                "target_coverage": 0.90,
+                "coverage": 0.90,
+                "configured_budget_per_sample": 10,
+                "reported_assigned_budget_per_sample": 10.0,
+                "actual_event_stopped_budget_per_sample": 9.5,
+                "mean_calibrated_a_weighted_inverse_probability": 0.1,
+                "ablation_kind": "attacker_shift" if dynamic else np.nan,
+                "ablation_value": 0.0 if dynamic else np.nan,
+                "ablation_n1": 50 if dynamic else np.nan,
+                "attacker_shift_source_dataset_name": dataset,
+                "attacker_shift_source_dataset_setup": expanded[source],
+                "attacker_shift_test_dataset_setup": expanded[target],
+            })
+        parent = tmp_path / f"cell_test_attacker_shift_{suffix}"
+        parent.mkdir()
+        pd.DataFrame(rows).to_csv(parent / "all_df.csv", index=False)
+
+    data, inventory = load_ablation_data(
+        tmp_path,
+        experiment_prefix="test",
+        kind="attacker_shift",
+    )
+    labels = (
+        data[["factor_value", "factor_label"]]
+        .drop_duplicates().sort_values("factor_value")["factor_label"].tolist()
+    )
+    assert labels == [
+        "Red team\nGemma $\\to$ Qwen",
+        "Red team\nQwen $\\to$ Gemma",
+        "Toxicity\nGemma $\\to$ Qwen",
+        "Toxicity\nQwen $\\to$ Gemma",
+    ]
+    assert len(inventory) == 4
+    output = tmp_path / "attacker_shift_both_directions.jpg"
+    statistics = generate_ablation_figure(
+        data,
+        kind="attacker_shift",
+        output_path=output,
+        quality="low",
+    )
+    assert output.exists()
+    assert statistics["count"].eq(1).all()

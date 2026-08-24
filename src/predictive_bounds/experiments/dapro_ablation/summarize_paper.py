@@ -165,6 +165,41 @@ def _ablation_method_name(calibration_name: str) -> str | None:
     return method_display_name(name)
 
 
+def _attacker_name(dataset_setup: object) -> str:
+    """Return the attacker family encoded in an experiment setup string."""
+    setup = str(dataset_setup).lower()
+    if "attack_gemma3" in setup:
+        return "Gemma"
+    if "attack_qwen25" in setup:
+        return "Qwen"
+    raise ValueError(
+        "Attacker-shift setup must encode a Gemma3 or Qwen2.5 attacker; "
+        f"got {dataset_setup!r}."
+    )
+
+
+def _attacker_shift_plot_identity(row: pd.Series) -> tuple[int, int, str]:
+    """Return stable task/direction order and the displayed shift label."""
+    dataset = str(row["attacker_shift_source_dataset_name"])
+    if "red_team" in dataset:
+        task_order, task_label = 0, "Red team"
+    elif "toxicity" in dataset:
+        task_order, task_label = 1, "Toxicity"
+    else:
+        raise ValueError(f"Unsupported attacker-shift dataset {dataset!r}.")
+    source = _attacker_name(row["attacker_shift_source_dataset_setup"])
+    target = _attacker_name(row["attacker_shift_test_dataset_setup"])
+    if source == target:
+        raise ValueError(
+            "Attacker-shift source and test attackers must differ; "
+            f"both are {source}."
+        )
+    direction_order = 0 if (source, target) == ("Gemma", "Qwen") else 1
+    return task_order, direction_order, (
+        task_label + f"\n{source} $\\to$ {target}"
+    )
+
+
 def load_ablation_data(
         input_dir: Path,
         *,
@@ -258,16 +293,28 @@ def load_ablation_data(
     )
     if kind == "attacker_shift":
         dynamic = data[~data["method"].eq("Static")].copy()
-        setups = sorted(
-            dynamic[
-                [
-                    "attacker_shift_source_dataset_name",
-                    "attacker_shift_source_dataset_setup",
-                    "attacker_shift_test_dataset_setup",
-                ]
-            ].drop_duplicates().itertuples(index=False, name=None)
+        setup_columns = [
+            "attacker_shift_source_dataset_name",
+            "attacker_shift_source_dataset_setup",
+            "attacker_shift_test_dataset_setup",
+        ]
+        setup_rows = dynamic[setup_columns].drop_duplicates().copy()
+        identities = setup_rows.apply(
+            _attacker_shift_plot_identity, axis=1
         )
-        setup_index = {setup: float(index) for index, setup in enumerate(setups)}
+        setup_rows[["task_order", "direction_order", "shift_label"]] = (
+            pd.DataFrame(identities.tolist(), index=setup_rows.index)
+        )
+        setup_rows = setup_rows.sort_values(
+            ["task_order", "direction_order"]
+        ).reset_index(drop=True)
+        setup_rows["plot_index"] = setup_rows.index.astype(float)
+        setup_index = {
+            tuple(getattr(row, column) for column in setup_columns): (
+                row.plot_index
+            )
+            for row in setup_rows.itertuples(index=False)
+        }
         for row_index, row in data.iterrows():
             setup = (
                 row["attacker_shift_source_dataset_name"],
@@ -325,12 +372,10 @@ def load_ablation_data(
                 SCORE_DISPLAY_LABELS
             )
     elif kind == "attacker_shift":
-        def shift_label(row) -> str:
-            dataset = str(row["attacker_shift_source_dataset_name"])
-            task = "Red team" if "red_team" in dataset else "Toxicity"
-            return task + "\nGemma $\\to$ Qwen"
         dynamic_labels = data[~data["method"].eq("Static")].copy()
-        dynamic_labels["label"] = dynamic_labels.apply(shift_label, axis=1)
+        dynamic_labels["label"] = dynamic_labels.apply(
+            lambda row: _attacker_shift_plot_identity(row)[2], axis=1
+        )
         labels = dynamic_labels.drop_duplicates("factor_value").set_index(
             "factor_value"
         )["label"].to_dict()
