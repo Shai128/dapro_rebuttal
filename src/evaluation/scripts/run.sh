@@ -28,16 +28,16 @@ DRY_RUN=0
 GENERATE_FIGURES=0
 
 DATASETS=(
-#  toxicity
-#  red_team_qwen
+  toxicity
+  red_team_qwen
   red_team_llama_guard
   hallucination3
   autoif
 )
 
 TARGET_MODELS=(
-#  qwen25_14b_instruct
-#  llama_31_8B_instruct
+  qwen25_14b_instruct
+  llama_31_8B_instruct
   mini_phi_4_instruct
   gemma3_4b_it
 )
