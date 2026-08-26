@@ -227,7 +227,7 @@ def test_construct_registers_all_a_weighted_lpb_variants():
     )
     assert (
         "calibration_dapro_soft_prefix_bins_2_lpb_alpha_0p10_"
-        "global_0p001_projection_margin_1p00_n1_100_allocation"
+        "global_0p001_projection_margin_0p00_n1_100_allocation"
         in names
     )
     assert (

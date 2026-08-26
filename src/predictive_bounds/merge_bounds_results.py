@@ -80,7 +80,7 @@ def process_calibration(calibration, seed, experiments_name, bound_type):
 
 def get_calibration_methods(conditional_grid, budget_per_sample, taus_range, tau_prior, m_upper_bound, allocations: str,
                             device, bound_type, dapro_n1_values=(200,),
-                            definitive_dapro_margins=(1.0,),
+                            definitive_dapro_margins=(0.0,),
                             method_suite="legacy",
                             target_coverages=(0.90,),
                             dapro_ablation_kind="n1",
@@ -152,7 +152,7 @@ def get_calibration_methods(conditional_grid, budget_per_sample, taus_range, tau
 
 def merge_results(experiments_name, seeds, budget_per_sample, taus_range, tau_prior, m_upper_bound, target_taus_list,
                   allocations, device, bound_type, calibration_names=None,
-                  dapro_n1_values=(200,), definitive_dapro_margins=(1.0,),
+                  dapro_n1_values=(200,), definitive_dapro_margins=(0.0,),
                   method_suite="legacy", target_coverages=(0.90,),
                   dapro_ablation_kind="n1",
                   score_noise_lambdas=(0.0, 0.1, 0.25, 0.5, 0.75, 1.0),
@@ -299,7 +299,7 @@ def main():
         '--definitive-dapro-margins',
         type=float,
         nargs='+',
-        default=[1.0],
+        default=[0.0],
         help=(
             "Projection-error reserves used to reconstruct assumption-based "
             "projection-DAPRO ablation names. Must match the construction "

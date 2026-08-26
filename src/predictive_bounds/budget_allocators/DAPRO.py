@@ -32,6 +32,7 @@ from src.predictive_bounds.budget_allocators.projected_optimization_utils import
 from src.predictive_bounds.budget_allocators.risk_controlled_budget import (
     affine_cumulative_policy_family,
     cumulative_policy_costs,
+    select_aggressive_crc_budget_candidate,
     select_crc_budget_candidate,
     select_hoeffding_budget_candidate,
     solve_constant_continuation_policy,
@@ -403,9 +404,12 @@ class LegacyMeanWeightDAPRO(BudgetAllocator):
         self.reach_t_max_is_success = reach_t_max_is_success
         self.evaluate_projection = evaluate_projection
         self.terminal_pi_min = terminal_pi_min
-        if budget_control_mode not in {None, "crc", "hoeffding"}:
+        if budget_control_mode not in {
+                None, "crc", "crc_aggressive", "hoeffding"
+        }:
             raise ValueError(
-                "`budget_control_mode` must be one of: None, crc, hoeffding."
+                "`budget_control_mode` must be one of: None, crc, "
+                "crc_aggressive, hoeffding."
             )
         if budget_control_mode is None:
             if budget_control_size != 0:
@@ -906,6 +910,10 @@ class LegacyMeanWeightDAPRO(BudgetAllocator):
                     selection = select_crc_budget_candidate(
                         **selector_kwargs,
                     )
+                elif self.budget_control_mode == "crc_aggressive":
+                    selection = select_aggressive_crc_budget_candidate(
+                        **selector_kwargs,
+                    )
                 else:
                     selection = select_hoeffding_budget_candidate(
                         **selector_kwargs,
@@ -1279,6 +1287,10 @@ class LegacyMeanWeightDAPRO(BudgetAllocator):
                     selection = select_crc_budget_candidate(
                         **selector_kwargs,
                     )
+                elif self.budget_control_mode == "crc_aggressive":
+                    selection = select_aggressive_crc_budget_candidate(
+                        **selector_kwargs,
+                    )
                 else:
                     selection = select_hoeffding_budget_candidate(
                         **selector_kwargs,
@@ -1386,6 +1398,127 @@ class LegacyMeanWeightDAPRO(BudgetAllocator):
                     control_lengths.detach().cpu().numpy().astype(np.float64)
                 )
                 crc_rho = control_count / len(test_idxs)
+                aggressive_crc_metrics = {}
+                if self.budget_control_mode == "crc_aggressive":
+                    phase2_lengths = torch.minimum(
+                        t_test.reshape(-1).to(torch.long),
+                        test_prior_q.reshape(-1).to(torch.long),
+                    )
+                    remaining_lengths = torch.cat(
+                        [control_lengths, phase2_lengths], dim=0
+                    ).to(torch.float64)
+                    remaining_active = (
+                        torch.arange(T_max_curr, device=device).unsqueeze(0)
+                        < remaining_lengths.to(torch.long).unsqueeze(1)
+                    ).to(torch.float64)
+                    selected_remaining_costs = (
+                        p_remaining.cumprod(dim=1) * remaining_active
+                    ).sum(dim=1)
+                    base_remaining_costs = (
+                        base_remaining_cumulative * remaining_active
+                    ).sum(dim=1)
+                    transformed_gamma = (
+                        (control_count + 1) / len(test_idxs)
+                    )
+                    empirical_mu_b = float(
+                        remaining_lengths.mean().item()
+                    )
+                    transformed_selected = (
+                        selected_remaining_costs
+                        + transformed_gamma
+                        * (remaining_lengths - empirical_mu_b)
+                    )
+                    transformed_base = (
+                        base_remaining_costs
+                        + transformed_gamma
+                        * (remaining_lengths - empirical_mu_b)
+                    )
+                    candidate_bound = float(
+                        selector_kwargs[
+                            "maximum_candidate_cost_per_sample"
+                        ]
+                    )
+                    lower_b = (
+                        1.0
+                        if bool((remaining_lengths >= 1).all().item())
+                        else 0.0
+                    )
+                    sufficient_cap_rhs = (
+                        candidate_bound
+                        - transformed_gamma
+                        * (
+                            remaining_prior_q.to(torch.float64)
+                            - lower_b
+                        )
+                    )
+                    selected_cap_excess = (
+                        selected_remaining_costs - sufficient_cap_rhs
+                    )
+                    base_cap_excess = (
+                        base_remaining_costs - sufficient_cap_rhs
+                    )
+                    aggressive_crc_metrics = {
+                        "risk_budget_aggressive_crc_empirical_mu_b": (
+                            empirical_mu_b
+                        ),
+                        "risk_budget_aggressive_crc_gamma": (
+                            transformed_gamma
+                        ),
+                        "risk_budget_aggressive_crc_b_lower_bound": lower_b,
+                        (
+                            "risk_budget_aggressive_crc_selected_transformed_"
+                            "envelope_max"
+                        ): float(transformed_selected.max().item()),
+                        (
+                            "risk_budget_aggressive_crc_selected_transformed_"
+                            "envelope_violation_rate"
+                        ): float((
+                            transformed_selected > candidate_bound + 1e-10
+                        ).to(torch.float64).mean().item()),
+                        (
+                            "risk_budget_aggressive_crc_selected_transformed_"
+                            "envelope_max_excess"
+                        ): float(
+                            (transformed_selected - candidate_bound).max().item()
+                        ),
+                        (
+                            "risk_budget_aggressive_crc_family_transformed_"
+                            "envelope_max"
+                        ): float(transformed_base.max().item()),
+                        (
+                            "risk_budget_aggressive_crc_family_transformed_"
+                            "envelope_violation_rate"
+                        ): float((
+                            transformed_base > candidate_bound + 1e-10
+                        ).to(torch.float64).mean().item()),
+                        (
+                            "risk_budget_aggressive_crc_family_transformed_"
+                            "envelope_max_excess"
+                        ): float(
+                            (transformed_base - candidate_bound).max().item()
+                        ),
+                        (
+                            "risk_budget_aggressive_crc_selected_sufficient_"
+                            "cap_violation_rate"
+                        ): float((
+                            selected_cap_excess > 1e-10
+                        ).to(torch.float64).mean().item()),
+                        (
+                            "risk_budget_aggressive_crc_selected_sufficient_"
+                            "cap_max_excess"
+                        ): float(selected_cap_excess.max().item()),
+                        (
+                            "risk_budget_aggressive_crc_family_sufficient_"
+                            "cap_violation_rate"
+                        ): float((
+                            base_cap_excess > 1e-10
+                        ).to(torch.float64).mean().item()),
+                        (
+                            "risk_budget_aggressive_crc_family_sufficient_"
+                            "cap_max_excess"
+                        ): float(base_cap_excess.max().item()),
+                        "risk_budget_aggressive_crc_requirement_enforced": 0,
+                    }
                 risk_control_metrics = {
                     "risk_budget_control_enabled": 1,
                     "risk_budget_control_mode": self.budget_control_mode,
@@ -1451,6 +1584,7 @@ class LegacyMeanWeightDAPRO(BudgetAllocator):
                             + crc_rho * control_lengths_numpy.mean()
                         )
                     ),
+                    **aggressive_crc_metrics,
                     **row_cap_metrics,
                 }
                 budget_correction_metrics.update({
@@ -2828,7 +2962,10 @@ class DefinitiveDAPRO(RegularizedTargetAWeightedDAPRO):
     DEFAULT_N1 = 200
     DEFAULT_TARGET_ALPHA = 0.10
     DEFAULT_GLOBAL_REGULARIZATION = 0.001
-    DEFAULT_PROJECTION_BUDGET_MARGIN = 1.0
+    # The canonical raw paper method uses its learned projection as-is.  A
+    # positive reserve is an explicit projection-margin ablation, never an
+    # implicit task-specific default.
+    DEFAULT_PROJECTION_BUDGET_MARGIN = 0.0
     SCORE_BIN_COUNT = 2
 
     def __init__(
@@ -3031,6 +3168,8 @@ class SoftTargetDAPRO(DefinitiveDAPRO):
             "generalized_dapro_coefficient_estimator": (
                 "history_prefix_hazard_model_integrated"
             ),
+            "generalized_dapro_score": "current_conditional_event_hazard",
+            "generalized_dapro_score_bin_count": self.score_bin_count,
             "generalized_dapro_policy_class": "time_score_bin_dynamic",
             "generalized_dapro_uses_current_prefix_x_it": 1,
             "generalized_dapro_uses_initial_x_i0_only": 0,
@@ -4089,7 +4228,13 @@ class SoftTargetCRCUPBDAPRO(SoftTargetUPBDAPRO):
 
 
 class HistoryAdaptiveUPBDAPROMixin:
-    """Execute the shared DAPRO solver as a genuinely sequential UPB policy."""
+    """Execute the canonical history-adaptive DAPRO policy for an UPB target.
+
+    Only the target coefficient changes relative to LPB/metric DAPRO.  The
+    predictable score remains the current conditional event hazard and the
+    score map remains K=2, so task comparisons do not silently change both
+    the target and the policy representation.
+    """
 
     upb_endpoint_block_action = False
 
@@ -4107,42 +4252,8 @@ class HistoryAdaptiveUPBDAPROMixin:
         )
 
     def policy_scores(self, quantile_est: torch.Tensor) -> torch.Tensor:
-        """Current-prefix residual value per predicted remaining reveal cost."""
-        if self._target_anchor_index is None:
-            raise RuntimeError("The UPB target anchor must be frozen first.")
-        grid = self.conditional_grid.to(torch.float64)
-        n, width, _ = grid.shape
-        horizons = quantile_est[:, self._target_anchor_index].to(torch.long)
-        scores = torch.zeros((n, width), dtype=torch.float64, device=grid.device)
-        row_index = torch.arange(n, device=grid.device)
-        for current in range(width):
-            pmf = grid[:, current, :].clamp_min(0.0)
-            pmf = pmf / pmf.sum(dim=1, keepdim=True).clamp_min(1e-15)
-            tail = torch.flip(
-                torch.cumsum(torch.flip(pmf, dims=(1,)), dim=1), dims=(1,)
-            )
-            finite_future = (horizons > current) & (horizons <= width)
-            if not torch.any(finite_future):
-                continue
-            endpoint = horizons.clamp(min=1, max=width)
-            miscoverage = tail[row_index, endpoint]
-            # tail[k] is P(T>=k+1); summing k=current,...,f-1 is
-            # the expected number of additional turns needed to resolve A(f).
-            prefix = torch.cumsum(tail[:, :width], dim=1)
-            endpoint_cost = prefix[row_index, endpoint - 1]
-            prior_cost = (
-                prefix[:, current - 1]
-                if current > 0
-                else torch.zeros(n, dtype=prefix.dtype, device=prefix.device)
-            )
-            remaining_cost = (endpoint_cost - prior_cost).clamp_min(1e-12)
-            residual_risk = miscoverage * (1.0 - miscoverage)
-            scores[:, current] = torch.where(
-                finite_future,
-                torch.sqrt(residual_risk / remaining_cost),
-                torch.zeros_like(residual_risk),
-            )
-        return scores
+        """Use the same current-hazard score as LPB and metric DAPRO."""
+        return AWeightedDAPRO.policy_scores(self, quantile_est)
 
     def objective_metadata(self) -> dict:
         metadata = super().objective_metadata()
@@ -4153,7 +4264,7 @@ class HistoryAdaptiveUPBDAPROMixin:
             ),
             "generalized_dapro_policy_fit_uses_labels": 1,
             "generalized_dapro_score": (
-                "current_upb_residual_variance_per_predicted_remaining_cost"
+                "current_conditional_event_hazard"
             ),
             "generalized_dapro_uses_current_prefix_x_it": 1,
             "generalized_dapro_uses_initial_x_i0_only": 0,
@@ -4186,7 +4297,8 @@ class SoftPrefixEndpointUPBDAPRO(
         margin = self._format_parameter(self.projection_budget_margin, 2)
         base = (
             f"dapro_soft_prefix_bins_{self.score_bin_count}_"
-            f"upb_endpoint_dynamic_aht_seq_estimator_v2_coverage_{coverage}_"
+            f"upb_endpoint_dynamic_aht_seq_estimator_v3_hazard_score_"
+            f"coverage_{coverage}_"
             f"global_{regularization}_projection_margin_{margin}"
         )
         base += self.budget_control_name_suffix
@@ -4395,8 +4507,31 @@ class SoftPrefixEndpointCRCUPBDAPRO(SoftPrefixEndpointUPBDAPRO):
 
     def __init__(
             self, *args, n1: int = 50, budget_control_size: int = 25,
-            budget_candidate_count: int = 401, **kwargs,
+            budget_candidate_count: int = 401,
+            row_cost_cap_multiplier: float | None = 2.0,
+            **kwargs,
     ):
+        if (
+                row_cost_cap_multiplier is not None
+                and (
+                    not np.isfinite(row_cost_cap_multiplier)
+                    or row_cost_cap_multiplier <= 0
+                )
+        ):
+            raise ValueError(
+                "`row_cost_cap_multiplier` must be finite and positive."
+            )
+        self.row_cost_cap_multiplier = (
+            None
+            if row_cost_cap_multiplier is None
+            else float(row_cost_cap_multiplier)
+        )
+        if "budget_per_sample" in kwargs:
+            budget_per_sample = float(kwargs["budget_per_sample"])
+        elif len(args) >= 2:
+            budget_per_sample = float(args[1])
+        else:
+            raise TypeError("Missing required argument: `budget_per_sample`.")
         super().__init__(
             *args,
             n1=n1,
@@ -4404,13 +4539,30 @@ class SoftPrefixEndpointCRCUPBDAPRO(SoftPrefixEndpointUPBDAPRO):
             budget_control_mode="crc",
             budget_control_size=budget_control_size,
             budget_candidate_count=budget_candidate_count,
-            risk_candidate_row_cost_cap=None,
+            risk_candidate_row_cost_cap=(
+                None
+                if self.row_cost_cap_multiplier is None
+                else self.row_cost_cap_multiplier * budget_per_sample
+            ),
             **kwargs,
         )
 
     @property
     def objective_kind(self) -> str:
         return f"{super().objective_kind}_crc"
+
+    def objective_metadata(self) -> dict:
+        metadata = super().objective_metadata()
+        metadata.update({
+            "generalized_dapro_budget_control_mode": "crc",
+            "generalized_dapro_crc_control_size": self.budget_control_size,
+            "generalized_dapro_crc_row_cost_cap_multiplier": (
+                self.row_cost_cap_multiplier
+                if self.row_cost_cap_multiplier is not None
+                else np.nan
+            ),
+        })
+        return metadata
 
 
 class InformationGainCRCUPBDAPRO(InformationGainUPBDAPRO):

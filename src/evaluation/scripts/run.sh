@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Metric Generalized DAPRO uses the same paper-wide current-hazard K=2 map,
+# global regularization 0.001, raw zero-margin controller, and 2B capped CRC
+# controller as the LPB/UPB launchers.  Only the event-rate target changes.
 # Run and merge the production fixed-benchmark metric comparison.
 #
 # The unified registry contains the zero-acquisition Uncalibrated model

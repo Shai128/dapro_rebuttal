@@ -5,6 +5,7 @@ from src.predictive_bounds.budget_allocators.risk_controlled_budget import (
     affine_cumulative_policy_family,
     cumulative_policy_costs,
     row_local_horizon_budget_cap,
+    select_aggressive_crc_budget_candidate,
     select_crc_budget_candidate,
     select_hoeffding_budget_candidate,
     solve_constant_continuation_policy,
@@ -129,6 +130,39 @@ def test_crc_uses_separate_candidate_and_pilot_envelopes():
 
     assert separate.correction_per_sample < shared.correction_per_sample
     assert separate.selected_index <= shared.selected_index
+
+
+def test_aggressive_crc_uses_realized_residual_and_candidate_bound():
+    costs = np.array(
+        [
+            [1.0, 0.4, 0.1],
+            [0.8, 0.3, 0.1],
+        ]
+    )
+    pilot = np.array([2.0, 1.0])
+    result = select_aggressive_crc_budget_candidate(
+        costs,
+        pilot,
+        total_budget_after_policy_fit=9.0,
+        deployment_sample_count=4,
+        maximum_cost_per_sample=2.0,
+        maximum_candidate_cost_per_sample=1.0,
+        maximum_pilot_cost_per_sample=2.0,
+    )
+
+    # The realized control cost leaves (9 - 3) / 4 = 1.5 turns per
+    # deployment row.  Candidate zero is feasible because
+    # (1.0 + 0.8 + C_max) / (2 + 1) = 2.8 / 3.
+    assert result.selected_index == 0
+    np.testing.assert_allclose(result.deployment_budget_per_sample, 1.5)
+    np.testing.assert_allclose(
+        result.selector_left_side_per_sample,
+        2.8 / 3.0,
+    )
+    np.testing.assert_allclose(result.correction_per_sample, 1.0 / 3.0)
+    assert result.guarantee_kind == (
+        "crc_aggressive_realized_residual_requires_transformed_envelope"
+    )
 
 
 def test_crc_exact_enumeration_controls_expected_total_cost():

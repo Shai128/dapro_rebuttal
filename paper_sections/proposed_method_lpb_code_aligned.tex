@@ -1,0 +1,338 @@
+% Code-aligned replacement for the LPB-only Proposed Method section.
+% This file uses the notation/macros of the main manuscript and can be
+% included with \input{paper_sections/proposed_method_lpb_code_aligned}.
+
+\section{Proposed Method}
+\label{sec:method}
+
+Our adaptive budget allocation strategy operates in two phases.  We randomly
+partition the calibration indices $\calI=\{1,\ldots,N\}$ into three disjoint
+sets: a policy-fitting set $\calIone$, an independent budget-control set
+$\calIcrc$, and a deployment set $\calItwo$.  We write
+$N_1=|\calIone|$, $n=|\calIcrc|$, and $m=|\calItwo|$.  The set
+$\calIcrc$ is used only when conformal risk control (CRC) is enabled; without
+CRC, it is empty.  This convention takes $N_1$ to denote only the policy-fit
+sample size.
+
+For prompt $i$, let
+\begin{equation}
+    Q_i:=\qprior(X_i)=\fhat_{\tauprior}(X_i),
+    \qquad L_i:=\min\{T_i,Q_i\}.
+    \label{eq:dapro_lpb_active_length}
+\end{equation}
+Thus $L_i$ is the number of interactions needed either to observe the event or
+to resolve every LPB candidate up to the prior level.  We fully observe all
+rows in $\calIone\cup\calIcrc$ through $L_i$.  The rows in $\calIone$ are
+used to learn the acquisition policy, whereas the labels in $\calIcrc$ are
+reserved for budget calibration.
+
+At acquisition turn $t$, the current history is mapped to a predictable score
+$S_i(t)=\mathcal S_t(H_i(t-1))$.  A larger score indicates that acquiring the
+next interaction is more valuable.  The LPB implementation uses the current
+conditional event hazard,
+\begin{equation}
+    S_i(t)=h_i(t)
+    :=\widehat{\mathbb P}\!\left(
+       T_i=t\mid T_i\geq t,H_i(t-1),\Dtrain
+    \right).
+    \label{eq:dapro_lpb_hazard_score}
+\end{equation}
+The conditional model is trained independently of the calibration outcomes.
+At every reached prefix the policy returns a conditional continuation
+probability $P_i(t)$, and the cumulative probability of reaching interaction
+$t$ is
+\begin{equation}
+    \rho_i(t):=\prod_{s=1}^{t}P_i(s),
+    \qquad \rho_i(0):=1.
+    \label{eq:dapro_lpb_reach}
+\end{equation}
+Conditional on a complete trajectory, the expected number of acquired
+interactions is therefore
+\begin{equation}
+    c_i(P):=\sum_{t=1}^{L_i}\rho_i(t).
+    \label{eq:dapro_lpb_expected_cost}
+\end{equation}
+
+\subsection{Phase I: learning the acquisition policy}
+
+\paragraph{Variance-aligned LPB target.}
+Let $\{\tau_j\}$ be the ordered candidate grid restricted to
+$\tau_j\leq\tauprior$.  The exact implementation freezes the last grid point
+strictly below the target miscoverage level,
+\begin{equation}
+    \tau_\star:=\max\{\tau_j:\tau_j<\alpha\},
+    \qquad F_i^\star:=\fhat_{\tau_\star}(X_i).
+    \label{eq:dapro_lpb_anchor}
+\end{equation}
+With a sufficiently fine grid we use the shorthand $F_i^\star=\fhat_\alpha(X_i)$.
+The fixed target event is
+\begin{equation}
+    A_i^\star:=\mathbb I\{T_i<F_i^\star\}.
+    \label{eq:dapro_lpb_target_a}
+\end{equation}
+For a frozen predictable policy, the Horvitz--Thompson (HT) estimator of the
+miscoverage at this candidate has conditional acquisition variance
+\begin{equation}
+    \operatorname{Var}\!\left(\widehat\mu_\star\mid\mathcal D\right)
+    =\frac{1}{N^2}\sum_{i=1}^{N}
+      A_i^\star\left(\frac{1}{\pi_i}-1\right),
+    \label{eq:dapro_lpb_fixed_variance}
+\end{equation}
+where $\pi_i$ is the probability of reaching the event endpoint when
+$A_i^\star=1$.  Equation~\eqref{eq:dapro_lpb_fixed_variance} motivates
+allocating greater reach probability to trajectories that contribute to the
+target-$A$ event.  It is exact for the frozen candidate $F_i^\star$ and is a
+proxy for the complete LPB procedure, which estimates a calibration curve and
+then selects a data-dependent candidate $\widehat\tau$.
+
+\paragraph{Soft-prefix target masses.}
+Using the hard indicator in~\eqref{eq:dapro_lpb_target_a} only at its realized
+endpoint gives a noisy fitting objective when $N_1$ is small.  Soft-prefix
+Generalized DAPRO instead distributes the target across the observed prefixes.
+For $i\in\calIone$, define
+\begin{equation}
+    a_i(t):=
+    \mathbb I\{t\leq L_i\}
+    \mathbb I\{t<F_i^\star\}\,h_i(t).
+    \label{eq:dapro_lpb_soft_mass}
+\end{equation}
+This is a plug-in, Rao--Blackwellized estimate of target-event mass at turn
+$t$.  The trajectory label $T_i$ determines which policy-fit prefixes exist;
+the model hazard supplies the soft coefficient on each such prefix.  Model
+accuracy affects allocation efficiency but not the validity of the eventual
+HT correction, provided that the deployed policy is predictable and its true
+propensities are recorded.
+
+Let $B_{\mathrm{tot}}=N\bar B$ denote the total budget, where $\bar B$ is the
+target budget per calibration sample.  After fully observing the policy-fit
+rows, the policy-shape budget used by the implementation is
+\begin{equation}
+    \bar B_{\mathrm{shape}}
+    :=\frac{B_{\mathrm{tot}}-\sum_{i\in\calIone}L_i}{n+m}.
+    \label{eq:dapro_lpb_shape_budget}
+\end{equation}
+When CRC is disabled, $n=0$ and this is exactly the budget remaining per
+deployment row.  When CRC is enabled, the denominator includes both the
+control and deployment rows.  We do \emph{not} subtract the realized CRC-fold
+cost at this stage; that cost is incorporated exactly once by the CRC loss
+below.
+
+For a low-complexity ordered score partition at each time, the implementation
+learns one continuation value per time--score cell.  Denote the resulting
+monotone lookup by $M_t^{\mathrm{raw}}$.  For fixed score cells, it solves
+\begin{equation}
+\begin{aligned}
+    \min_{M^{\mathrm{raw}}}\quad
+    &\frac{1}{N_1}\sum_{i\in\calIone}
+      \sum_{t=1}^{L_i}a_i(t)
+      \left\{\frac{1}{\rho_i(t)}-1\right\}\\
+    \text{subject to}\quad
+    &\frac{1}{N_1}\sum_{i\in\calIone}
+      \sum_{t=1}^{L_i}\rho_i(t)
+      \leq\bar B_{\mathrm{shape}},\\
+    &S_i(t)\leq S_j(t)
+      \Longrightarrow
+      M_t^{\mathrm{raw}}(S_i(t))
+      \leq M_t^{\mathrm{raw}}(S_j(t)),
+      \qquad\forall\,t,i,j,
+\end{aligned}
+\label{eq:dapro_lpb_soft_optimization}
+\end{equation}
+where
+$\rho_i(t)=\prod_{s=1}^{t}M_s^{\mathrm{raw}}(S_i(s))$.
+The $-1$ term is constant in the policy and may be omitted by the numerical
+solver.
+
+The implementation works in log-continuation coordinates.  For a fixed
+Lagrange multiplier on the budget constraint, each time-coordinate update has
+the form $\sum_r\{u_r e^{-y_r}+v_r e^{y_r}\}$.  Its unconstrained update is
+$y_r=\frac12\log(u_r/v_r)$, and generalized pool-adjacent-violators merges
+ordered score cells whenever these updates violate monotonicity.  The solver
+cycles over time coordinates and uses an outer scalar bisection on the
+Lagrange multiplier to reach the fitted budget constraint.  Importantly, the
+learned cell values themselves form the deployable lookup table: the current
+implementation does \emph{not} first learn arbitrary row-wise probabilities
+and then fit a second Platt, isotonic, or regression model
+$\widetilde M_t$.
+
+After the raw lookup is learned, one shared cumulative-reach intercept is fit
+on $\calIone$ so that the corrected cumulative paths satisfy the same
+empirical shape budget.  The corrected cumulative path is converted back to
+conditional probabilities through
+\begin{equation}
+    P_i(1)=\rho_i(1),
+    \qquad P_i(t)=\frac{\rho_i(t)}{\rho_i(t-1)}.
+    \label{eq:dapro_lpb_cumulative_to_conditional}
+\end{equation}
+Consequently, the final conditional probability can depend on the preceding
+score path through $\rho_i(t-1)$, even though the raw lookup at turn $t$ uses
+the current score cell.  Prefixes after $L_i$ are excluded from the fitted
+objective and cost; they are not assigned a meaningful stop probability,
+because $L_i$ contains the future event time and is unknown during deployment.
+
+Without CRC, the production method uses this corrected lookup directly and
+does not reserve a worst-case projection-error margin.  It therefore matches
+the empirical policy-fit budget whenever the budget boundary is attainable
+(and otherwise remains below it), but this alone is not a finite-sample proof
+that the learned cost transfers to new trajectories.  The CRC construction
+below supplies the finite-sample marginal expected-budget statement.
+
+\subsection{Independent CRC budget calibration}
+\label{sec:dapro_lpb_crc}
+
+CRC changes only the budget controller: the target masses, score, policy
+class, and variance objective remain unchanged.  First, using only
+$\calIone$, we freeze the target anchor, score cutpoints, continuation table,
+and cumulative-reach correction.  To give every candidate policy a useful
+pathwise cost bound, we also learn from $\calIone$ a shared non-increasing
+cumulative envelope $e(1),\ldots,e(\maxl)$.  Writing
+$\bar a(t)=N_1^{-1}\sum_{i\in\calIone}a_i(t)$, the envelope solves
+\begin{equation}
+\begin{aligned}
+    \min_e\quad&\sum_{t=1}^{\maxl}\frac{\bar a(t)}{e(t)}\\
+    \text{subject to}\quad
+      &1\geq e(1)\geq\cdots\geq e(\maxl)\geq\rho_{\min},\\
+      &\sum_{t=1}^{\maxl}e(t)\leq C_{\max},
+\end{aligned}
+\label{eq:dapro_lpb_crc_envelope}
+\end{equation}
+where $\rho_{\min}>0$ is the fixed positivity reach and, in the canonical
+experiments,
+\begin{equation}
+    C_{\max}:=\min\{\maxl,2\bar B\}.
+    \label{eq:dapro_lpb_crc_cap}
+\end{equation}
+Let $\rho_i^{\mathrm{base}}(t)$ be the cumulative reach produced by the
+learned DAPRO lookup after its policy-fit budget correction, but before any
+CRC modification.  We cap this base reach causally by
+\begin{equation}
+    \rho_i^{\mathrm{cap}}(t)
+    :=\min\{\rho_i^{\mathrm{base}}(t),e(t)\}.
+    \label{eq:dapro_lpb_crc_apply_cap}
+\end{equation}
+The envelope is shared and frozen, so the decision at turn $t$ never depends
+on a future prefix.  Moreover,
+$\sum_{t=1}^{Q_i}\rho_i^{\mathrm{cap}}(t)\leq C_{\max}$ for every possible
+trajectory.
+
+Before inspecting the control outcomes, fix a finite descending grid
+$1=\lambda_1>\cdots>\lambda_K=0$ and form the nested cumulative-reach family
+\begin{equation}
+    \rho_i^{(k)}(t)
+    :=\rho_{\min}
+      +\lambda_k\{\rho_i^{\mathrm{cap}}(t)-\rho_{\min}\}.
+    \label{eq:dapro_lpb_crc_family}
+\end{equation}
+The corresponding conditional policy is
+\begin{equation}
+    P_i^{(k)}(1)=\rho_i^{(k)}(1),
+    \qquad
+    P_i^{(k)}(t)=
+      \frac{\rho_i^{(k)}(t)}{\rho_i^{(k)}(t-1)}.
+    \label{eq:dapro_lpb_crc_conditionals}
+\end{equation}
+Candidate $k=1$ is the most aggressive capped policy, while later candidates
+contract monotonically toward the minimum-reach policy.
+
+For every fully observed control trajectory $i\in\calIcrc$, compute
+\begin{equation}
+    b_i:=L_i,
+    \qquad
+    c_i(k):=\sum_{t=1}^{L_i}\rho_i^{(k)}(t).
+    \label{eq:dapro_lpb_crc_costs}
+\end{equation}
+Here $b_i$ is the realized cost of fully observing the control row and
+$c_i(k)$ is the exact conditional expected acquisition cost that candidate
+$k$ would incur on that trajectory.  Let
+\begin{equation}
+    B_{\mathrm{rem}}
+    :=B_{\mathrm{tot}}-\sum_{i\in\calIone}L_i,
+    \qquad r:=\frac{n}{m},
+\end{equation}
+and define the composite CRC loss and its deterministic upper bound by
+\begin{equation}
+    \ell_i(k):=c_i(k)+r b_i,
+    \qquad
+    L_{\max}:=C_{\max}+r\maxl.
+    \label{eq:dapro_lpb_crc_loss}
+\end{equation}
+The code selects
+\begin{equation}
+\begin{split}
+    \widehat k
+    :=\min\Biggl\{k:
+      \frac{
+        \sum_{i\in\calIcrc}\ell_i(k)+L_{\max}
+      }{n+1}
+      \leq\frac{B_{\mathrm{rem}}}{m}
+    \Biggr\},
+    \qquad
+    \widehat\lambda:=\lambda_{\widehat k}.
+    \label{eq:dapro_lpb_crc_selector}
+\end{split}
+\end{equation}
+Because candidates are ordered from most aggressive to most conservative,
+the minimum index selects the most aggressive candidate certified by CRC.  We
+then deploy
+\begin{equation}
+    \rho_i^{\mathrm{CRC}}(t)
+      =\rho_{\min}
+       +\widehat\lambda
+        \{\rho_i^{\mathrm{cap}}(t)-\rho_{\min}\},
+    \qquad
+    P_i^{\mathrm{CRC}}(t)
+      =\frac{\rho_i^{\mathrm{CRC}}(t)}
+             {\rho_i^{\mathrm{CRC}}(t-1)}.
+    \label{eq:dapro_lpb_crc_deployed}
+\end{equation}
+
+Under exchangeability of $\calIcrc$ and $\calItwo$, independence of the
+control outcomes from the frozen candidate family, nesting, bounded costs,
+and feasibility of~\eqref{eq:dapro_lpb_crc_selector}, the CRC rule gives
+\begin{equation}
+    m\,\mathbb E\!\left[c_{\mathrm{new}}(\widehat k)
+       \mid\calIone\right]
+    +n\,\mathbb E\!\left[b_{\mathrm{new}}\mid\calIone\right]
+    \leq B_{\mathrm{rem}}.
+    \label{eq:dapro_lpb_crc_guarantee}
+\end{equation}
+Adding the already incurred policy-fit cost yields the configured total budget
+in marginal expectation.  This is not a guarantee for every realized split
+or every realization of the Bernoulli acquisitions.
+
+\subsection{Phase II: adaptive acquisition and calibration}
+
+For each $i\in\calItwo$, start with $\widehat C_i(0)=1$.  At every active turn
+$t$, evaluate the current score, update the frozen cumulative-policy state,
+obtain the selected conditional probability $P_i(t)$, and draw
+\begin{equation}
+    Z_i(t)\sim\operatorname{Bern}\{P_i(t)\},
+    \qquad
+    \widehat C_i(t)=\widehat C_i(t-1)Z_i(t).
+\end{equation}
+The interaction stops after the first failed draw, an observed event, or
+reaching $Q_i$.  If the event or $Q_i$ is reached, the row is marked resolved
+through $Q_i$; otherwise $C_i$ is the last successfully acquired interaction.
+The exact resolution propensity recorded by the implementation is
+\begin{equation}
+    \pi_i
+    =\prod_{t=1}^{L_i}P_i(t).
+    \label{eq:dapro_lpb_logged_propensity}
+\end{equation}
+Rows in $\calIone\cup\calIcrc$ are fully observed and have $\pi_i=1$.
+
+For every LPB candidate, the calibration code uses the HT curve
+\begin{equation}
+    \widehat\mu(\tau)
+    =\frac{1}{N}\sum_{i=1}^{N}
+      \frac{
+        \mathbb I\{T_i<\fhat_\tau(X_i),\ \fhat_\tau(X_i)\leq C_i\}
+      }{\pi_i},
+    \label{eq:dapro_lpb_ht_curve}
+\end{equation}
+and applies the same strict-prefix calibration selector as the full-data LPB
+procedure.  The policy-fit objective uses hypothetical inverse reaches to
+learn the allocation, but the fully observed Phase-I rows themselves enter
+\eqref{eq:dapro_lpb_ht_curve} with weight one.  The score model determines
+efficiency; validity relies on predictability, positivity, freezing the policy
+before Phase II, and logging the probabilities actually used by the sampler.

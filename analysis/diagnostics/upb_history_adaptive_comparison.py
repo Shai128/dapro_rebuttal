@@ -125,6 +125,23 @@ def _methods(grid, taus, *, budget: float, n1: int, target: float):
             ),
         ),
         (
+            "Dynamic endpoint mass + aggressive CRC",
+            SurvivalUPBCalibrationWithKnownWeights(
+                SoftPrefixEndpointUPBDAPRO(
+                    *common,
+                    n1=n1,
+                    target_coverage=target,
+                    projection_budget_margin=0.0,
+                    budget_control_mode="crc_aggressive",
+                    budget_control_size=n1 // 2,
+                    budget_candidate_count=401,
+                    risk_candidate_row_cost_cap=2.0 * budget,
+                ),
+                taus,
+                0.97,
+            ),
+        ),
+        (
             "Dynamic information gain",
             SurvivalUPBCalibrationWithKnownWeights(
                 InformationGainUPBDAPRO(
@@ -163,6 +180,7 @@ def run_dataset(
         seed_start: int,
         seed_end: int,
         n1: int,
+        policy_target_coverage: float,
         output: Path,
         selected_methods: set[str] | None = None,
 ):
@@ -222,7 +240,11 @@ def run_dataset(
             dtype=torch.float64,
         )
         for label, calibration in _methods(
-                cal_grid, taus, budget=20.0, n1=n1, target=0.70
+                cal_grid,
+                taus,
+                budget=20.0,
+                n1=n1,
+                target=policy_target_coverage,
         ):
             if selected_methods is not None and label not in selected_methods:
                 continue
@@ -253,6 +275,7 @@ def run_dataset(
                     "method": label,
                     "allocator_name": calibration.name,
                     "n1": n1,
+                    "policy_target_coverage": policy_target_coverage,
                     "target_coverage": target,
                     "coverage_pct": 100.0 * float(coverage[index]),
                     "mean_upb": float(size[index]),
@@ -287,6 +310,72 @@ def run_dataset(
                     "sequential_prefix_updates": int(
                         extra.get("upb_sequential_prefix_updates", 0)
                     ),
+                    "selected_crc_scale": float(extra.get(
+                        "risk_budget_selected_mixture_parameter", np.nan
+                    )),
+                    "aggressive_selected_transformed_envelope_max": float(
+                        extra.get(
+                            "risk_budget_aggressive_crc_selected_transformed_"
+                            "envelope_max",
+                            np.nan,
+                        )
+                    ),
+                    "aggressive_selected_transformed_violation_rate": float(
+                        extra.get(
+                            "risk_budget_aggressive_crc_selected_transformed_"
+                            "envelope_violation_rate",
+                            np.nan,
+                        )
+                    ),
+                    "aggressive_selected_transformed_max_excess": float(
+                        extra.get(
+                            "risk_budget_aggressive_crc_selected_transformed_"
+                            "envelope_max_excess",
+                            np.nan,
+                        )
+                    ),
+                    "aggressive_family_transformed_violation_rate": float(
+                        extra.get(
+                            "risk_budget_aggressive_crc_family_transformed_"
+                            "envelope_violation_rate",
+                            np.nan,
+                        )
+                    ),
+                    "aggressive_family_transformed_max_excess": float(
+                        extra.get(
+                            "risk_budget_aggressive_crc_family_transformed_"
+                            "envelope_max_excess",
+                            np.nan,
+                        )
+                    ),
+                    "aggressive_selected_sufficient_cap_violation_rate": float(
+                        extra.get(
+                            "risk_budget_aggressive_crc_selected_sufficient_"
+                            "cap_violation_rate",
+                            np.nan,
+                        )
+                    ),
+                    "aggressive_selected_sufficient_cap_max_excess": float(
+                        extra.get(
+                            "risk_budget_aggressive_crc_selected_sufficient_"
+                            "cap_max_excess",
+                            np.nan,
+                        )
+                    ),
+                    "aggressive_family_sufficient_cap_violation_rate": float(
+                        extra.get(
+                            "risk_budget_aggressive_crc_family_sufficient_"
+                            "cap_violation_rate",
+                            np.nan,
+                        )
+                    ),
+                    "aggressive_family_sufficient_cap_max_excess": float(
+                        extra.get(
+                            "risk_budget_aggressive_crc_family_sufficient_"
+                            "cap_max_excess",
+                            np.nan,
+                        )
+                    ),
                 })
             completed.add(identity)
             output.parent.mkdir(parents=True, exist_ok=True)
@@ -308,6 +397,12 @@ def main():
     parser.add_argument("--seed-end", type=int, default=10)
     parser.add_argument("--n1", type=int, default=50)
     parser.add_argument(
+        "--policy-target-coverage",
+        type=float,
+        default=0.70,
+        help="Coverage anchor used to fit the UPB DAPRO objective.",
+    )
+    parser.add_argument(
         "--method",
         action="append",
         choices=[
@@ -317,6 +412,7 @@ def main():
             "Endpoint block + CRC",
             "Dynamic endpoint mass",
             "Dynamic endpoint mass + CRC",
+            "Dynamic endpoint mass + aggressive CRC",
             "Dynamic information gain",
             "Dynamic information gain + CRC",
         ],
@@ -331,6 +427,7 @@ def main():
         seed_start=args.seed_start,
         seed_end=args.seed_end,
         n1=args.n1,
+        policy_target_coverage=args.policy_target_coverage,
         output=args.output,
         selected_methods=None if not args.method else set(args.method),
     )

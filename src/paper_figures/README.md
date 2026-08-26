@@ -11,15 +11,20 @@ C:\Users\Shai1\anaconda3\envs\oqr\python.exe -m src.evaluation.summarize_paper -
 
 Use `--quality high` for 300-DPI JPEGs. Add `--strict` to fail if any requested
 method or diagnostic is missing. Without `--strict`, supported figures are
-generated and all omissions are written to `figures/paper/data/*_schema_gaps.csv`.
+generated and source gaps are reported to the terminal. The figure commands
+write image files only.
 
 Outputs are organized for direct copying to Overleaf:
 
 - `figures/paper/main`: main-text figures;
-- `figures/full`: LPB and UPB appendix figures;
-- `figures/metrics/dataset_*`: metric-estimation appendix figures;
-- `figures/paper/data`: source inventory, selected seed-level rows, schema-gap
-  reports, and figure manifests.
+- `figures/paper/full/lpb`: complete LPB figures;
+- `figures/paper/full/metric/dataset_*`: complete metric-estimation figures;
+- `figures/paper/ablations`: DAPRO ablation figures.
+
+The UPB generator contributes the combined AutoIF main-text panels but does not
+write a separate full UPB figure suite. Each main-text experiment exports two
+equal-sized plot panels and one compact shared-legend image, so the legend is
+included only once in LaTeX.
 
 LPB filenames use the requested dataset stem directly. UPB filenames insert
 `_upb_` before the metric so LPB and UPB figures cannot overwrite one another.

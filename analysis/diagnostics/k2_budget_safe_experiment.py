@@ -667,6 +667,18 @@ def _allocate(
         )
         correction = None
         adaptive = None
+    elif method == "soft_crc_aggressive":
+        allocator = SoftTargetDAPRO(
+            **common,
+            projection_budget_margin=0.0,
+            budget_control_mode="crc_aggressive",
+            budget_control_size=n1 // 2,
+            budget_candidate_count=401,
+            risk_candidate_row_cost_cap=2.0 * budget,
+            **target,
+        )
+        correction = None
+        adaptive = None
     elif method in {"k2_all_high", "k2_x0_high"}:
         allocator = SoftTargetDAPRO(
             **common, projection_budget_margin=0.0, **target
@@ -790,6 +802,72 @@ def _result_row(
                     "k2_safe_mean_abs_log_cumulative_distortion", np.nan
                 )
             ),
+            "selected_crc_scale": float(
+                metrics.get("risk_budget_selected_mixture_parameter", np.nan)
+            ),
+            "aggressive_selected_transformed_envelope_max": float(
+                metrics.get(
+                    "risk_budget_aggressive_crc_selected_transformed_"
+                    "envelope_max",
+                    np.nan,
+                )
+            ),
+            "aggressive_selected_transformed_envelope_violation_rate": float(
+                metrics.get(
+                    "risk_budget_aggressive_crc_selected_transformed_"
+                    "envelope_violation_rate",
+                    np.nan,
+                )
+            ),
+            "aggressive_selected_transformed_envelope_max_excess": float(
+                metrics.get(
+                    "risk_budget_aggressive_crc_selected_transformed_"
+                    "envelope_max_excess",
+                    np.nan,
+                )
+            ),
+            "aggressive_family_transformed_envelope_violation_rate": float(
+                metrics.get(
+                    "risk_budget_aggressive_crc_family_transformed_"
+                    "envelope_violation_rate",
+                    np.nan,
+                )
+            ),
+            "aggressive_family_transformed_envelope_max_excess": float(
+                metrics.get(
+                    "risk_budget_aggressive_crc_family_transformed_"
+                    "envelope_max_excess",
+                    np.nan,
+                )
+            ),
+            "aggressive_selected_sufficient_cap_violation_rate": float(
+                metrics.get(
+                    "risk_budget_aggressive_crc_selected_sufficient_cap_"
+                    "violation_rate",
+                    np.nan,
+                )
+            ),
+            "aggressive_selected_sufficient_cap_max_excess": float(
+                metrics.get(
+                    "risk_budget_aggressive_crc_selected_sufficient_cap_"
+                    "max_excess",
+                    np.nan,
+                )
+            ),
+            "aggressive_family_sufficient_cap_violation_rate": float(
+                metrics.get(
+                    "risk_budget_aggressive_crc_family_sufficient_cap_"
+                    "violation_rate",
+                    np.nan,
+                )
+            ),
+            "aggressive_family_sufficient_cap_max_excess": float(
+                metrics.get(
+                    "risk_budget_aggressive_crc_family_sufficient_cap_"
+                    "max_excess",
+                    np.nan,
+                )
+            ),
         })
 
     if task == "metric":
@@ -798,6 +876,30 @@ def _result_row(
         )
         row["estimate_pct"] = 100 * float(contribution.mean().item())
         row["truth_pct"] = 100 * float(target_a.mean().item())
+        event_time = t_cal.to(torch.float64)
+        weighted_event = contribution
+        weighted_event_total = weighted_event.sum()
+        row["estimated_rmttu"] = float(
+            (weighted_event * event_time).sum().item()
+            / weighted_event_total.item()
+        ) if bool(weighted_event_total > 0) else np.nan
+        true_event_total = target_a.sum()
+        row["truth_rmttu"] = float(
+            (target_a * event_time).sum().item()
+            / true_event_total.item()
+        ) if bool(true_event_total > 0) else np.nan
+        event_residual = target_a * (max_time - event_time)
+        row["estimated_restricted_mean"] = float(
+            max_time
+            - (
+                observed_event.to(torch.float64)
+                * (max_time - event_time)
+                / propensity
+            ).mean().item()
+        )
+        row["truth_restricted_mean"] = float(
+            event_time.clamp(max=max_time).mean().item()
+        )
         # Exact for policies frozen before Phase II.  For the cross-row online
         # policy this is only a logged-path plug-in diagnostic; its across-run
         # estimator variance remains the primary comparison.
@@ -1020,12 +1122,44 @@ def summarize(frame: pd.DataFrame) -> pd.DataFrame:
             "mean_abs_log_policy_distortion": group[
                 "controller_mean_abs_log_distortion"
             ].mean(),
+            "mean_selected_crc_scale": group["selected_crc_scale"].mean(),
+            "mean_selected_transformed_envelope_violation_rate": group[
+                "aggressive_selected_transformed_envelope_violation_rate"
+            ].mean(),
+            "maximum_selected_transformed_envelope_excess": group[
+                "aggressive_selected_transformed_envelope_max_excess"
+            ].max(),
+            "mean_family_transformed_envelope_violation_rate": group[
+                "aggressive_family_transformed_envelope_violation_rate"
+            ].mean(),
+            "maximum_family_transformed_envelope_excess": group[
+                "aggressive_family_transformed_envelope_max_excess"
+            ].max(),
+            "mean_selected_sufficient_cap_violation_rate": group[
+                "aggressive_selected_sufficient_cap_violation_rate"
+            ].mean(),
+            "mean_family_sufficient_cap_violation_rate": group[
+                "aggressive_family_sufficient_cap_violation_rate"
+            ].mean(),
         }
         if keys[1] == "metric":
             row.update({
                 "estimate_variance_pp2": group["estimate_pct"].var(ddof=1),
                 "estimate_mse_pp2": np.mean(
                     (group["estimate_pct"] - group["truth_pct"]) ** 2
+                ),
+                "rmttu_variance_turn2": group["estimated_rmttu"].var(ddof=1),
+                "rmttu_mse_turn2": np.mean(
+                    (group["estimated_rmttu"] - group["truth_rmttu"]) ** 2
+                ),
+                "restricted_mean_variance_turn2": group[
+                    "estimated_restricted_mean"
+                ].var(ddof=1),
+                "restricted_mean_mse_turn2": np.mean(
+                    (
+                        group["estimated_restricted_mean"]
+                        - group["truth_restricted_mean"]
+                    ) ** 2
                 ),
                 "mean_logged_acquisition_variance_pp2": group[
                     "acquisition_variance_pp2"
@@ -1072,7 +1206,7 @@ def main() -> None:
     parser.add_argument("--tasks", nargs="+", choices=["metric", "lpb"],
                         default=["metric", "lpb"])
     parser.add_argument("--methods", nargs="+", choices=[
-        "soft_no_crc", "soft_crc", "k2_all_high",
+        "soft_no_crc", "soft_crc", "soft_crc_aggressive", "k2_all_high",
         "k2_x0_high", "k2_online_compensator", "k2_row_accounts",
     ], default=[
         "soft_no_crc", "soft_crc", "k2_all_high",

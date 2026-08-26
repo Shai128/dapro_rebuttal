@@ -1,0 +1,110 @@
+% Appendix proof for the standard composite-loss CRC controller used by DAPRO.
+
+\subsection{Budget validity of the standard CRC controller}
+\label{sec:standard_crc_budget_validity}
+
+We prove the claim in~\eqref{eq:dapro_main_budget_guarantee}.  Condition on
+the fully observed policy-fit fold $\calIone$.  After conditioning, the
+candidate family $\{P_\lambda:\lambda\in[0,1]\}$, its cumulative-reach cap,
+and $B_{\mathrm{rem}}$ are fixed.  Let $Z$ denote a complete trajectory and
+write
+\[
+    b(Z):=\min\{T,Q(X)\},
+    \qquad
+    c(Z;\lambda):=\sum_{t=1}^{b(Z)}\rho_Z^\lambda(t),
+    \qquad
+    \ell(Z;\lambda):=c(Z;\lambda)+\frac{n}{m}b(Z).
+\]
+By construction,
+\begin{equation}
+    0\leq\ell(Z;\lambda)\leq
+    L_{\max}:=C_{\max}+\frac{n}{m}\maxl
+    \label{eq:standard_crc_loss_bound}
+\end{equation}
+for every trajectory in the population support and every candidate.  Let
+$a:=B_{\mathrm{rem}}/m$ and define
+\begin{equation}
+    \widehat\lambda
+    :=\sup\left\{\lambda:
+       \frac{\sum_{i=1}^{n}\ell(Z_i;\lambda)+L_{\max}}
+            {n+1}
+       \leq a
+    \right\}.
+    \label{eq:standard_crc_appendix_selector}
+\end{equation}
+
+\begin{proposition}[Marginal expected total-budget validity]
+\label{prop:standard_crc_budget_validity}
+Suppose, conditional on $\calIone$, that: (i) the CRC trajectories
+$Z_1,\ldots,Z_n$ and a fresh deployment trajectory $Z_{n+1}$ are
+exchangeable; (ii) the complete candidate family is fixed independently of
+$Z_1,\ldots,Z_n$; (iii) $\ell(z;\lambda)$ is measurable,
+right-continuous, and non-decreasing in $\lambda$; and (iv) the selector in
+\eqref{eq:standard_crc_appendix_selector} and its augmented-sample analogue
+are feasible.  Then
+\[
+    m\,\mathbb E[c(Z_{n+1};\widehat\lambda)\mid\calIone]
+    +n\,\mathbb E[b(Z_{n+1})\mid\calIone]
+    \leq B_{\mathrm{rem}}.
+\]
+Consequently, after adding the fixed policy-fit expenditure, the expected
+total cost of policy fitting, full CRC observation, and randomized deployment
+does not exceed $B_{\mathrm{tot}}$.
+\end{proposition}
+
+\begin{proof}
+Suppress conditioning on $\calIone$.  Add the fresh trajectory to the CRC
+sample and define the symmetric augmented selector
+\[
+    \widetilde\lambda
+    :=\sup\left\{\lambda:
+      \frac{1}{n+1}\sum_{i=1}^{n+1}\ell(Z_i;\lambda)
+      \leq a
+    \right\}.
+\]
+The support bound~\eqref{eq:standard_crc_loss_bound} implies
+\[
+    \sum_{i=1}^{n}\ell(Z_i;\widehat\lambda)
+    +\ell(Z_{n+1};\widehat\lambda)
+    \leq
+    \sum_{i=1}^{n}\ell(Z_i;\widehat\lambda)+L_{\max}
+    \leq(n+1)a.
+\]
+Thus $\widehat\lambda$ is feasible for the augmented problem and
+$\widetilde\lambda\geq\widehat\lambda$.  Monotonicity gives
+\[
+    \ell(Z_{n+1};\widehat\lambda)
+    \leq\ell(Z_{n+1};\widetilde\lambda).
+\]
+Because $\widetilde\lambda$ is a permutation-invariant function of the
+$n+1$ exchangeable trajectories,
+\begin{align*}
+    \mathbb E[\ell(Z_{n+1};\widetilde\lambda)]
+    &=\mathbb E\!\left[
+       \frac{1}{n+1}\sum_{i=1}^{n+1}
+       \ell(Z_i;\widetilde\lambda)
+      \right]\\
+    &\leq a.
+\end{align*}
+Therefore
+\[
+    \mathbb E[c(Z_{n+1};\widehat\lambda)]
+    +\frac{n}{m}\mathbb E[b(Z_{n+1})]
+    \leq\frac{B_{\mathrm{rem}}}{m}.
+\]
+Multiplying by $m$ proves the displayed claim.  The $n$ CRC rows have the
+same expected full-observation cost as $n$ fresh rows.  Finally, conditional
+on a complete deployment trajectory, the realized randomized acquisition
+cost has expectation $c(Z;\widehat\lambda)$; adding the fixed policy-fit cost
+completes the proof.
+\end{proof}
+
+The argument is unchanged for the finite grid used by the implementation:
+replace every supremum by the largest feasible grid element.
+
+\paragraph{What the proposition does not imply.}
+The proposition is marginal over CRC rows, deployment rows, and acquisition
+randomness.  It does not imply a conditional budget bound for each realized
+split, and it provides no lower bound on budget utilization.  Conservatism
+comes from replacing the unobserved augmented loss by $L_{\max}$, from a
+possibly binding row cap, and from discretizing the contraction parameter.

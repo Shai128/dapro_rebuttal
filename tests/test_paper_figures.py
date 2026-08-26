@@ -1,11 +1,17 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 
 from src.paper_figures.bounds import BOUND_BOX_SPECS
-from src.paper_figures.config import RECOMMENDED_CONFIGURATIONS
+from src.paper_figures.config import (
+    METRIC_MAIN_METHOD_ORDER,
+    RECOMMENDED_CONFIGURATIONS,
+)
 from src.paper_figures.data import (
+    _discover_sources,
     _derive_restricted_mean,
     _paper_budget_used_per_sample,
 )
@@ -92,6 +98,16 @@ def test_metric_paper_matrix_contains_rmst_and_filters_diagnostics():
     assert specifications["estimated_restricted_mean"] == ()
 
 
+def test_metric_main_figures_use_crc_dapro_and_exclude_other_variants():
+    assert METRIC_MAIN_METHOD_ORDER == (
+        "Uncalibrated",
+        "Static",
+        "DAPRO",
+    )
+    assert "Oracle" not in METRIC_MAIN_METHOD_ORDER
+    assert "DAPRO w/o CRC" not in METRIC_MAIN_METHOD_ORDER
+
+
 def test_paper_budget_uses_assigned_static_and_realized_dapro_cost():
     frame = pd.DataFrame({
         "method": [
@@ -118,3 +134,30 @@ def test_paper_budget_uses_assigned_static_and_realized_dapro_cost():
         "not_applicable",
         "not_applicable",
     ]
+
+
+def test_metric_source_discovery_ignores_score_ablation_results(tmp_path: Path):
+    setup = (
+        "dataset_toxicity_attack_toxic_attack_qwen25_14b_instruct_"
+        "lm_target_qwen25_14b_instruct_judge_detoxify_20_m"
+    )
+    canonical = tmp_path / f"{setup}_metric" / "all_df.csv"
+    ablation = (
+        tmp_path
+        / f"{setup}_dapro_metric_ablation_v1_score"
+        / "all_df.csv"
+    )
+    columns = {
+        "reported_budget_semantics": ["actual_event_stopped_turns_per_sample"],
+        "actual_event_stopped_budget_per_sample": [20.0],
+        "estimated_restricted_mean_time_to_event": [150.0],
+        "mean_metric_target_a_weighted_inverse_probability": [2.0],
+    }
+    canonical.parent.mkdir(parents=True)
+    ablation.parent.mkdir(parents=True)
+    pd.DataFrame(columns).to_csv(canonical, index=False)
+    pd.DataFrame(columns).to_csv(ablation, index=False)
+
+    selected = _discover_sources(tmp_path, "metrics")
+
+    assert [item.path for item in selected] == [canonical]

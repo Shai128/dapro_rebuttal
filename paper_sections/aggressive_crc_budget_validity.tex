@@ -1,0 +1,251 @@
+% Aggressive realized-residual CRC for a frozen DAPRO policy family.
+% This section is self-contained except for the paper's standard budget and
+% trajectory notation.  The enforceable cap condition is essential.
+
+\subsection{Aggressive residual-budget CRC}
+\label{sec:aggressive_crc_budget_validity}
+
+We now give a finite-sample guarantee for the aggressive CRC rule that
+subtracts the realized cost of the CRC fold before selecting the deployment
+policy.  The guarantee requires $C_{\max}$ to upper-bound a
+\emph{transformed} cost that combines candidate-policy and full-observation
+costs.  Bounding the candidate-policy cost alone is not sufficient.
+
+Split the calibration sample into a policy-fit fold
+$\mathcal I_{\mathrm{fit}}$ and an independent CRC fold
+$\mathcal I_{\mathrm{crc}}$, and let $\mathcal I_{\mathrm{dep}}$ denote the
+deployment fold.  Write
+\[
+    n:=|\mathcal I_{\mathrm{crc}}|,
+    \qquad
+    m:=|\mathcal I_{\mathrm{dep}}|,
+\]
+and condition throughout on the fully observed policy-fit fold.  After this
+conditioning, the nested DAPRO candidate family
+$\{P_\lambda:\lambda\in\Lambda\}$ is fixed.  Let
+\[
+    B_{\mathrm{rem}}
+    :=B_{\mathrm{tot}}
+      -\sum_{i\in\mathcal I_{\mathrm{fit}}}b_i
+\]
+be the budget remaining after policy fitting.  For any complete trajectory
+$z=(X,T,H)$, define
+\[
+    b(z):=\min\{T,q_{\mathrm{prior}}(X)\}
+\]
+and the conditional expected acquisition cost of candidate $\lambda$ by
+\[
+    c(z;\lambda)
+    :=\sum_{t=1}^{b(z)}\rho_z^\lambda(t),
+    \qquad
+    \rho_z^\lambda(t)
+    :=\prod_{s=1}^{t}P_\lambda(s\mid H(s-1)).
+\]
+For a CRC row $i$, abbreviate these quantities by $b_i$ and
+$c_i(\lambda)$.
+
+The aggressive realized-residual selector is
+\begin{equation}
+\label{eq:aggressive_crc_selector}
+    \widehat\lambda
+    :=\inf\left\{
+        \lambda\in\Lambda:
+        \frac{
+            \sum_{i\in\mathcal I_{\mathrm{crc}}}c_i(\lambda)
+            +C_{\max}
+        }{n+1}
+        \leq
+        \frac{
+            B_{\mathrm{rem}}
+            -\sum_{i\in\mathcal I_{\mathrm{crc}}}b_i
+        }{m}
+    \right\}.
+\end{equation}
+Candidates are ordered from aggressive to conservative, so the infimum in
+\eqref{eq:aggressive_crc_selector} selects the most aggressive feasible
+candidate.  For a finite grid, the infimum is simply replaced by the first
+feasible candidate in this ordering.
+
+\begin{proposition}[Budget validity of aggressive residual-budget CRC]
+\label{prop:aggressive_crc_budget_validity}
+Suppose that, conditional on $\mathcal I_{\mathrm{fit}}$:
+\begin{enumerate}
+    \item the CRC and deployment trajectories are exchangeable;
+    \item the entire nested candidate family is fixed independently of the
+    CRC trajectories, and $c(z;\lambda)$ is measurable, right-continuous, and
+    non-increasing in $\lambda$;
+    \item the selector in~\eqref{eq:aggressive_crc_selector} is feasible
+    almost surely; and
+    \item with
+    \[
+        \mu_b
+        :=\mathbb E[b(Z)\mid\mathcal I_{\mathrm{fit}}],
+        \qquad
+        \gamma:=\frac{n+1}{m},
+    \]
+    the following uniform transformed-cost envelope holds:
+    \begin{equation}
+    \label{eq:aggressive_crc_transformed_envelope}
+        c(z;\lambda)
+        +\gamma\{b(z)-\mu_b\}
+        \leq C_{\max}
+    \end{equation}
+    for every trajectory $z$ in the population support and every candidate
+    that the selector can return.
+\end{enumerate}
+Then
+\begin{equation}
+\label{eq:aggressive_crc_expected_total_budget}
+    \mathbb E\!\left[
+        \sum_{i\in\mathcal I_{\mathrm{fit}}}b_i
+        +\sum_{i\in\mathcal I_{\mathrm{crc}}}b_i
+        +\sum_{j\in\mathcal I_{\mathrm{dep}}}
+            B^{\mathrm{real}}_j(\widehat\lambda)
+    \right]
+    \leq B_{\mathrm{tot}},
+\end{equation}
+where
+\[
+    \mathbb E\!\left[
+        B^{\mathrm{real}}_j(\lambda)
+        \mid Z_j,\mathcal I_{\mathrm{fit}}
+    \right]
+    =c(Z_j;\lambda).
+\]
+The expectation in~\eqref{eq:aggressive_crc_expected_total_budget} is
+marginal over the CRC and deployment trajectories and the acquisition
+randomness, conditional on policy fitting, and hence also holds
+unconditionally.
+\end{proposition}
+
+\begin{proof}
+Condition on $\mathcal I_{\mathrm{fit}}$ and suppress this conditioning in
+the notation.  Define the transformed loss and deterministic target
+\[
+    K(z;\lambda)
+    :=c(z;\lambda)+\gamma\{b(z)-\mu_b\},
+    \qquad
+    a_\star:=\frac{B_{\mathrm{rem}}-n\mu_b}{m}.
+\]
+Because the centered term does not depend on $\lambda$, $K(z;\lambda)$ is
+non-increasing and right-continuous in $\lambda$.  Moreover,
+\eqref{eq:aggressive_crc_selector} is algebraically equivalent to
+\begin{equation}
+\label{eq:aggressive_crc_transformed_selector}
+    \widehat\lambda
+    =\inf\left\{
+        \lambda\in\Lambda:
+        \frac{
+            \sum_{i\in\mathcal I_{\mathrm{crc}}}K_i(\lambda)
+            +C_{\max}
+        }{n+1}
+        \leq a_\star
+    \right\}.
+\end{equation}
+Indeed, substituting $\gamma=(n+1)/m$ into
+\eqref{eq:aggressive_crc_transformed_selector} cancels the terms involving
+$\mu_b$ and yields~\eqref{eq:aggressive_crc_selector}.
+
+Fix an independent deployment trajectory $Z_{n+1}$ and define the symmetric
+augmented-sample selector
+\[
+    \widetilde\lambda
+    :=\inf\left\{
+        \lambda\in\Lambda:
+        \frac{1}{n+1}
+        \left{
+            \sum_{i\in\mathcal I_{\mathrm{crc}}}K_i(\lambda)
+            +K_{n+1}(\lambda)
+        \right}
+        \leq a_\star
+    \right\}.
+\]
+By~\eqref{eq:aggressive_crc_transformed_selector},
+\[
+    \sum_{i\in\mathcal I_{\mathrm{crc}}}K_i(\widehat\lambda)
+    +C_{\max}
+    \leq(n+1)a_\star.
+\]
+The envelope~\eqref{eq:aggressive_crc_transformed_envelope} gives
+$K_{n+1}(\widehat\lambda)\leq C_{\max}$.  Therefore
+$\widehat\lambda$ is feasible for the augmented problem, so
+$\widetilde\lambda\leq\widehat\lambda$.  Monotonicity then implies
+\[
+    K_{n+1}(\widehat\lambda)
+    \leq K_{n+1}(\widetilde\lambda).
+\]
+
+The candidate family was frozen before observing the CRC fold.  Consequently,
+$\widetilde\lambda$ is a permutation-invariant function of the $n+1$
+exchangeable CRC-plus-augmentation trajectories.  Exchangeability and
+feasibility of the augmented selector therefore give
+\begin{align*}
+    \mathbb E[K_{n+1}(\widetilde\lambda)]
+    &=\mathbb E\!\left[
+        \frac{1}{n+1}
+        \left{
+            \sum_{i\in\mathcal I_{\mathrm{crc}}}
+                K_i(\widetilde\lambda)
+            +K_{n+1}(\widetilde\lambda)
+        \right}
+    \right] \\
+    &\leq a_\star.
+\end{align*}
+It follows that
+\[
+    \mathbb E[K_{n+1}(\widehat\lambda)]\leq a_\star.
+\]
+The deployment row is independent of the CRC selector, and
+$\mathbb E[b(Z_{n+1})-\mu_b]=0$.  Hence
+\[
+    \mathbb E[c(Z_{n+1};\widehat\lambda)]
+    \leq\frac{B_{\mathrm{rem}}-n\mu_b}{m}.
+\]
+Summing over the $m$ deployment rows, adding the expected CRC cost
+$n\mu_b$, and then adding the already conditioned-upon policy-fit cost proves
+\eqref{eq:aggressive_crc_expected_total_budget}.
+\end{proof}
+
+\paragraph{An enforceable sufficient condition.}
+The transformed envelope in
+\eqref{eq:aggressive_crc_transformed_envelope} must not be treated as an
+unverified projection-error assumption.  It can be enforced directly.  Let
+$Q(z)=q_{\mathrm{prior}}(X)$ be known before acquisition, and suppose
+\[
+    \underline b\leq b(z)\leq Q(z)\leq Q_{\max},
+    \qquad
+    \mu_b\geq\underline b.
+\]
+Before exposing the CRC outcomes, cap every candidate policy so that
+\begin{equation}
+\label{eq:aggressive_crc_enforceable_policy_cap}
+    c(z;\lambda)
+    \leq
+    C_{\max}-\gamma\{Q(z)-\underline b\}.
+\end{equation}
+The right-hand side is a predictable function of the initial covariates and
+must remain nonnegative; with a cumulative positivity floor $\epsilon$, it
+must in fact be at least $\epsilon Q(z)$.  Then
+\begin{align*}
+    K(z;\lambda)
+    &\leq
+    C_{\max}-\gamma\{Q(z)-\underline b\}
+    +\gamma\{b(z)-\mu_b\} \\
+    &\leq C_{\max},
+\end{align*}
+which establishes~\eqref{eq:aggressive_crc_transformed_envelope}.  A simpler,
+more conservative implementation replaces $Q(z)$ by $Q_{\max}$ in
+\eqref{eq:aggressive_crc_enforceable_policy_cap}.  Operationally, the cap can
+be imposed by intersecting cumulative reach with an initial-covariate-only,
+non-increasing envelope whose total mass is at most the right-hand side of
+\eqref{eq:aggressive_crc_enforceable_policy_cap}.  This preserves
+predictability, nestedness, and the exact logged propensity.
+
+The slack
+\[
+    \gamma\{Q(z)-\underline b\}
+\]
+is the price of using the aggressive $+C_{\max}$ correction while accounting
+for the random CRC-fold expenditure.  If this slack is not imposed and the
+transformed envelope is not otherwise verified, Proposition
+\ref{prop:aggressive_crc_budget_validity} does not apply.

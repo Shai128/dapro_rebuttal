@@ -10,6 +10,10 @@
 # own rows.  The metric additions cover the score-function and score-noise
 # studies without replacing any LPB ablation. A failed configuration is
 # reported without cancelling the rest.
+# Canonical cells use soft-prefix coefficients, current hazard, K=2, global
+# regularization 0.001, raw margin 0, and the same capped CRC controller.  The
+# representation study alone varies K; every other study changes only its
+# named x-axis factor.
 set -uo pipefail
 
 # ======================== EDITABLE CONFIGURATION ========================

@@ -361,17 +361,17 @@ Phase-II budget per row
     \bar B_{\mathrm{II}}
     :=\frac{N\bar B-\sum_{i\in\calIone}L_i}{N-N_1}.
 \end{equation}
-The production no-CRC method reserves the fixed projection-transfer margin
-$\eta=1$ and uses
+The production no-CRC method uses the raw zero-margin projection and therefore
+sets
 \begin{equation}
-    \bar B_{\mathrm{shape}}:=\bar B_{\mathrm{II}}-\eta.
+    \bar B_{\mathrm{shape}}:=\bar B_{\mathrm{II}}.
     \label{eq:spgd_no_crc_shape_budget}
 \end{equation}
-Its expected-total-budget claim therefore requires the transfer condition
-that the deployment expected cost is at most the corrected policy-fitting
-cost plus $\eta$.  The scalar bisection in
+The scalar bisection in
 \eqref{eq:spgd_projection_budget} controls the empirical policy-fitting cost;
 by itself it does not prove that the cost transfers to new trajectories.
+Accordingly, this raw variant makes no finite-sample expected-budget claim;
+the optional CRC controller below supplies that guarantee.
 
 \subsection{The optional independent CRC controller}
 \label{sec:spgd_crc}

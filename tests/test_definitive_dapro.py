@@ -157,6 +157,7 @@ def test_projection_margin_implies_expected_total_budget_bound():
         0.50,
         4,
         n1=20,
+        projection_budget_margin=1.0,
     )
     allocator.set_acquisition_randomness(
         seed=7,

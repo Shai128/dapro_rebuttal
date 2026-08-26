@@ -202,7 +202,7 @@ def test_soft_upb_dapro_uses_finite_lower_or_equal_target_and_no_pav_crc():
     assert crc.risk_candidate_row_cost_cap is None
 
 
-def test_upb_registry_contains_only_soft_prefix_dapro_variants():
+def test_upb_registry_contains_only_canonical_soft_prefix_dapro_variants():
     methods = get_upb_calibrations(
         None, 20.0, torch.linspace(0.5, 0.95, 30), 0.97, 200,
         dapro_n1_values=(200,),
@@ -212,7 +212,8 @@ def test_upb_registry_contains_only_soft_prefix_dapro_variants():
     assert all("soft_prefix" in name for name in dapro_names)
     assert any("projection_margin" in name for name in dapro_names)
     assert any("budget_crc_control_100" in name for name in dapro_names)
-    assert all("causal_shared_pav" not in name for name in dapro_names)
+    assert any("causal_shared_pav" in name for name in dapro_names)
+    assert all("hazard_score" in name for name in dapro_names)
     assert set(dapro_names) == {
         GENERALIZED_UPB_DAPRO,
         GENERALIZED_UPB_CRC_DAPRO,

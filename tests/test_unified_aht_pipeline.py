@@ -1,3 +1,4 @@
+import numpy as np
 import pytest
 import torch
 
@@ -61,7 +62,7 @@ def test_lpb_sequential_curve_uses_strict_event_target():
 
 def test_unified_metric_registry_has_only_requested_families():
     taus = torch.arange(0.01, 1.0, 0.01)
-    names = [allocator.name for allocator in get_metric_allocators(
+    allocators = get_metric_allocators(
         _grid(20),
         2.0,
         2,
@@ -71,7 +72,8 @@ def test_unified_metric_registry_has_only_requested_families():
         dapro_n1=10,
         crc_control_size=5,
         method_suite="unified_aht",
-    )]
+    )
+    names = [allocator.name for allocator in allocators]
     assert len(names) == 5
     assert names[0] == "uncalibrated"
     assert names[1] == "optimized"
@@ -82,6 +84,12 @@ def test_unified_metric_registry_has_only_requested_families():
     assert not any("endpoint_block_terminal_residual_aht" in name for name in names)
     raw_projection = [name for name in names if "projection_margin" in name]
     assert raw_projection and all("projection_margin_0p00" in name for name in raw_projection)
+    dapro = [allocator for allocator in allocators if "dapro_soft_prefix" in allocator.name]
+    assert all(allocator.score_bin_count == 2 for allocator in dapro)
+    assert all(np.isclose(allocator.global_regularization, 0.001) for allocator in dapro)
+    assert all(np.isclose(allocator.terminal_pi_min, 0.005) for allocator in dapro)
+    assert dapro[0].projection_budget_margin == 0.0
+    assert dapro[1].risk_candidate_row_cost_cap == pytest.approx(4.0)
 
 
 def test_uncalibrated_metric_baseline_is_initial_pmf_plugin():
@@ -125,9 +133,27 @@ def test_unified_upb_registry_separates_three_policy_targets():
     assert any("coverage_0p70" in name for name in names)
     assert any("coverage_0p80" in name for name in names)
     assert any("coverage_0p90" in name for name in names)
-    # UPB CRC intentionally uses the full 200-turn support rather than the
-    # shared-PAV cap.
-    assert not any("causal_shared_pav" in name for name in names)
+    assert any("causal_shared_pav" in name for name in names)
+    dapro = [
+        calibration.budget_allocator for calibration in calibrations
+        if hasattr(calibration, "budget_allocator")
+        and "dapro_soft_prefix" in calibration.budget_allocator.name
+    ]
+    assert dapro and all(allocator.score_bin_count == 2 for allocator in dapro)
+    assert all(np.isclose(allocator.global_regularization, 0.001) for allocator in dapro)
+    assert all(np.isclose(allocator.terminal_pi_min, 0.005) for allocator in dapro)
+    assert all(
+        allocator.objective_metadata()["generalized_dapro_score"]
+        == "current_conditional_event_hazard"
+        for allocator in dapro
+    )
+    expected_hazard = _grid(20)[:, torch.arange(2), torch.arange(2)]
+    torch.testing.assert_close(
+        dapro[0].policy_scores(torch.ones(20, len(taus))),
+        expected_hazard,
+    )
+    assert dapro[0].projection_budget_margin == 0.0
+    assert dapro[1].risk_candidate_row_cost_cap == pytest.approx(4.0)
 
 
 def test_unified_lpb_registry_includes_uncalibrated_and_oracle():
@@ -145,3 +171,13 @@ def test_unified_lpb_registry_includes_uncalibrated_and_oracle():
     names = [calibration.name for calibration in calibrations]
     assert names[0] == "uncalibrated"
     assert "oracle_survival_calibration" in names
+    dapro = [
+        calibration.budget_allocator for calibration in calibrations
+        if hasattr(calibration, "budget_allocator")
+        and "dapro_soft_prefix" in calibration.budget_allocator.name
+    ]
+    assert all(allocator.score_bin_count == 2 for allocator in dapro)
+    assert all(np.isclose(allocator.global_regularization, 0.001) for allocator in dapro)
+    assert all(np.isclose(allocator.terminal_pi_min, 0.005) for allocator in dapro)
+    assert dapro[0].projection_budget_margin == 0.0
+    assert dapro[1].risk_candidate_row_cost_cap == pytest.approx(4.0)

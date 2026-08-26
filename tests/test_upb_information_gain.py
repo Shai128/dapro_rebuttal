@@ -156,4 +156,4 @@ def test_soft_prefix_upb_uses_the_sequential_aht_estimator_contract():
     )
 
     assert allocator.upb_estimator_kind == "sequential"
-    assert "seq_estimator_v2" in allocator.name
+    assert "seq_estimator_v3_hazard_score" in allocator.name

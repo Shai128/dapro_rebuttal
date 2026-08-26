@@ -226,6 +226,22 @@ def test_additional_ablation_registry_has_static_and_paired_controllers():
         assert sum("projection_margin_0p00" in name for name in names) == (
             expected - 1
         ) // 2
+        allocators = [
+            method.budget_allocator for method in methods
+            if hasattr(method, "budget_allocator")
+            and hasattr(method.budget_allocator, "ablation_kind")
+        ]
+        if kind != "representation":
+            assert all(a.score_bin_count == 2 for a in allocators)
+        assert all(
+            np.isclose(a.global_regularization, 0.001)
+            for a in allocators
+        )
+        assert all(np.isclose(a.terminal_pi_min, 0.005) for a in allocators)
+        assert all(
+            a.budget_candidate_count == 401
+            for a in allocators if a.budget_control_mode == "crc"
+        )
 
 
 def test_hard_soft_and_score_metadata_are_explicit():
@@ -256,6 +272,8 @@ def test_hard_soft_and_score_metadata_are_explicit():
         "hazard", "remaining_quantile", "target_value", "random",
         "oracle_remaining_time",
     }
+    assert all(a.score_bin_count == 2 for a in allocators)
+    assert all(np.isclose(a.global_regularization, 0.001) for a in allocators)
     oracle = next(
         a for a in allocators
         if a.ablation_score_kind == "oracle_remaining_time"
@@ -345,11 +363,53 @@ def test_metric_registry_uses_event_rate_target_and_paired_controllers():
         "oracle_remaining_time",
     }
     assert all(allocator.metric_estimation_horizon == 200 for allocator in dynamic)
-    assert all(allocator.score_bin_count == 4 for allocator in dynamic)
+    assert all(allocator.score_bin_count == 2 for allocator in dynamic)
+    assert all(
+        np.isclose(allocator.global_regularization, 0.001)
+        for allocator in dynamic
+    )
     assert all(
         allocator.objective_metadata()["ablation_target_definition"]
         == "1{T<=200}"
         for allocator in dynamic
+    )
+
+
+def test_metric_current_hazard_matches_zero_noise_canonical_configuration():
+    rng = torch.Generator().manual_seed(23)
+    raw = torch.rand((8, 4, 5), generator=rng, dtype=torch.float64)
+    grid = raw / raw.sum(dim=2, keepdim=True)
+    taus = torch.arange(0.01, 0.5, 0.01)
+    quantiles = torch.full((8, len(taus)), 4.0)
+    named = get_metric_dapro_ablation_allocators(
+        grid, 2.0, taus, .56, 4,
+        ablation_kind="score", dapro_n1=4, crc_control_size=2,
+    )
+    noise = get_metric_dapro_ablation_allocators(
+        grid, 2.0, taus, .56, 4,
+        ablation_kind="score_noise", dapro_n1=4, crc_control_size=2,
+        score_noise_lambdas=(0.0,),
+    )
+    named_hazard = next(
+        allocator for allocator in named
+        if getattr(allocator, "ablation_score_kind", None) == "hazard"
+        and allocator.budget_control_mode is None
+    )
+    zero_noise = next(
+        allocator for allocator in noise
+        if hasattr(allocator, "ablation_kind")
+        and allocator.budget_control_mode is None
+    )
+    assert named_hazard.score_bin_count == zero_noise.score_bin_count == 2
+    assert named_hazard.global_regularization == zero_noise.global_regularization
+    assert (
+        named_hazard.projection_budget_margin
+        == zero_noise.projection_budget_margin
+        == 0.0
+    )
+    torch.testing.assert_close(
+        named_hazard.policy_scores(quantiles),
+        zero_noise.policy_scores(quantiles),
     )
 
 

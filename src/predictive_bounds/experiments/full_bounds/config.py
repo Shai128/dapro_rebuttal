@@ -231,7 +231,7 @@ LPB_DAPRO = (
 )
 GENERALIZED_LPB_DAPRO = (
     "calibration_dapro_soft_prefix_bins_2_lpb_alpha_0p10_global_0p001_"
-    "projection_margin_1p00_n1_200_allocation"
+    "projection_margin_0p00_n1_200_allocation"
 )
 GENERALIZED_LPB_CRC_DAPRO = (
     "calibration_dapro_soft_prefix_bins_2_lpb_alpha_0p10_global_0p001_"
@@ -239,16 +239,21 @@ GENERALIZED_LPB_CRC_DAPRO = (
     "n1_200_allocation"
 )
 UPB_DAPRO = (
-    "calibration_dapro_soft_prefix_bins_2_upb_residual_aht_coverage_0p70_"
-    "model_anchor_global_0p001_budget_crc_control_100_allocation"
+    "calibration_dapro_soft_prefix_bins_2_upb_endpoint_dynamic_aht_seq_"
+    "estimator_v3_hazard_score_coverage_0p70_global_0p001_projection_"
+    "margin_0p00_budget_crc_control_100_row_cap_2p00x_budget_"
+    "causal_shared_pav_v1_n1_200_allocation"
 )
 GENERALIZED_UPB_DAPRO = (
-    "calibration_dapro_soft_prefix_bins_2_upb_residual_aht_coverage_0p70_"
-    "model_anchor_global_0p001_projection_margin_1p00_allocation"
+    "calibration_dapro_soft_prefix_bins_2_upb_endpoint_dynamic_aht_seq_"
+    "estimator_v3_hazard_score_coverage_0p70_global_0p001_projection_"
+    "margin_0p00_n1_200_allocation"
 )
 GENERALIZED_UPB_CRC_DAPRO = (
-    "calibration_dapro_soft_prefix_bins_2_upb_residual_aht_coverage_0p70_"
-    "model_anchor_global_0p001_budget_crc_control_100_allocation"
+    "calibration_dapro_soft_prefix_bins_2_upb_endpoint_dynamic_aht_seq_"
+    "estimator_v3_hazard_score_coverage_0p70_global_0p001_projection_"
+    "margin_0p00_budget_crc_control_100_row_cap_2p00x_budget_"
+    "causal_shared_pav_v1_n1_200_allocation"
 )
 SPLIT_DAPRO_ORACLE = (
     "calibration_oracle_target_a_dapro_alpha_0p10_n1_200_allocation"

@@ -9,11 +9,14 @@ import pandas as pd
 from src.paper_figures.common import (
     plot_grouped_boxplot,
     plot_grouped_variance,
+    plot_shared_legend,
 )
 from src.paper_figures.config import (
     DATASET_FILE_STEMS,
     DATASET_ORDER,
-    MAIN_METHOD_ORDER,
+    MAIN_TARGET_MODEL_LABELS,
+    MAIN_TARGET_MODEL_ORDER,
+    METRIC_MAIN_METHOD_ORDER,
     METHOD_ORDER,
     TARGET_MODEL_ORDER,
 )
@@ -180,49 +183,75 @@ def generate_metric_appendix_figures(
 def generate_metric_main_figures(
     frame: pd.DataFrame, *, output_dir: Path, quality: str
 ) -> pd.DataFrame:
-    """Generate Red-Team/Qwen-judge restricted-mean main-text figures."""
+    """Generate Red-Team/Qwen-judge event-rate panels and one legend."""
     dataset_key = "red_team_qwen_judge"
     dataset = frame[frame["dataset_key"].eq(dataset_key)].copy()
+    dataset["target_model"] = dataset["target_model"].replace(
+        MAIN_TARGET_MODEL_LABELS
+    )
     rows: list[dict] = []
-    path = output_dir / "red_team_qwen_estimated_rmttu_boxplot.jpg"
+    path = output_dir / "red_team_qwen_event_rate_boxplot.jpg"
     generated = plot_grouped_boxplot(
         dataset,
-        metric="estimated_restricted_mean",
+        metric="estimated_cjr",
         output_path=path,
-        ylabel=r"Estimated restricted mean $E[\min(T,200)]$",
+        ylabel="Estimated event rate (%)",
         quality=quality,
-        x_order=TARGET_MODEL_ORDER,
-        method_order=MAIN_METHOD_ORDER,
+        x_order=MAIN_TARGET_MODEL_ORDER,
+        method_order=METRIC_MAIN_METHOD_ORDER,
         reference_by_x=_reference_map(
-            dataset, "full_benchmark_restricted_mean"
+            dataset, "full_benchmark_cjr"
         ),
         reference_label="Full-benchmark truth",
-        figsize=(7.0, 3.25),
+        hide_methods=("Oracle",),
+        figsize=(3.65, 2.65),
+        show_legend=False,
+        font_scale=1.12,
     )
     _record(
         rows,
         dataset_key=dataset_key,
-        metric="estimated_restricted_mean",
+        metric="estimated_cjr",
         path=path,
         generated=generated,
         scope="metrics-main",
     )
-    path = output_dir / "red_team_qwen_estimated_rmttu_variance_barplot.jpg"
+    path = output_dir / "red_team_qwen_event_rate_variance_barplot.jpg"
     generated, _ = plot_grouped_variance(
         dataset,
-        metric="estimated_restricted_mean",
+        metric="estimated_cjr",
         output_path=path,
-        ylabel="Restricted-mean variance (turns squared)",
+        ylabel=r"Event-rate variance (pp$^2$)",
         quality=quality,
-        x_order=TARGET_MODEL_ORDER,
-        method_order=MAIN_METHOD_ORDER,
-        figsize=(7.0, 3.25),
+        x_order=MAIN_TARGET_MODEL_ORDER,
+        method_order=METRIC_MAIN_METHOD_ORDER,
+        hide_methods=("Oracle",),
+        figsize=(3.65, 2.65),
+        show_legend=False,
+        font_scale=1.12,
     )
     _record(
         rows,
         dataset_key=dataset_key,
-        metric="estimated_restricted_mean_variance",
+        metric="estimated_cjr_variance",
         path=path,
+        generated=generated,
+        scope="metrics-main",
+    )
+    legend_path = output_dir / "red_team_qwen_metric_legend.jpg"
+    generated = plot_shared_legend(
+        output_path=legend_path,
+        quality=quality,
+        methods=METRIC_MAIN_METHOD_ORDER,
+        reference_label="Full-data value",
+        figsize=(1.7, 2.65),
+        font_scale=1.08,
+    )
+    _record(
+        rows,
+        dataset_key=dataset_key,
+        metric="shared_legend",
+        path=legend_path,
         generated=generated,
         scope="metrics-main",
     )

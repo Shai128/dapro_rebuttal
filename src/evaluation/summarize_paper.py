@@ -6,8 +6,6 @@ import argparse
 from pathlib import Path
 import sys
 
-import pandas as pd
-
 _ROOT = Path(__file__).resolve().parents[2]
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
@@ -40,19 +38,14 @@ def _parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = _parse_args()
-    frame, inventory, gaps = load_metric_paper_data(args.input_dir)
+    frame, _, gaps = load_metric_paper_data(args.input_dir)
     if args.strict and not gaps.empty:
         raise ValueError(
             "Metric paper matrix is incomplete:\n" + gaps.to_string(index=False)
         )
-    data_dir = args.figures_root / "paper" / "data"
-    data_dir.mkdir(parents=True, exist_ok=True)
-    frame.to_csv(data_dir / "metric_seed_level_plot_data.csv", index=False)
-    inventory.to_csv(data_dir / "metric_result_inventory.csv", index=False)
-    gaps.to_csv(data_dir / "metric_schema_gaps.csv", index=False)
     appendix = generate_metric_appendix_figures(
         frame,
-        output_dir=args.figures_root / "metrics",
+        output_dir=args.figures_root / "paper" / "full" / "metric",
         quality=args.quality,
     )
     main_manifest = generate_metric_main_figures(
@@ -60,17 +53,15 @@ def main() -> None:
         output_dir=args.figures_root / "paper" / "main",
         quality=args.quality,
     )
-    manifest = pd.concat([appendix, main_manifest], ignore_index=True)
-    manifest.to_csv(data_dir / "metric_figure_manifest.csv", index=False)
+    generated = int(appendix["generated"].sum()) + int(
+        main_manifest["generated"].sum()
+    )
+    requested = len(appendix) + len(main_manifest)
     print(
-        f"Metrics: generated {int(manifest['generated'].sum())}/"
-        f"{len(manifest)} requested figures."
+        f"Metrics: generated {generated}/{requested} requested figures."
     )
     if not gaps.empty:
-        print(
-            f"Metrics: {len(gaps)} source gaps were recorded in "
-            f"{data_dir / 'metric_schema_gaps.csv'}."
-        )
+        print(f"Metrics: {len(gaps)} source gaps (not written to figures/).")
 
 
 if __name__ == "__main__":

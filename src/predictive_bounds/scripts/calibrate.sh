@@ -13,6 +13,9 @@
 #   * residual schedule + sequential AHT;
 #   * endpoint/block schedule + terminal residual AHT.
 # Every learned family is evaluated raw (zero projection margin) and with CRC.
+# Generalized DAPRO itself is fixed to the current-hazard K=2 map, global
+# regularization 0.001, and a 2B shared-PAV CRC cap across LPB and UPB; only
+# the task target coefficient and the requested N1/budget change.
 # N1={200,100,50}, with CRC control size N1/2. LPB targets 90% coverage;
 # UPB targets 70%, 80%, and 90%. UPB value 201 means infinity/no event through
 # turn 200.

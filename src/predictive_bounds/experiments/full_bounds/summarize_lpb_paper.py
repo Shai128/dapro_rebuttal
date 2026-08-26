@@ -6,8 +6,6 @@ import argparse
 from pathlib import Path
 import sys
 
-import pandas as pd
-
 _ROOT = Path(__file__).resolve().parents[4]
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
@@ -40,20 +38,15 @@ def _parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = _parse_args()
-    frame, inventory, gaps = load_bound_paper_data(args.input_dir, "lpb")
+    frame, _, gaps = load_bound_paper_data(args.input_dir, "lpb")
     if args.strict and not gaps.empty:
         raise ValueError(
             "LPB paper matrix is incomplete:\n" + gaps.to_string(index=False)
         )
-    data_dir = args.figures_root / "paper" / "data"
-    data_dir.mkdir(parents=True, exist_ok=True)
-    frame.to_csv(data_dir / "lpb_seed_level_plot_data.csv", index=False)
-    inventory.to_csv(data_dir / "lpb_result_inventory.csv", index=False)
-    gaps.to_csv(data_dir / "lpb_schema_gaps.csv", index=False)
     appendix = generate_bound_appendix_figures(
         frame,
         task="lpb",
-        output_dir=args.figures_root / "full",
+        output_dir=args.figures_root / "paper" / "full" / "lpb",
         quality=args.quality,
     )
     main_manifest = generate_lpb_main_figures(
@@ -61,17 +54,15 @@ def main() -> None:
         output_dir=args.figures_root / "paper" / "main",
         quality=args.quality,
     )
-    manifest = pd.concat([appendix, main_manifest], ignore_index=True)
-    manifest.to_csv(data_dir / "lpb_figure_manifest.csv", index=False)
+    generated = int(appendix["generated"].sum()) + int(
+        main_manifest["generated"].sum()
+    )
+    requested = len(appendix) + len(main_manifest)
     print(
-        f"LPB: generated {int(manifest['generated'].sum())}/"
-        f"{len(manifest)} requested figures."
+        f"LPB: generated {generated}/{requested} requested figures."
     )
     if not gaps.empty:
-        print(
-            f"LPB: {len(gaps)} source gaps were recorded in "
-            f"{data_dir / 'lpb_schema_gaps.csv'}."
-        )
+        print(f"LPB: {len(gaps)} source gaps (not written to figures/).")
 
 
 if __name__ == "__main__":

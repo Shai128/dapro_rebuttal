@@ -79,6 +79,12 @@ def _source_rank(task: str, path: Path) -> int:
     name = path.parent.name
     if "schema_metrics_validation" in name:
         return -100
+    # Metric ablations intentionally reuse the compact ``*_m_*`` result-name
+    # grammar.  They are valid inputs to the ablation summarizer, but they must
+    # never compete with the canonical population-metric experiment when the
+    # paper matrix is assembled.
+    if task == "metrics" and "_ablation_" in name:
+        return -100
     columns = set(pd.read_csv(path, nrows=0).columns)
     current_schema_columns = {
         "lpb": {
@@ -112,7 +118,7 @@ def _source_rank(task: str, path: Path) -> int:
     preferences = {
         "lpb": ("v3", "_calibration"),
         "upb": ("v3", "_calibration_upb"),
-        "metrics": ("v3", "_m"),
+        "metrics": ("_m_metric", "metric_estimation", "v3"),
     }[task]
     for index, token in enumerate(preferences):
         if token in name:

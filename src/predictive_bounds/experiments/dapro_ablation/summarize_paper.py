@@ -88,6 +88,7 @@ SOURCE_COLUMNS = {
     "ablation_score_kind",
     "ablation_score_is_causal",
     "ablation_score_bin_count",
+    "global_regularization",
     "ablation_continuous_score_map",
     "ablation_coefficient_kind",
     "phase1_oracle_optimized_objective",
@@ -239,6 +240,23 @@ def load_ablation_data(
         dynamic_rows = dynamic_rows[
             dynamic_rows["ablation_kind"].astype(str).eq(kind)
         ]
+        # Do not silently combine pre-standardization K4/regularization-zero
+        # files with the canonical paper ablations.  Representation is the
+        # sole study allowed to vary K.
+        bins = pd.to_numeric(
+            dynamic_rows["ablation_score_bin_count"], errors="coerce"
+        )
+        if kind != "representation" and bins.notna().any():
+            dynamic_rows = dynamic_rows[np.isclose(
+                bins, 2.0, atol=5e-7
+            )].copy()
+        regularization = pd.to_numeric(
+            dynamic_rows["global_regularization"], errors="coerce"
+        )
+        if regularization.notna().any():
+            dynamic_rows = dynamic_rows[np.isclose(
+                regularization.loc[dynamic_rows.index], 0.001, atol=5e-10
+            )].copy()
         values = sorted(
             pd.to_numeric(dynamic_rows["ablation_value"], errors="coerce")
             .dropna().unique()
@@ -416,6 +434,20 @@ def load_metric_ablation_data(
             frame["method"].isin({"DAPRO", "DAPRO w/o CRC"})
             & frame["ablation_kind"].astype(str).eq(kind)
         ].copy()
+        bins = pd.to_numeric(
+            dynamic_rows["ablation_score_bin_count"], errors="coerce"
+        )
+        if bins.notna().any():
+            dynamic_rows = dynamic_rows[np.isclose(
+                bins, 2.0, atol=5e-7
+            )].copy()
+        regularization = pd.to_numeric(
+            dynamic_rows["global_regularization"], errors="coerce"
+        )
+        if regularization.notna().any():
+            dynamic_rows = dynamic_rows[np.isclose(
+                regularization.loc[dynamic_rows.index], 0.001, atol=5e-10
+            )].copy()
         values = sorted(
             pd.to_numeric(dynamic_rows["ablation_value"], errors="coerce")
             .dropna().unique()
@@ -899,9 +931,10 @@ def generate_metric_ablation_figure(
         legend = axis.get_legend()
         if legend is not None:
             legend.remove()
+    representation_note = "all score maps use $K=2$"
     figure.suptitle(
         "Metric " + str(spec["title"]).lower()
-        + " (mean $\\pm$ 1 SD across splits)",
+        + f" ({representation_note}; mean $\\pm$ 1 SD across splits)",
         y=0.995,
         fontsize=13,
     )
@@ -1029,13 +1062,10 @@ def _parse_args() -> argparse.Namespace:
 def main() -> None:
     args = _parse_args()
     args.output_dir.mkdir(parents=True, exist_ok=True)
-    all_data = []
-    all_inventory = []
-    all_statistics = []
-    manifest = []
+    generated_count = 0
     if "lpb" in args.tasks:
         for kind in args.kinds:
-            data, inventory = load_ablation_data(
+            data, _ = load_ablation_data(
                 args.input_dir,
                 experiment_prefix=args.experiment_prefix,
                 kind=kind,
@@ -1048,50 +1078,28 @@ def main() -> None:
                     f"{kind} does not contain 50 splits in every cell:\n{counts}"
                 )
             path = args.output_dir / f"dapro_{kind}_ablation.jpg"
-            statistics = generate_ablation_figure(
+            generate_ablation_figure(
                 data, kind=kind, output_path=path, quality=args.quality
             )
-            statistics["task"] = "lpb"
-            statistics["ablation_kind"] = kind
-            data["task"] = "lpb"
-            data["ablation_kind"] = kind
-            inventory["task"] = "lpb"
-            inventory["ablation_kind"] = kind
-            all_data.append(data)
-            all_inventory.append(inventory)
-            all_statistics.append(statistics)
-            manifest.append({
-                "task": "lpb",
-                "ablation_kind": kind,
-                "figure": str(path),
-                "generated": path.exists(),
-            })
+            generated_count += int(path.exists())
             print(f"Generated {path}")
             if kind == "representation":
                 diagnostic_path = (
                     args.output_dir / "dapro_representation_diagnostics.jpg"
                 )
-                diagnostic_statistics = generate_representation_diagnostics(
+                generate_representation_diagnostics(
                     data,
                     output_path=diagnostic_path,
                     quality=args.quality,
                 )
-                diagnostic_statistics["task"] = "lpb"
-                diagnostic_statistics["ablation_kind"] = kind
-                all_statistics.append(diagnostic_statistics)
-                manifest.append({
-                    "task": "lpb",
-                    "ablation_kind": "representation_diagnostics",
-                    "figure": str(diagnostic_path),
-                    "generated": diagnostic_path.exists(),
-                })
+                generated_count += int(diagnostic_path.exists())
                 print(f"Generated {diagnostic_path}")
     if "metric" in args.tasks:
         metric_kinds = [
             kind for kind in args.kinds if kind in {"score_noise", "score"}
         ]
         for kind in metric_kinds:
-            data, inventory = load_metric_ablation_data(
+            data, _ = load_metric_ablation_data(
                 args.metric_input_dir,
                 experiment_prefix=args.metric_experiment_prefix,
                 kind=kind,
@@ -1105,39 +1113,14 @@ def main() -> None:
                     f"cell:\n{counts}"
                 )
             path = args.output_dir / f"dapro_metric_{kind}_ablation.jpg"
-            statistics = generate_metric_ablation_figure(
+            generate_metric_ablation_figure(
                 data, kind=kind, output_path=path, quality=args.quality
             )
-            statistics["task"] = "metric"
-            statistics["ablation_kind"] = kind
-            data["task"] = "metric"
-            data["ablation_kind"] = kind
-            inventory["task"] = "metric"
-            inventory["ablation_kind"] = kind
-            all_data.append(data)
-            all_inventory.append(inventory)
-            all_statistics.append(statistics)
-            manifest.append({
-                "task": "metric",
-                "ablation_kind": kind,
-                "figure": str(path),
-                "generated": path.exists(),
-            })
+            generated_count += int(path.exists())
             print(f"Generated {path}")
-    if not all_data:
+    if generated_count == 0:
         raise ValueError("No requested ablation figures were generated.")
-    pd.concat(all_data, ignore_index=True).to_csv(
-        args.output_dir / "dapro_ablation_plot_data.csv", index=False
-    )
-    pd.concat(all_inventory, ignore_index=True).to_csv(
-        args.output_dir / "dapro_ablation_result_inventory.csv", index=False
-    )
-    pd.concat(all_statistics, ignore_index=True).to_csv(
-        args.output_dir / "dapro_ablation_mean_variance.csv", index=False
-    )
-    pd.DataFrame(manifest).to_csv(
-        args.output_dir / "dapro_ablation_figure_manifest.csv", index=False
-    )
+    print(f"Generated {generated_count} ablation figures; no CSV artifacts written.")
 
 
 if __name__ == "__main__":

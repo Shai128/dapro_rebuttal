@@ -92,6 +92,17 @@ from src.predictive_bounds.budget_allocators.uncalibrated_metric_allocator impor
 from typing import List
 
 
+# One paper-wide Generalized-DAPRO specification.  Registries should vary
+# these values only in an ablation whose x-axis explicitly names that value.
+# Keeping the constants here (rather than relying on constructor defaults)
+# makes LPB, UPB, metric estimation, construction, and merge registries agree.
+CANONICAL_DAPRO_SCORE_BIN_COUNT = 2
+CANONICAL_DAPRO_GLOBAL_REGULARIZATION = 0.001
+CANONICAL_DAPRO_PROJECTION_BUDGET_MARGIN = 0.0
+CANONICAL_DAPRO_CRC_ROW_COST_CAP_MULTIPLIER = 2.0
+CANONICAL_DAPRO_SCORE_KIND = "hazard"
+
+
 def get_dapro_ablation_calibrations(
         conditional_grid,
         budget_per_sample,
@@ -141,7 +152,7 @@ def get_dapro_ablation_calibrations(
         tau_prior=tau_prior,
         m_upper_bound=m_upper_bound,
         target_alpha=0.10,
-        score_bin_count=2,
+        score_bin_count=CANONICAL_DAPRO_SCORE_BIN_COUNT,
     )
     configurations: list[dict]
     if kind == "n1":
@@ -166,10 +177,8 @@ def get_dapro_ablation_calibrations(
         ]
     elif kind == "hard_soft":
         configurations = [
-            dict(n1=n1_values[0], value=0.0, label="Hard", hard=True,
-                 global_regularization=0.0),
-            dict(n1=n1_values[0], value=1.0, label="Soft", hard=False,
-                 global_regularization=0.0),
+            dict(n1=n1_values[0], value=0.0, label="Hard", hard=True),
+            dict(n1=n1_values[0], value=1.0, label="Soft", hard=False),
         ]
     elif kind == "representation":
         configurations = [
@@ -184,7 +193,8 @@ def get_dapro_ablation_calibrations(
     elif kind == "score":
         configurations = [
             dict(n1=n1_values[0], value=float(index), label=label,
-                 score_kind=score_kind, bins=4)
+                 score_kind=score_kind,
+                 bins=CANONICAL_DAPRO_SCORE_BIN_COUNT)
             for index, (score_kind, label) in enumerate([
                 ("hazard", "Current hazard"),
                 ("remaining_quantile", "Remaining-time quantile"),
@@ -206,15 +216,22 @@ def get_dapro_ablation_calibrations(
         allocator_common = {
             **common,
             "n1": n1,
-            "score_bin_count": int(configuration.get("bins", 2)),
+            "score_bin_count": int(configuration.get(
+                "bins", CANONICAL_DAPRO_SCORE_BIN_COUNT
+            )),
             "smooth_score_rank_map": bool(configuration.get("smooth", False)),
             "global_regularization": float(
-                configuration.get("global_regularization", 0.001)
+                configuration.get(
+                    "global_regularization",
+                    CANONICAL_DAPRO_GLOBAL_REGULARIZATION,
+                )
             ),
             "ablation_kind": kind,
             "ablation_value": float(configuration["value"]),
             "ablation_label": str(configuration["label"]),
-            "score_kind": str(configuration.get("score_kind", "hazard")),
+            "score_kind": str(configuration.get(
+                "score_kind", CANONICAL_DAPRO_SCORE_KIND
+            )),
             "score_noise_lambda": float(configuration.get("noise", 0.0)),
             "score_noise_seed": score_noise_seed,
         }
@@ -226,7 +243,9 @@ def get_dapro_ablation_calibrations(
         )
         raw = raw_class(
             **allocator_common,
-            projection_budget_margin=0.0,
+            projection_budget_margin=(
+                CANONICAL_DAPRO_PROJECTION_BUDGET_MARGIN
+            ),
         )
         crc_kwargs = dict(allocator_common)
         # Hard and soft CRC wrappers expose the same public control size.
@@ -257,16 +276,15 @@ def get_metric_dapro_ablation_allocators(
     """Return Static plus paired raw/CRC metric score ablations.
 
     These allocators optimize the event-rate target
-    ``A_i = 1{T_i <= m_upper_bound}``.  The named score comparison uses four
-    bins for every score, while the score-noise study deliberately retains
-    the production two-bin hazard representation and changes only score
-    quality.  Thus neither study confounds its x-axis with the controller,
-    target, budget, or representation.
+    ``A_i = 1{T_i <= m_upper_bound}``.  Both named-score and score-noise
+    studies retain the paper-wide two-bin representation, so the score is the
+    only DAPRO component changed along either x-axis.
     """
     kind = str(ablation_kind).lower()
-    if kind not in {"score_noise", "score"}:
+    if kind not in {"score_noise", "score", "hard_soft"}:
         raise ValueError(
-            "Metric DAPRO ablations support only 'score_noise' and 'score'."
+            "Metric DAPRO ablations support 'score_noise', 'score', and "
+            "'hard_soft'."
         )
     dapro_n1 = int(dapro_n1)
     crc_control_size = int(crc_control_size)
@@ -290,14 +308,14 @@ def get_metric_dapro_ablation_allocators(
                 label=f"lambda={lam:g}",
                 score_kind="hazard",
                 noise=lam,
-                bins=2,
+                bins=CANONICAL_DAPRO_SCORE_BIN_COUNT,
             )
             for lam in lambdas
         ]
-    else:
+    elif kind == "score":
         configurations = [
             dict(value=float(index), label=label, score_kind=score_kind,
-                 noise=0.0, bins=4)
+                 noise=0.0, bins=CANONICAL_DAPRO_SCORE_BIN_COUNT)
             for index, (score_kind, label) in enumerate([
                 ("hazard", "Current hazard"),
                 ("remaining_quantile", "Remaining-time quantile"),
@@ -305,6 +323,17 @@ def get_metric_dapro_ablation_allocators(
                 ("random", "Random"),
                 ("oracle_remaining_time", "Oracle remaining time"),
             ])
+        ]
+    else:
+        configurations = [
+            dict(
+                value=0.0, label="Hard terminal", score_kind="hazard",
+                noise=0.0, bins=CANONICAL_DAPRO_SCORE_BIN_COUNT, hard=True,
+            ),
+            dict(
+                value=1.0, label="Soft prefix", score_kind="hazard",
+                noise=0.0, bins=CANONICAL_DAPRO_SCORE_BIN_COUNT, hard=False,
+            ),
         ]
 
     common = dict(
@@ -316,7 +345,7 @@ def get_metric_dapro_ablation_allocators(
         n1=dapro_n1,
         target_alpha=0.10,
         metric_estimation_horizon=m_upper_bound,
-        global_regularization=0.001,
+        global_regularization=CANONICAL_DAPRO_GLOBAL_REGULARIZATION,
     )
     for configuration in configurations:
         ablation = dict(
@@ -328,13 +357,21 @@ def get_metric_dapro_ablation_allocators(
             score_noise_seed=score_noise_seed,
             score_bin_count=int(configuration["bins"]),
         )
+        hard = bool(configuration.get("hard", False))
+        raw_class = AblationHardTargetDAPRO if hard else AblationSoftTargetDAPRO
+        crc_class = (
+            AblationHardTargetCRCDAPRO
+            if hard else AblationSoftTargetCRCDAPRO
+        )
         allocators.extend([
-            AblationSoftTargetDAPRO(
+            raw_class(
                 **common,
                 **ablation,
-                projection_budget_margin=0.0,
+                projection_budget_margin=(
+                    CANONICAL_DAPRO_PROJECTION_BUDGET_MARGIN
+                ),
             ),
-            AblationSoftTargetCRCDAPRO(
+            crc_class(
                 **common,
                 **ablation,
                 budget_control_size=crc_control_size,
@@ -383,15 +420,26 @@ def get_unified_bound_calibrations(
             tau_prior=tau_prior,
             m_upper_bound=m_upper_bound,
             target_alpha=target_alpha,
+            score_bin_count=CANONICAL_DAPRO_SCORE_BIN_COUNT,
+            global_regularization=CANONICAL_DAPRO_GLOBAL_REGULARIZATION,
         )
         for n1 in n1_values:
             control = n1 // 2
             allocations = [
                 SoftTargetDAPRO(
-                    **common, n1=n1, projection_budget_margin=0.0
+                    **common,
+                    n1=n1,
+                    projection_budget_margin=(
+                        CANONICAL_DAPRO_PROJECTION_BUDGET_MARGIN
+                    ),
                 ),
                 SoftTargetCRCDAPRO(
-                    **common, n1=n1, budget_control_size=control
+                    **common,
+                    n1=n1,
+                    budget_control_size=control,
+                    row_cost_cap_multiplier=(
+                        CANONICAL_DAPRO_CRC_ROW_COST_CAP_MULTIPLIER
+                    ),
                 ),
                 # InformationGainDAPRO(
                 #     **common, n1=n1, projection_budget_margin=0.0
@@ -455,13 +503,22 @@ def get_unified_bound_calibrations(
                 m_upper_bound=m_upper_bound,
                 target_coverage=float(coverage),
                 n1=n1,
+                score_bin_count=CANONICAL_DAPRO_SCORE_BIN_COUNT,
+                global_regularization=CANONICAL_DAPRO_GLOBAL_REGULARIZATION,
             )
             allocations = [
                 SoftPrefixEndpointUPBDAPRO(
-                    **common, projection_budget_margin=0.0
+                    **common,
+                    projection_budget_margin=(
+                        CANONICAL_DAPRO_PROJECTION_BUDGET_MARGIN
+                    ),
                 ),
                 SoftPrefixEndpointCRCUPBDAPRO(
-                    **common, budget_control_size=control
+                    **common,
+                    budget_control_size=control,
+                    row_cost_cap_multiplier=(
+                        CANONICAL_DAPRO_CRC_ROW_COST_CAP_MULTIPLIER
+                    ),
                 ),
                 # InformationGainUPBDAPRO(
                 #     **common, projection_budget_margin=0.0
@@ -519,16 +576,18 @@ def get_upb_calibrations(
         m_upper_bound,
         *,
         dapro_n1_values=(200, 100, 50),
-        projection_budget_margin: float = 1.0,
+        projection_budget_margin: float = (
+            CANONICAL_DAPRO_PROJECTION_BUDGET_MARGIN
+        ),
         target_coverage: float = 0.70,
 ) -> List[SurvivalUPBCalibration]:
     """Return the shared UPB construction/merge registry.
 
     The paper comparison retains Static, Constant+CRC, and the power-schedule
     baseline.  Each exposes candidate-specific reach propensities required by
-    UPB calibration.  The only DAPRO family instantiated is soft-prefix
-    Generalized DAPRO, with and without independent CRC; the CRC variant
-    intentionally uses no shared-PAV row cap.
+    UPB calibration.  The only DAPRO family instantiated is canonical
+    history-adaptive soft-prefix Generalized DAPRO, with a raw zero-margin
+    controller or the same independent capped-CRC controller used elsewhere.
     """
     reach = {"reach_t_max_is_success": True}
     allocations: List[BudgetAllocator] = [
@@ -555,32 +614,33 @@ def get_upb_calibrations(
             **reach,
         ),
     ]
-    # The UPB specialization is model-only: there is no policy-fit N1 axis and
-    # hence no reason to duplicate the same allocator for several historical
-    # N1 values.  Retain the argument for CLI compatibility and use its largest
-    # requested value only to obtain the conventional CRC control size of 100.
-    requested_n1 = max(tuple(dapro_n1_values), default=200)
-    allocations.append(SoftTargetUPBDAPRO(
-        conditional_grid,
-        budget_per_sample,
-        taus_range,
-        tau_prior,
-        m_upper_bound,
-        n1=requested_n1,
-        target_coverage=target_coverage,
-        projection_budget_margin=projection_budget_margin,
-    ))
-    if requested_n1 >= 2:
-        allocations.append(SoftTargetCRCUPBDAPRO(
-            conditional_grid,
-            budget_per_sample,
-            taus_range,
-            tau_prior,
-            m_upper_bound,
-            n1=requested_n1,
-            budget_control_size=min(100, requested_n1 // 2),
+    # Keep the legacy registry aligned with the paper suite: UPB changes the
+    # target event, but retains the same history-adaptive hazard/K2 policy,
+    # regularization, raw zero-margin controller, and capped CRC controller.
+    for requested_n1 in tuple(dict.fromkeys(dapro_n1_values)):
+        common = dict(
+            conditional_grid=conditional_grid,
+            budget_per_sample=budget_per_sample,
+            taus_range=taus_range,
+            tau_prior=tau_prior,
+            m_upper_bound=m_upper_bound,
+            n1=int(requested_n1),
             target_coverage=target_coverage,
+            score_bin_count=CANONICAL_DAPRO_SCORE_BIN_COUNT,
+            global_regularization=CANONICAL_DAPRO_GLOBAL_REGULARIZATION,
+        )
+        allocations.append(SoftPrefixEndpointUPBDAPRO(
+            **common,
+            projection_budget_margin=projection_budget_margin,
         ))
+        if requested_n1 >= 2:
+            allocations.append(SoftPrefixEndpointCRCUPBDAPRO(
+                **common,
+                budget_control_size=int(requested_n1) // 2,
+                row_cost_cap_multiplier=(
+                    CANONICAL_DAPRO_CRC_ROW_COST_CAP_MULTIPLIER
+                ),
+            ))
     return [
         UncalibratedUPBSurvivalCalibration(taus_range, tau_prior),
         OracleSurvivalUPBCalibration(taus_range, tau_prior),
@@ -615,7 +675,7 @@ def get_baseline_calibrations(
         include_a_weighted=True,
         evaluate_dapro_projection=False,
         dapro_n1_values=(200,100),
-        definitive_dapro_margins=(1.0,),
+        definitive_dapro_margins=(0.0,),
 ):
     basic_allocation = BasicBudgetAllocator(budget_per_sample, taus_range, tau_prior)
     trimmed_allocation = TrimmedBudgetAllocator(budget_per_sample, taus_range, tau_prior, m_upper_bound)
@@ -1201,13 +1261,22 @@ def get_metric_allocators(
             SoftTargetDAPRO(
                 **common,
                 n1=dapro_n1,
-                projection_budget_margin=0.0,
+                score_bin_count=CANONICAL_DAPRO_SCORE_BIN_COUNT,
+                global_regularization=CANONICAL_DAPRO_GLOBAL_REGULARIZATION,
+                projection_budget_margin=(
+                    CANONICAL_DAPRO_PROJECTION_BUDGET_MARGIN
+                ),
                 **target,
             ),
             SoftTargetCRCDAPRO(
                 **common,
                 n1=dapro_n1,
                 budget_control_size=crc_control_size,
+                score_bin_count=CANONICAL_DAPRO_SCORE_BIN_COUNT,
+                global_regularization=CANONICAL_DAPRO_GLOBAL_REGULARIZATION,
+                row_cost_cap_multiplier=(
+                    CANONICAL_DAPRO_CRC_ROW_COST_CAP_MULTIPLIER
+                ),
                 **target,
             ),
             # InformationGainDAPRO(
@@ -1313,14 +1382,22 @@ def get_metric_allocators(
         SoftTargetDAPRO(
             **common,
             n1=dapro_n1,
-            projection_budget_margin=1.0,
+            score_bin_count=CANONICAL_DAPRO_SCORE_BIN_COUNT,
+            global_regularization=CANONICAL_DAPRO_GLOBAL_REGULARIZATION,
+            projection_budget_margin=(
+                CANONICAL_DAPRO_PROJECTION_BUDGET_MARGIN
+            ),
             **target,
         ),
         SoftTargetCRCDAPRO(
             **common,
             n1=dapro_n1,
             budget_control_size=crc_control_size,
-            row_cost_cap_multiplier=2.0,
+            score_bin_count=CANONICAL_DAPRO_SCORE_BIN_COUNT,
+            global_regularization=CANONICAL_DAPRO_GLOBAL_REGULARIZATION,
+            row_cost_cap_multiplier=(
+                CANONICAL_DAPRO_CRC_ROW_COST_CAP_MULTIPLIER
+            ),
             **target,
         ),
         # Infinite budget on the random calibration side only.

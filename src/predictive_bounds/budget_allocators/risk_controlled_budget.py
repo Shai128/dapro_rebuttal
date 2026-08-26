@@ -206,6 +206,93 @@ def select_crc_budget_candidate(
     )
 
 
+def select_aggressive_crc_budget_candidate(
+        expected_costs: np.ndarray,
+        pilot_costs: np.ndarray,
+        *,
+        total_budget_after_policy_fit: float,
+        deployment_sample_count: int,
+        maximum_cost_per_sample: float,
+        maximum_candidate_cost_per_sample: float | None = None,
+        maximum_pilot_cost_per_sample: float | None = None,
+        tolerance: float = 1e-12,
+) -> BudgetCandidateSelection:
+    """Select after subtracting the realized control-fold cost.
+
+    The aggressive rule is
+
+        (sum_i c_i(k) + C_max) / (n + 1)
+            <= (B_remaining - sum_i b_i) / m.
+
+    It has a marginal expected-total-budget guarantee only when the frozen
+    family additionally obeys
+
+        c_z(k) + ((n + 1) / m) * (b_z - E[b]) <= C_max
+
+    for every fresh row and every selectable candidate.  This function does
+    not enforce that transformed envelope; callers must diagnose or enforce
+    it.  The pilot bound is retained for validation and audit metadata.
+    """
+    candidate_bound = (
+        float(maximum_cost_per_sample)
+        if maximum_candidate_cost_per_sample is None
+        else float(maximum_candidate_cost_per_sample)
+    )
+    pilot_bound = (
+        float(maximum_cost_per_sample)
+        if maximum_pilot_cost_per_sample is None
+        else float(maximum_pilot_cost_per_sample)
+    )
+    costs, pilot = _validate_cost_inputs(
+        expected_costs,
+        pilot_costs,
+        deployment_sample_count,
+        candidate_bound,
+        pilot_bound,
+        require_nested=True,
+        tolerance=tolerance,
+    )
+    if (
+            not np.isfinite(total_budget_after_policy_fit)
+            or total_budget_after_policy_fit < 0
+    ):
+        raise ValueError(
+            "`total_budget_after_policy_fit` must be finite and nonnegative."
+        )
+
+    remaining_after_control = float(
+        total_budget_after_policy_fit - pilot.sum()
+    )
+    if remaining_after_control < -tolerance:
+        raise ValueError(
+            "The fully observed budget-control fold already exceeds the "
+            "budget remaining after policy fitting."
+        )
+    n_control = len(pilot)
+    target = remaining_after_control / deployment_sample_count
+    selector_values = (
+        costs.sum(axis=0) + candidate_bound
+    ) / (n_control + 1)
+    feasible = np.flatnonzero(selector_values <= target + tolerance)
+    if len(feasible) == 0:
+        raise ValueError(
+            "No candidate policy satisfies the aggressive CRC residual-budget "
+            "selector. Add a more conservative candidate, reduce the terminal "
+            "floor, or increase the budget/control-fold size."
+        )
+    selected = int(feasible[0])
+    return BudgetCandidateSelection(
+        selected_index=selected,
+        empirical_expected_cost_per_sample=float(costs[:, selected].mean()),
+        deployment_budget_per_sample=float(max(target, 0.0)),
+        selector_left_side_per_sample=float(selector_values[selected]),
+        correction_per_sample=float(candidate_bound / (n_control + 1)),
+        guarantee_kind=(
+            "crc_aggressive_realized_residual_requires_transformed_envelope"
+        ),
+    )
+
+
 def select_hoeffding_budget_candidate(
         expected_costs: np.ndarray,
         pilot_costs: np.ndarray,

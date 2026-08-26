@@ -28,7 +28,8 @@ Every cell contains Static, raw zero-margin DAPRO, and DAPRO+CRC. The oracle
 score is an efficiency upper anchor only (`ablation_score_is_causal=0`) and
 must not be presented as deployable.
 
-The score study fixes `K=4` and the controller within each raw/CRC comparison.
+The score study fixes the paper-wide `K=2` representation and the controller
+within each raw/CRC comparison.
 “Remaining-time quantile” is the inverse conditional median number of turns
 remaining (larger means a predicted earlier event). “Causal target value” is
 the current-prefix probability
@@ -43,7 +44,7 @@ control size 25:
 
 - the production K2 hazard score mixed with independently time-permuted score
   values at `lambda = 0, .1, .25, .5, .75, 1`;
-- the five named score alternatives at fixed K4 and otherwise identical
+- the five named score alternatives at fixed K2 and otherwise identical
   controllers.
 
 For metrics, the DAPRO objective and causal target-value score both use the
@@ -53,6 +54,12 @@ event-rate target `A_i = 1{T_i <= 200}`. Thus the target-value score is
 the latent realization and is retained only as a nondeployable upper-quality
 anchor. Every metric factor cell again contains Static, raw zero-margin DAPRO,
 and DAPRO+CRC.
+
+All DAPRO studies use the same soft-prefix target, current-hazard score,
+`K=2`, global regularization `0.001`, raw zero-margin controller, and capped
+CRC controller unless the named ablation explicitly changes one of those
+components. In particular, “Current hazard” in the named-score study and
+`lambda=0` in the score-noise study now instantiate the same allocator.
 
 Generate paper figures and machine-readable means/variances with:
 

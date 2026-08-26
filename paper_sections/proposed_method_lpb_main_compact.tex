@@ -1,0 +1,309 @@
+% Compact, code-aligned main-paper description of LPB DAPRO.
+% A complete proof of the CRC statement is in standard_crc_budget_validity.tex.
+
+\section{Proposed Method}
+\label{sec:method}
+
+Let $\calI=\{1,\ldots,N\}$ be the calibration indices and let $\bar B$ be
+the target budget per calibration row, so the total budget is
+$B_{\mathrm{tot}}:=N\bar B$.  We randomly partition $\calI$ into a fully
+observed policy-fit set $\calIone$, an independent fully observed budget-control
+set $\calIcrc$, and a deployment set $\calItwo$.  Write
+\[
+    N_1:=|\calIone|,\qquad n:=|\calIcrc|,\qquad
+    m:=|\calItwo|,\qquad N=N_1+n+m.
+\]
+For row $i$, $X_i$ is its initial prompt, $T_i\in\{1,\ldots,\maxl+1\}$ is
+its time to event, and $\maxl+1$ denotes no event by the executable horizon
+$\maxl$.  Let
+\begin{equation}
+    Q_i:=\qprior(X_i)=\fhat_{\tauprior}(X_i),
+    \qquad L_i:=\min\{T_i,Q_i\}.
+    \label{eq:dapro_main_active_length}
+\end{equation}
+Here $\tauprior$ is the fixed prior candidate level, $Q_i$ is the largest
+interaction needed by the LPB calibration candidates, and $L_i$ is the number
+of interactions needed either to observe the event or to reach $Q_i$.  We
+acquire all $L_i$ interactions for $i\in\calIone\cup\calIcrc$; only
+$\calIone$ is used to learn the policy shape, whereas $\calIcrc$ is reserved
+for budget calibration.
+
+At turn $t$, let $H_i(t-1)$ denote the history available immediately before
+deciding whether to acquire interaction $t$, and let $\Dtrain$ be the data
+used to fit the survival model, independently of the calibration outcomes.
+The predictable allocation score is the current event hazard
+\begin{equation}
+    S_i(t):=h_i(t)
+    :=\widehat{\mathbb P}\!\left(
+      T_i=t\mid T_i\geq t,H_i(t-1),\Dtrain
+    \right).
+    \label{eq:dapro_main_hazard}
+\end{equation}
+A policy returns a conditional continuation probability $P_i(t)\in[0,1]$.
+We write
+\begin{equation}
+    \rho_i(t):=\prod_{s=1}^{t}P_i(s),\qquad \rho_i(0):=1,
+    \qquad
+    c_i(P):=\sum_{t=1}^{L_i}\rho_i(t),
+    \label{eq:dapro_main_reach_and_cost}
+\end{equation}
+where $\rho_i(t)$ is the probability of reaching interaction $t$, conditional
+on the complete trajectory, and $c_i(P)$ is the corresponding conditional
+expected number of acquired interactions.  Thus $c_i(P)$ is an expected
+cost---not a hard upper bound on the realized stopping time.
+
+\paragraph{Variance-aligned target.}
+For the LPB target miscoverage $\alpha$, let
+$F_i^\star:=\fhat_\alpha(X_i)$ and
+$A_i^\star:=\mathbb I\{T_i<F_i^\star\}$; in the implementation,
+$\fhat_\alpha$ denotes the last candidate grid point strictly below $\alpha$.
+If $\pi_i$ is the probability that the acquisition policy resolves the
+target event for row $i$, then the fixed-candidate Horvitz--Thompson estimator
+has conditional acquisition variance
+\begin{equation}
+    \operatorname{Var}(\widehat\mu_\alpha\mid\mathcal D)
+    =\frac{1}{N^2}\sum_{i=1}^{N}
+      A_i^\star\left(\frac{1}{\pi_i}-1\right),
+    \label{eq:dapro_main_ht_variance}
+\end{equation}
+where $\mathcal D$ denotes the complete trajectories and fixed policy.  The
+final calibrated level is data dependent and unknown before acquisition, so
+we optimize this fixed raw-$\alpha$ target.  It is exact for that candidate
+and a variance-aligned proxy for the final LPB.
+
+Hard endpoint indicators are noisy when $N_1$ is small.  We therefore use the
+causal soft-prefix target masses
+\begin{equation}
+    a_i(t):=
+      \mathbb I\{t\leq L_i\}
+      \mathbb I\{t<F_i^\star\}h_i(t),
+      \qquad i\in\calIone,
+    \label{eq:dapro_main_soft_mass}
+\end{equation}
+which replace the realized endpoint indicator by its model-estimated
+conditional mass at every observed prefix.
+
+After fully observing $\calIone$, define the remaining budget and the
+policy-shape budget by
+\begin{equation}
+    B_{\mathrm{rem}}
+      :=B_{\mathrm{tot}}-\sum_{i\in\calIone}L_i,
+    \qquad
+    \bar B_{\mathrm{shape}}
+      :=\frac{B_{\mathrm{rem}}}{n+m}.
+    \label{eq:dapro_main_shape_budget}
+\end{equation}
+The quantity $\bar B_{\mathrm{shape}}$ is only the fitting target used to
+construct a useful policy family.  It is not the asserted deployment budget.
+The full-observation cost of $\calIcrc$ is not yet known without exposing the
+independent CRC outcomes and is accounted for exactly once by the CRC loss
+below.
+
+Let $M_t^{\mathrm{raw}}$ denote the learned monotone lookup from the score at
+turn $t$ to a conditional continuation probability.  Soft-prefix Generalized
+DAPRO fits this lookup using only $\calIone$ by solving
+\begin{equation}
+\begin{aligned}
+    \min_{M^{\mathrm{raw}}}\quad&
+      \frac{1}{N_1}\sum_{i\in\calIone}
+      \sum_{t=1}^{L_i}a_i(t)
+      \left\{\frac{1}{\rho_i^{\mathrm{raw}}(t)}-1\right\}\\
+    \mathrm{s.t.}\quad&
+      \frac{1}{N_1}\sum_{i\in\calIone}
+      \sum_{t=1}^{L_i}\rho_i^{\mathrm{raw}}(t)
+      \leq\bar B_{\mathrm{shape}},\\
+    &S_i(t)\leq S_j(t)
+      \Longrightarrow
+      M_t^{\mathrm{raw}}(S_i(t))
+      \leq M_t^{\mathrm{raw}}(S_j(t)),
+\end{aligned}
+\label{eq:dapro_main_optimization}
+\end{equation}
+where
+$\rho_i^{\mathrm{raw}}(t):=\prod_{s=1}^{t}
+M_s^{\mathrm{raw}}(S_i(s))$.  The implementation optimizes the monotone
+lookup directly; it does not regress row-wise oracle probabilities onto the
+scores.  Model misspecification can reduce efficiency but does not invalidate
+the final HT correction, because the deployed policy is predictable and its
+actual probabilities are logged.
+
+\paragraph{Nested CRC family.}
+CRC first freezes the target, score cutpoints, raw lookup, and its policy-fit
+budget correction.  Let $\rho_i^{\mathrm{base}}(t)$ denote the resulting
+base cumulative reach.  To obtain a finite support bound, a non-increasing
+envelope $e(1),\ldots,e(\maxl)$ is fitted using only $\calIone$ and satisfies
+\begin{equation}
+    1\geq e(1)\geq\cdots\geq e(\maxl)\geq\epsilon,
+    \qquad
+    \sum_{t=1}^{\maxl}e(t)\leq C_{\max},
+    \qquad
+    C_{\max}:=\min\{\maxl,2\bar B\},
+    \label{eq:dapro_main_pathwise_cap}
+\end{equation}
+where $\epsilon>0$ is a fixed minimum cumulative reach.  Define the capped
+base reach
+\begin{equation}
+    \bar\rho_i(t):=\min\{\rho_i^{\mathrm{base}}(t),e(t)\}.
+    \label{eq:dapro_main_capped_reach}
+\end{equation}
+Because the envelope is shared, frozen, and causal,
+$\sum_{t=1}^{L_i}\bar\rho_i(t)\leq C_{\max}$ for every possible trajectory.
+This bounds conditional expected cost; a realized acquisition can still
+continue beyond $C_{\max}$ and as far as $Q_i$.  The cap is not
+efficiency-neutral: because cumulative reach is non-increasing, for any
+$q\leq Q_i$,
+\begin{equation}
+    \bar\rho_i(q)
+      \leq\frac{1}{q}\sum_{t=1}^{q}\bar\rho_i(t)
+      \leq\frac{C_{\max}}{q}.
+    \label{eq:dapro_main_cap_terminal_effect}
+\end{equation}
+It may therefore reduce inclusion probabilities for targets resolved only at
+late endpoints.  The canonical choice $C_{\max}=2\bar B$ is a design tradeoff,
+not a theorem-optimal constant: increasing it enlarges the policy class but
+also enlarges the finite-sample CRC correction.
+
+For $\lambda\in[0,1]$, CRC contracts the cumulative reach, not the
+conditional probabilities, according to
+\begin{equation}
+    \rho_i^\lambda(t)
+      :=\epsilon+\lambda\{\bar\rho_i(t)-\epsilon\}.
+    \label{eq:dapro_main_lambda_cumulative}
+\end{equation}
+The exact effect on the sequential continuation probabilities is therefore
+\begin{equation}
+    P_i^\lambda(1)
+      =\epsilon+\lambda\{\bar\rho_i(1)-\epsilon\},
+    \qquad
+    P_i^\lambda(t)
+      =\frac{\epsilon+\lambda\{\bar\rho_i(t)-\epsilon\}}
+             {\epsilon+\lambda\{\bar\rho_i(t-1)-\epsilon\}},
+      \quad t\geq2.
+    \label{eq:dapro_main_lambda_conditionals}
+\end{equation}
+Hence the calibrated conditional policy is not an affine mixture of the raw
+conditional probabilities.  Equivalently, one may write the final policy as
+$M_t(H_i(t-1);\lambda):=P_i^\lambda(t)$: the raw lookup maps the current
+score to the base path, while CRC calibrates that path through the single
+scalar $\lambda$.  The history argument is necessary because the denominator
+in~\eqref{eq:dapro_main_lambda_conditionals} contains the preceding cumulative
+reach.  At $\lambda=1$ the policy equals the capped base policy;
+at $\lambda=0$ it reaches every active interaction with cumulative
+probability $\epsilon$---equivalently, it samples the row with probability
+$\epsilon$ and then follows a sampled row through its active horizon.
+
+For $i\in\calIcrc$, define
+\begin{equation}
+    b_i:=L_i,\qquad
+    c_i(\lambda):=\sum_{t=1}^{L_i}\rho_i^\lambda(t),
+    \qquad r:=\frac{n}{m}.
+    \label{eq:dapro_main_crc_costs}
+\end{equation}
+Here $b_i$ is the realized cost of fully observing CRC row $i$, whereas
+$c_i(\lambda)$ is the conditional expected cost that candidate $\lambda$
+would have incurred on that same complete trajectory.  The composite loss
+and its deterministic bound are
+\begin{equation}
+    \ell_i(\lambda):=c_i(\lambda)+r b_i,
+    \qquad
+    L_{\max}:=C_{\max}+r\maxl,
+    \label{eq:dapro_main_crc_loss}
+\end{equation}
+so $0\leq\ell_i(\lambda)\leq L_{\max}$.
+
+The mathematical continuous-family rule selects the most aggressive feasible
+contraction,
+\begin{equation}
+    \widehat\lambda
+    :=\sup\left\{\lambda\in[0,1]:
+      \frac{
+        \sum_{i\in\calIcrc}\ell_i(\lambda)+L_{\max}
+      }{n+1}
+      \leq\frac{B_{\mathrm{rem}}}{m}
+    \right\}.
+    \label{eq:dapro_main_crc_selector}
+\end{equation}
+The implementation evaluates the descending grid
+$\Lambda_K=\{1,1-(K-1)^{-1},\ldots,0\}$, where $K$ is the number of
+candidate scales, and takes its largest feasible
+element, which is a conservative discretization of
+\eqref{eq:dapro_main_crc_selector}; the same CRC proof applies with the
+supremum replaced by the largest feasible grid element.  Since
+\begin{equation}
+    c_i(\lambda)
+      =\epsilon L_i
+       +\lambda\left\{
+          \sum_{t=1}^{L_i}\bar\rho_i(t)-\epsilon L_i
+       \right\},
+    \label{eq:dapro_main_crc_linear_cost}
+\end{equation}
+the continuous value also has an explicit form.  Let
+\begin{equation}
+    \bar c_i:=\sum_{t=1}^{L_i}\bar\rho_i(t),\qquad
+    D_{\mathrm{crc}}:=\sum_{i\in\calIcrc}
+       \{\bar c_i-\epsilon L_i\},
+    \label{eq:dapro_main_crc_slope}
+\end{equation}
+and
+\begin{equation}
+    R_{\mathrm{crc}}
+    :=\frac{n+1}{m}B_{\mathrm{rem}}-L_{\max}
+      -r\sum_{i\in\calIcrc}b_i
+      -\epsilon\sum_{i\in\calIcrc}L_i.
+    \label{eq:dapro_main_crc_residual}
+\end{equation}
+If $D_{\mathrm{crc}}>0$ and $R_{\mathrm{crc}}\geq0$, then
+\begin{equation}
+    \widehat\lambda_{\mathrm{cont}}
+      =\min\left\{1,\frac{R_{\mathrm{crc}}}{D_{\mathrm{crc}}}\right\}.
+    \label{eq:dapro_main_crc_closed_form}
+\end{equation}
+If $D_{\mathrm{crc}}=0$, all candidates have the same control cost and we
+take $\widehat\lambda_{\mathrm{cont}}=1$ when feasible; if
+$R_{\mathrm{crc}}<0$, even $\lambda=0$ is infeasible and the requested
+budget and positivity floor are incompatible.
+
+Conditional on $\calIone$, suppose that the CRC and deployment trajectories
+are exchangeable, the entire nested family is frozen before observing
+$\calIcrc$, $\ell_i(\lambda)$ is non-decreasing and right-continuous in
+$\lambda$, and the selector is feasible.  Standard CRC then yields
+\begin{equation}
+    m\,\mathbb E[c_{\mathrm{new}}(\widehat\lambda)\mid\calIone]
+    +n\,\mathbb E[b_{\mathrm{new}}\mid\calIone]
+    \leq B_{\mathrm{rem}}.
+    \label{eq:dapro_main_budget_guarantee}
+\end{equation}
+Here $c_{\mathrm{new}}$ and $b_{\mathrm{new}}$ are the corresponding costs
+on an independent trajectory from the same conditional distribution as the
+CRC and deployment rows.
+Adding the already incurred policy-fit cost proves marginal expected control
+of the configured total budget.  The term $r b_i$ is therefore not double
+counting: it is what incorporates the unavoidable full-observation cost of
+$\calIcrc$ in the same exchangeable loss.  A proof is given in
+Appendix~\ref{sec:standard_crc_budget_validity}.  The result is an upper-budget
+guarantee; it neither guarantees exact budget utilization nor controls every
+realized split.
+
+\paragraph{Deployment.}
+For each $i\in\calItwo$, at every reached prefix we evaluate $S_i(t)$, apply
+the frozen policy in~\eqref{eq:dapro_main_lambda_conditionals}, and draw the
+corresponding Bernoulli continuation decision.  If $C_i$ denotes the last
+interaction acquired for row $i$, the exact propensity of resolving its
+active endpoint is
+\begin{equation}
+    \pi_i=\prod_{t=1}^{L_i}P_i^{\widehat\lambda}(t).
+    \label{eq:dapro_main_logged_propensity}
+\end{equation}
+Rows in $\calIone\cup\calIcrc$ are fully observed and have $\pi_i=1$.
+The weighted calibration curve is
+\begin{equation}
+    \widehat\mu(\tau)
+    =\frac{1}{N}\sum_{i=1}^{N}
+      \frac{
+        \mathbb I\{T_i<\fhat_\tau(X_i),
+                    \fhat_\tau(X_i)\leq C_i\}
+      }{\pi_i},
+    \label{eq:dapro_main_ht_curve}
+\end{equation}
+for every candidate level $\tau$, and is passed to the same strict-prefix
+selector as the full-data LPB construction.

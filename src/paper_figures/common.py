@@ -9,6 +9,8 @@ import matplotlib
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+from matplotlib.lines import Line2D
+from matplotlib.patches import Patch
 import numpy as np
 import pandas as pd
 from PIL import Image
@@ -25,16 +27,24 @@ def ordered_present(values: Iterable[str], order: Sequence[str]) -> list[str]:
     return [value for value in order if value in present]
 
 
-def save_jpeg(figure, path: Path, quality: str) -> None:
+def save_jpeg(
+    figure,
+    path: Path,
+    quality: str,
+    *,
+    tight: bool = True,
+) -> None:
     """Save a paper-ready JPEG, aggressively compressing low-quality output."""
     path.parent.mkdir(parents=True, exist_ok=True)
+    bbox_inches = "tight" if tight else None
+    pad_inches = 0.16 if tight else 0.0
     if quality == "high":
         figure.savefig(
             path,
             format="jpg",
             dpi=300,
-            bbox_inches="tight",
-            pad_inches=0.16,
+            bbox_inches=bbox_inches,
+            pad_inches=pad_inches,
             pil_kwargs={"quality": 95, "optimize": True},
         )
         return
@@ -43,8 +53,8 @@ def save_jpeg(figure, path: Path, quality: str) -> None:
         path,
         format="jpg",
         dpi=120,
-        bbox_inches="tight",
-        pad_inches=0.16,
+        bbox_inches=bbox_inches,
+        pad_inches=pad_inches,
         pil_kwargs={"quality": 78, "optimize": True, "progressive": True},
     )
     jpeg_quality = 76
@@ -71,21 +81,34 @@ def save_jpeg(figure, path: Path, quality: str) -> None:
             raise RuntimeError(f"Could not compress {path} below 120 KiB.")
 
 
-def _style_axis(axis, *, xlabel: str, ylabel: str) -> None:
-    axis.set_xlabel(xlabel)
+def _style_axis(
+    axis,
+    *,
+    xlabel: str,
+    ylabel: str,
+    font_scale: float = 1.0,
+) -> None:
+    axis.set_xlabel(xlabel, fontsize=10.0 * font_scale, labelpad=5)
     # A number of the paper diagnostics have necessarily descriptive labels.
     # Give them explicit breathing room so Matplotlib's tight bounding box does
     # not place the first glyph on the JPEG boundary (the long variance label
     # used to lose its first words in low-quality exports).
-    ylabel_fontsize = 9 if len(ylabel) >= 42 else 10
+    ylabel_fontsize = (9 if len(ylabel) >= 42 else 10) * font_scale
     axis.set_ylabel(ylabel, fontsize=ylabel_fontsize, labelpad=9)
+    axis.tick_params(axis="both", labelsize=8.8 * font_scale)
     axis.grid(axis="y", linestyle=":", linewidth=0.7, alpha=0.48)
     axis.set_axisbelow(True)
     axis.spines["top"].set_visible(False)
     axis.spines["right"].set_visible(False)
 
 
-def _legend_outside(axis, figure, *, columns: int = 3) -> None:
+def _legend_outside(
+    axis,
+    figure,
+    *,
+    columns: int = 3,
+    font_scale: float = 1.0,
+) -> None:
     handles, labels = axis.get_legend_handles_labels()
     if axis.legend_ is not None:
         axis.legend_.remove()
@@ -98,7 +121,55 @@ def _legend_outside(axis, figure, *, columns: int = 3) -> None:
             bbox_to_anchor=(0.985, 0.5),
             frameon=False,
             ncol=1 if columns <= 3 else 2,
+            fontsize=8.8 * font_scale,
+            title_fontsize=9.2 * font_scale,
         )
+
+
+def plot_shared_legend(
+    *,
+    output_path: Path,
+    quality: str,
+    methods: Sequence[str],
+    reference_label: str | None = None,
+    figsize: tuple[float, float] = (1.25, 2.55),
+    font_scale: float = 1.0,
+) -> bool:
+    """Export one compact, publication-sized legend shared by main panels."""
+    present = [method for method in methods if method in METHOD_COLORS]
+    if not present and reference_label is None:
+        output_path.unlink(missing_ok=True)
+        return False
+    handles = [
+        Patch(facecolor=METHOD_COLORS[method], edgecolor="none", label=method)
+        for method in present
+    ]
+    if reference_label is not None:
+        handles.append(Line2D(
+            [0], [0],
+            color="#D62728",
+            linestyle="--",
+            linewidth=1.35,
+            label=reference_label,
+        ))
+    figure = plt.figure(figsize=figsize)
+    figure.legend(
+        handles=handles,
+        labels=[handle.get_label() for handle in handles],
+        title="Method",
+        loc="center",
+        frameon=False,
+        ncol=1,
+        fontsize=8.8 * font_scale,
+        title_fontsize=9.2 * font_scale,
+        handlelength=1.45,
+        handletextpad=0.55,
+        labelspacing=0.65,
+        borderaxespad=0.0,
+    )
+    save_jpeg(figure, output_path, quality, tight=False)
+    plt.close(figure)
+    return True
 
 
 def plot_grouped_boxplot(
@@ -118,6 +189,8 @@ def plot_grouped_boxplot(
     hide_methods: Sequence[str] = (),
     log_scale: bool = False,
     figsize: tuple[float, float] = (7.4, 3.5),
+    show_legend: bool = True,
+    font_scale: float = 1.0,
 ) -> bool:
     plot_frame = frame.loc[
         ~frame["method"].isin(hide_methods), [x, "method", metric]
@@ -172,9 +245,22 @@ def plot_grouped_boxplot(
                 label=reference_label if not labelled else None,
             )
             labelled = True
-    _style_axis(axis, xlabel=xlabel, ylabel=ylabel)
-    _legend_outside(axis, figure, columns=len(methods))
-    figure.tight_layout(rect=(0, 0, 0.83, 1))
+    _style_axis(
+        axis,
+        xlabel=xlabel,
+        ylabel=ylabel,
+        font_scale=font_scale,
+    )
+    if show_legend:
+        _legend_outside(
+            axis,
+            figure,
+            columns=len(methods),
+            font_scale=font_scale,
+        )
+    elif axis.legend_ is not None:
+        axis.legend_.remove()
+    figure.tight_layout(rect=(0, 0, 0.83 if show_legend else 1, 1))
     save_jpeg(figure, output_path, quality)
     plt.close(figure)
     return True
@@ -194,6 +280,8 @@ def plot_grouped_variance(
     hide_methods: Sequence[str] = (),
     normalize_to_static: bool = False,
     figsize: tuple[float, float] = (7.4, 3.5),
+    show_legend: bool = True,
+    font_scale: float = 1.0,
 ) -> tuple[bool, pd.DataFrame]:
     plot_frame = frame.loc[
         ~frame["method"].isin(hide_methods), [x, "method", metric]
@@ -236,9 +324,22 @@ def plot_grouped_variance(
         errorbar=None,
         ax=axis,
     )
-    _style_axis(axis, xlabel=xlabel, ylabel=ylabel)
-    _legend_outside(axis, figure, columns=len(methods))
-    figure.tight_layout(rect=(0, 0, 0.83, 1))
+    _style_axis(
+        axis,
+        xlabel=xlabel,
+        ylabel=ylabel,
+        font_scale=font_scale,
+    )
+    if show_legend:
+        _legend_outside(
+            axis,
+            figure,
+            columns=len(methods),
+            font_scale=font_scale,
+        )
+    elif axis.legend_ is not None:
+        axis.legend_.remove()
+    figure.tight_layout(rect=(0, 0, 0.83 if show_legend else 1, 1))
     save_jpeg(figure, output_path, quality)
     plt.close(figure)
     return True, variance

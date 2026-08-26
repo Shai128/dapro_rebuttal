@@ -47,7 +47,7 @@ def test_metric_registry_contains_exact_requested_comparison():
         "optimized",
         (
             "dapro_soft_prefix_bins_2_metric_horizon_200_global_0p001_"
-            "projection_margin_1p00_n1_200"
+            "projection_margin_0p00_n1_200"
         ),
         (
             "dapro_soft_prefix_bins_2_metric_horizon_200_global_0p001_budget_"

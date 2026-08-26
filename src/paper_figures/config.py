@@ -47,6 +47,16 @@ TARGET_MODEL_ORDER = (
     "Gemma3",
 )
 
+# Compact labels are used only in the narrow, main-text panels.  The appendix
+# retains the fully qualified display names above.
+MAIN_TARGET_MODEL_LABELS = {
+    "Llama3.1": "Llama",
+    "Phi-4 Mini": "Phi-4",
+    "Qwen2.5": "Qwen",
+    "Gemma3": "Gemma",
+}
+MAIN_TARGET_MODEL_ORDER = tuple(MAIN_TARGET_MODEL_LABELS.values())
+
 METHOD_ORDER = (
     "Uncalibrated",
     "Static",
@@ -56,6 +66,12 @@ METHOD_ORDER = (
 )
 
 MAIN_METHOD_ORDER = (
+    "Uncalibrated",
+    "Static",
+    "DAPRO",
+)
+
+METRIC_MAIN_METHOD_ORDER = (
     "Uncalibrated",
     "Static",
     "DAPRO",
@@ -94,4 +110,3 @@ RECOMMENDED_CONFIGURATIONS = {
         "toxicity": RecommendedConfiguration(20.0, 50),
     },
 }
-

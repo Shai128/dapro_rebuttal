@@ -879,7 +879,7 @@ def main():
     )
     parser.add_argument(
         '--dapro-ablation-kind',
-        choices=['score_noise', 'score'],
+        choices=['score_noise', 'score', 'hard_soft'],
         default='score_noise',
         help='Metric score ablation to instantiate with dapro_ablation suite.',
     )

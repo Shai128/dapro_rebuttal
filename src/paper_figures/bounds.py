@@ -3,18 +3,20 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Sequence
 
 import pandas as pd
 
 from src.paper_figures.common import (
     plot_grouped_boxplot,
     plot_grouped_variance,
+    plot_shared_legend,
 )
 from src.paper_figures.config import (
     DATASET_FILE_STEMS,
     DATASET_ORDER,
     MAIN_METHOD_ORDER,
+    MAIN_TARGET_MODEL_LABELS,
+    MAIN_TARGET_MODEL_ORDER,
     METHOD_ORDER,
     TARGET_MODEL_ORDER,
 )
@@ -180,8 +182,11 @@ def generate_bound_appendix_figures(
 def generate_lpb_main_figures(
     frame: pd.DataFrame, *, output_dir: Path, quality: str
 ) -> pd.DataFrame:
-    """Generate the two requested toxicity LPB main-text panels."""
+    """Generate equal-sized Toxicity panels and one shared legend."""
     toxicity = frame[frame["dataset_key"].eq("toxicity")].copy()
+    toxicity["target_model"] = toxicity["target_model"].replace(
+        MAIN_TARGET_MODEL_LABELS
+    )
     rows = []
     specifications = (
         (
@@ -207,7 +212,7 @@ def generate_lpb_main_figures(
             output_path=path,
             ylabel=ylabel,
             quality=quality,
-            x_order=TARGET_MODEL_ORDER,
+            x_order=MAIN_TARGET_MODEL_ORDER,
             method_order=MAIN_METHOD_ORDER,
             reference=reference,
             reference_label=(
@@ -216,7 +221,9 @@ def generate_lpb_main_figures(
                 else "Reference"
             ),
             hide_methods=hidden,
-            figsize=(7.0, 3.25),
+            figsize=(3.45, 2.55),
+            show_legend=False,
+            font_scale=1.12,
         )
         _record(
             rows,
@@ -226,6 +233,23 @@ def generate_lpb_main_figures(
             path=path,
             generated=generated,
         )
+    legend_path = output_dir / "toxicity_legend.jpg"
+    generated = plot_shared_legend(
+        output_path=legend_path,
+        quality=quality,
+        methods=MAIN_METHOD_ORDER,
+        reference_label="Target budget",
+        figsize=(1.25, 2.55),
+        font_scale=1.12,
+    )
+    _record(
+        rows,
+        task="lpb-main",
+        dataset_key="toxicity",
+        metric="shared_legend",
+        path=legend_path,
+        generated=generated,
+    )
     return pd.DataFrame(rows)
 
 
@@ -237,7 +261,7 @@ def generate_autoif_main_figures(
     quality: str,
     target_model: str = "Qwen2.5",
 ) -> pd.DataFrame:
-    """Generate the combined LPB/UPB AutoIF main-text comparison."""
+    """Generate equal-sized combined LPB/UPB panels and one shared legend."""
     combined = pd.concat(
         [
             lpb_frame[
@@ -251,6 +275,13 @@ def generate_autoif_main_figures(
         ],
         ignore_index=True,
     )
+    budget_references: dict[str, float] = {}
+    for bound_type, group in combined.groupby("bound_type", observed=True):
+        values = pd.to_numeric(
+            group["target_budget"], errors="coerce"
+        ).dropna().unique()
+        if len(values) == 1:
+            budget_references[str(bound_type)] = float(values[0])
     rows = []
     specifications = (
         (
@@ -281,8 +312,20 @@ def generate_autoif_main_figures(
             x_order=("LPB", "UPB"),
             method_order=MAIN_METHOD_ORDER,
             reference=reference,
+            reference_by_x=(
+                budget_references
+                if metric == "budget_used_per_sample"
+                else None
+            ),
+            reference_label=(
+                "Target budget"
+                if metric == "budget_used_per_sample"
+                else "Reference"
+            ),
             hide_methods=hidden,
-            figsize=(6.2, 3.1),
+            figsize=(3.45, 2.55),
+            show_legend=False,
+            font_scale=1.12,
         )
         _record(
             rows,
@@ -292,4 +335,21 @@ def generate_autoif_main_figures(
             path=path,
             generated=generated,
         )
+    legend_path = output_dir / "autoif_legend.jpg"
+    generated = plot_shared_legend(
+        output_path=legend_path,
+        quality=quality,
+        methods=MAIN_METHOD_ORDER,
+        reference_label="Target budget",
+        figsize=(1.25, 2.55),
+        font_scale=1.12,
+    )
+    _record(
+        rows,
+        task="bounds-main",
+        dataset_key="autoif",
+        metric="shared_legend",
+        path=legend_path,
+        generated=generated,
+    )
     return pd.DataFrame(rows)
