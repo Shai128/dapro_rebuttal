@@ -81,8 +81,12 @@ from src.predictive_bounds.budget_allocators.metric_optimal_allocator import (
     MetricOptimalPooledTimeAllocator,
 )
 from src.predictive_bounds.budget_allocators.dapro_ablation import (
+    AblationHardPrefixCRCDAPRO,
+    AblationHardPrefixDAPRO,
     AblationHardTargetCRCDAPRO,
     AblationHardTargetDAPRO,
+    AblationSoftTerminalCRCDAPRO,
+    AblationSoftTerminalDAPRO,
     AblationSoftTargetCRCDAPRO,
     AblationSoftTargetDAPRO,
 )
@@ -117,16 +121,16 @@ def get_dapro_ablation_calibrations(
 ) -> List[SurvivalLPBCalibration]:
     """Return Static plus paired raw/CRC DAPRO LPB ablations.
 
-    The caller controls which configurations coexist in an experiment:
-    ``n1`` instantiates every requested Phase-I size, ``score_noise`` every
-    requested lambda at the single supplied N1, and ``budget`` one paired
-    DAPRO configuration at the single supplied N1.  Static is evaluated once
-    and is replicated across x-axis values only by the summarizer.
+    The caller controls which configurations coexist in an experiment.
+    ``n1`` instantiates every requested Phase-I size; all other factors use
+    the single supplied N1. Static is evaluated once and is replicated across
+    x-axis values only by the summarizer. Every dynamic cell contains the
+    paired raw and independent-CRC variants.
     """
     kind = str(ablation_kind).lower()
     supported = {
         "n1", "score_noise", "budget", "hard_soft", "representation",
-        "score", "attacker_shift",
+        "score", "cmax", "attacker_shift",
     }
     if kind not in supported:
         raise ValueError(f"DAPRO ablations support {sorted(supported)}.")
@@ -177,8 +181,22 @@ def get_dapro_ablation_calibrations(
         ]
     elif kind == "hard_soft":
         configurations = [
-            dict(n1=n1_values[0], value=0.0, label="Hard", hard=True),
-            dict(n1=n1_values[0], value=1.0, label="Soft", hard=False),
+            dict(
+                n1=n1_values[0], value=0.0, label="Hard prefix",
+                variant="hard_prefix",
+            ),
+            dict(
+                n1=n1_values[0], value=1.0, label="Soft prefix",
+                variant="soft_prefix",
+            ),
+            dict(
+                n1=n1_values[0], value=2.0, label="Hard terminal",
+                variant="hard_terminal",
+            ),
+            dict(
+                n1=n1_values[0], value=3.0, label="Soft terminal",
+                variant="soft_terminal",
+            ),
         ]
     elif kind == "representation":
         configurations = [
@@ -202,6 +220,25 @@ def get_dapro_ablation_calibrations(
                 ("random", "Random"),
                 ("oracle_remaining_time", "Oracle remaining time"),
             ])
+        ]
+    elif kind == "cmax":
+        maximum_multiplier = float(m_upper_bound) / float(budget_per_sample)
+        multipliers = []
+        for value in (0.1, 0.5, 1.0, 2.0, 5.0, 10.0, maximum_multiplier):
+            clipped = min(float(value), maximum_multiplier)
+            if not any(np.isclose(clipped, old) for old in multipliers):
+                multipliers.append(clipped)
+        configurations = [
+            dict(
+                n1=n1_values[0], value=multiplier,
+                label=(
+                    f"Cmax={m_upper_bound:g}"
+                    if np.isclose(multiplier, maximum_multiplier)
+                    else f"Cmax={multiplier:g}B"
+                ),
+                cap_multiplier=multiplier,
+            )
+            for multiplier in multipliers
         ]
     else:  # attacker_shift
         configurations = [
@@ -235,12 +272,22 @@ def get_dapro_ablation_calibrations(
             "score_noise_lambda": float(configuration.get("noise", 0.0)),
             "score_noise_seed": score_noise_seed,
         }
-        hard = bool(configuration.get("hard", False))
-        raw_class = AblationHardTargetDAPRO if hard else AblationSoftTargetDAPRO
-        crc_class = (
-            AblationHardTargetCRCDAPRO
-            if hard else AblationSoftTargetCRCDAPRO
-        )
+        variant = str(configuration.get("variant", "soft_prefix"))
+        variant_classes = {
+            "hard_prefix": (
+                AblationHardPrefixDAPRO, AblationHardPrefixCRCDAPRO
+            ),
+            "soft_prefix": (
+                AblationSoftTargetDAPRO, AblationSoftTargetCRCDAPRO
+            ),
+            "hard_terminal": (
+                AblationHardTargetDAPRO, AblationHardTargetCRCDAPRO
+            ),
+            "soft_terminal": (
+                AblationSoftTerminalDAPRO, AblationSoftTerminalCRCDAPRO
+            ),
+        }
+        raw_class, crc_class = variant_classes[variant]
         raw = raw_class(
             **allocator_common,
             projection_budget_margin=(
@@ -252,6 +299,12 @@ def get_dapro_ablation_calibrations(
         crc = crc_class(
             **crc_kwargs,
             budget_control_size=n1 // 2,
+            row_cost_cap_multiplier=float(
+                configuration.get(
+                    "cap_multiplier",
+                    CANONICAL_DAPRO_CRC_ROW_COST_CAP_MULTIPLIER,
+                )
+            ),
         )
         calibrations.extend([
             SurvivalCalibrationWithKnownWeights(raw, taus_range, tau_prior),
@@ -273,18 +326,22 @@ def get_metric_dapro_ablation_allocators(
         score_noise_lambdas=(0.0, 0.1, 0.25, 0.5, 0.75, 1.0),
         score_noise_seed: int = 314159,
 ) -> List[BudgetAllocator]:
-    """Return Static plus paired raw/CRC metric score ablations.
+    """Return Static plus paired raw/CRC metric DAPRO ablations.
 
     These allocators optimize the event-rate target
-    ``A_i = 1{T_i <= m_upper_bound}``.  Both named-score and score-noise
-    studies retain the paper-wide two-bin representation, so the score is the
-    only DAPRO component changed along either x-axis.
+    ``A_i = 1{T_i <= m_upper_bound}``. Each study retains the canonical
+    soft-prefix, current-hazard, two-bin policy except for the component named
+    by that study. The hard/soft study is the explicit four-cell
+    coefficient-by-support comparison, and the representation study alone
+    varies the number/form of score-map bins.
     """
     kind = str(ablation_kind).lower()
-    if kind not in {"score_noise", "score", "hard_soft"}:
+    if kind not in {
+            "n1", "score_noise", "budget", "hard_soft",
+            "representation", "score", "cmax"
+    }:
         raise ValueError(
-            "Metric DAPRO ablations support 'score_noise', 'score', and "
-            "'hard_soft'."
+            "Unsupported metric DAPRO ablation kind."
         )
     dapro_n1 = int(dapro_n1)
     crc_control_size = int(crc_control_size)
@@ -301,7 +358,15 @@ def get_metric_dapro_ablation_allocators(
             budget_per_sample, taus_range, tau_prior, m_upper_bound
         )
     ]
-    if kind == "score_noise":
+    if kind == "n1":
+        configurations = [
+            dict(
+                value=float(dapro_n1), label=f"N1={dapro_n1}",
+                score_kind="hazard", noise=0.0,
+                bins=CANONICAL_DAPRO_SCORE_BIN_COUNT,
+            )
+        ]
+    elif kind == "score_noise":
         configurations = [
             dict(
                 value=lam,
@@ -324,16 +389,70 @@ def get_metric_dapro_ablation_allocators(
                 ("oracle_remaining_time", "Oracle remaining time"),
             ])
         ]
-    else:
+    elif kind == "budget":
         configurations = [
             dict(
-                value=0.0, label="Hard terminal", score_kind="hazard",
-                noise=0.0, bins=CANONICAL_DAPRO_SCORE_BIN_COUNT, hard=True,
+                value=float(budget_per_sample),
+                label=f"B={budget_per_sample:g}", score_kind="hazard",
+                noise=0.0, bins=CANONICAL_DAPRO_SCORE_BIN_COUNT,
+            )
+        ]
+    elif kind == "hard_soft":
+        configurations = [
+            dict(
+                value=0.0, label="Hard prefix", score_kind="hazard",
+                noise=0.0, bins=CANONICAL_DAPRO_SCORE_BIN_COUNT,
+                variant="hard_prefix",
             ),
             dict(
                 value=1.0, label="Soft prefix", score_kind="hazard",
-                noise=0.0, bins=CANONICAL_DAPRO_SCORE_BIN_COUNT, hard=False,
+                noise=0.0, bins=CANONICAL_DAPRO_SCORE_BIN_COUNT,
+                variant="soft_prefix",
             ),
+            dict(
+                value=2.0, label="Hard terminal", score_kind="hazard",
+                noise=0.0, bins=CANONICAL_DAPRO_SCORE_BIN_COUNT,
+                variant="hard_terminal",
+            ),
+            dict(
+                value=3.0, label="Soft terminal", score_kind="hazard",
+                noise=0.0, bins=CANONICAL_DAPRO_SCORE_BIN_COUNT,
+                variant="soft_terminal",
+            ),
+        ]
+    elif kind == "representation":
+        configurations = [
+            dict(
+                value=float(k), label=f"K={k}", score_kind="hazard",
+                noise=0.0, bins=k,
+            )
+            for k in (1, 2, 4, 8)
+        ] + [
+            dict(
+                value=9.0, label="Continuous", score_kind="hazard",
+                noise=0.0, bins=4, smooth=True,
+            )
+        ]
+    else:  # cmax
+        maximum_multiplier = float(m_upper_bound) / float(budget_per_sample)
+        multipliers = []
+        for value in (0.1, 0.5, 1.0, 2.0, 5.0, 10.0, maximum_multiplier):
+            clipped = min(float(value), maximum_multiplier)
+            if not any(np.isclose(clipped, old) for old in multipliers):
+                multipliers.append(clipped)
+        configurations = [
+            dict(
+                value=multiplier,
+                label=(
+                    f"Cmax={m_upper_bound:g}"
+                    if np.isclose(multiplier, maximum_multiplier)
+                    else f"Cmax={multiplier:g}B"
+                ),
+                score_kind="hazard", noise=0.0,
+                bins=CANONICAL_DAPRO_SCORE_BIN_COUNT,
+                cap_multiplier=multiplier,
+            )
+            for multiplier in multipliers
         ]
 
     common = dict(
@@ -356,13 +475,24 @@ def get_metric_dapro_ablation_allocators(
             score_noise_lambda=float(configuration["noise"]),
             score_noise_seed=score_noise_seed,
             score_bin_count=int(configuration["bins"]),
+            smooth_score_rank_map=bool(configuration.get("smooth", False)),
         )
-        hard = bool(configuration.get("hard", False))
-        raw_class = AblationHardTargetDAPRO if hard else AblationSoftTargetDAPRO
-        crc_class = (
-            AblationHardTargetCRCDAPRO
-            if hard else AblationSoftTargetCRCDAPRO
-        )
+        variant = str(configuration.get("variant", "soft_prefix"))
+        variant_classes = {
+            "hard_prefix": (
+                AblationHardPrefixDAPRO, AblationHardPrefixCRCDAPRO
+            ),
+            "soft_prefix": (
+                AblationSoftTargetDAPRO, AblationSoftTargetCRCDAPRO
+            ),
+            "hard_terminal": (
+                AblationHardTargetDAPRO, AblationHardTargetCRCDAPRO
+            ),
+            "soft_terminal": (
+                AblationSoftTerminalDAPRO, AblationSoftTerminalCRCDAPRO
+            ),
+        }
+        raw_class, crc_class = variant_classes[variant]
         allocators.extend([
             raw_class(
                 **common,
@@ -375,6 +505,12 @@ def get_metric_dapro_ablation_allocators(
                 **common,
                 **ablation,
                 budget_control_size=crc_control_size,
+                row_cost_cap_multiplier=float(
+                    configuration.get(
+                        "cap_multiplier",
+                        CANONICAL_DAPRO_CRC_ROW_COST_CAP_MULTIPLIER,
+                    )
+                ),
             ),
         ])
     return allocators

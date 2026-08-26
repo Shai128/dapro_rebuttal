@@ -224,7 +224,10 @@ def main():
     )
     parser.add_argument(
         '--dapro-ablation-kind',
-        choices=['score_noise', 'score'],
+        choices=[
+            'n1', 'score_noise', 'budget', 'hard_soft',
+            'representation', 'score', 'cmax',
+        ],
         default='score_noise',
     )
     parser.add_argument(

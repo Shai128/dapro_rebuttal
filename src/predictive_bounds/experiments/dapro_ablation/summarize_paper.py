@@ -60,6 +60,10 @@ FACTOR_SPECS = {
         "xlabel": "Score definition",
         "title": "Score-function ablation",
     },
+    "cmax": {
+        "xlabel": r"CRC row-cost cap $C_{\max}$",
+        "title": r"CRC row-cost-cap ablation",
+    },
     "attacker_shift": {
         "xlabel": "Calibration attacker to test attacker",
         "title": "Attacker-shift ablation",
@@ -91,6 +95,9 @@ SOURCE_COLUMNS = {
     "global_regularization",
     "ablation_continuous_score_map",
     "ablation_coefficient_kind",
+    "ablation_support_kind",
+    "ablation_row_cost_cap_multiplier",
+    "ablation_row_cost_cap_applied",
     "phase1_oracle_optimized_objective",
     "phase1_projected_mean_objective_variance_proxy",
     "soft_mass_phase1_raw_policy_fit_mean_variance_proxy",
@@ -131,12 +138,19 @@ def _discover(input_dir: Path, suffix: str) -> list[Path]:
     if input_dir.name in {
             "merged_calibration_dfs", "merged_metric_calibration_dfs"}:
         candidates.extend(input_dir.parent.glob("*/all_df.csv"))
+    # Metric N1 jobs use one directory per N1 to avoid concurrent writers
+    # racing on the same merged CSV. Attacker shifts similarly use one suffix
+    # per direction. These are the only studies whose requested suffix is an
+    # intentional prefix of several result-directory suffixes.
+    allow_suffix_extension = (
+        suffix.endswith("_n1") or suffix.endswith("_attacker_shift")
+    )
     paths = [
         path for path in candidates
         if (
             path.parent.name.endswith(f"_{suffix}")
             or (
-                suffix.endswith("_attacker_shift")
+                allow_suffix_extension
                 and f"_{suffix}_" in path.parent.name
             )
         )
@@ -378,7 +392,7 @@ def load_ablation_data(
             data["ablation_n1"], errors="coerce"
         ).round().astype("Int64").astype(str)
         data["factor_label"] = budget_label + "\n" + r"($N_1$=" + n1_label + ")"
-    elif kind in {"hard_soft", "representation", "score"}:
+    elif kind in {"hard_soft", "representation", "score", "cmax"}:
         labels = (
             data.loc[~data["method"].eq("Static"), ["factor_value", "ablation_label"]]
             .dropna().drop_duplicates("factor_value")
@@ -418,9 +432,9 @@ def load_metric_ablation_data(
         experiment_prefix: str,
         kind: str,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Load metric score-ablation rows and pair Static at every x value."""
-    if kind not in {"score_noise", "score"}:
-        raise ValueError("Metric figures support score_noise and score only.")
+    """Load metric-ablation rows and pair Static at every factor value."""
+    if kind not in set(FACTOR_SPECS) - {"attacker_shift"}:
+        raise ValueError(f"Metric figures do not support {kind!r}.")
     suffix = f"{experiment_prefix}_{kind}"
     frames: list[pd.DataFrame] = []
     inventory: list[dict] = []
@@ -437,7 +451,7 @@ def load_metric_ablation_data(
         bins = pd.to_numeric(
             dynamic_rows["ablation_score_bin_count"], errors="coerce"
         )
-        if bins.notna().any():
+        if kind != "representation" and bins.notna().any():
             dynamic_rows = dynamic_rows[np.isclose(
                 bins, 2.0, atol=5e-7
             )].copy()
@@ -515,6 +529,17 @@ def load_metric_ablation_data(
     data["observed_events"] = pd.to_numeric(
         data["num_events_observed"], errors="coerce"
     )
+    data["phase1_objective"] = _first_available(
+        data,
+        "soft_mass_phase1_raw_policy_fit_mean_variance_proxy",
+        "phase1_projected_mean_objective_variance_proxy",
+        "phase1_oracle_optimized_objective",
+    )
+    data["phase2_target_weight_objective"] = _first_available(
+        data,
+        "phase2_mean_objective_variance_proxy",
+        "soft_mass_phase2_frozen_policy_mean_variance_proxy",
+    )
     data["event_rate_conditional_variance_pp2"] = 10000 * _first_available(
         data,
         "conditional_variance_unsafe_event_rate_estimator",
@@ -530,7 +555,21 @@ def load_metric_ablation_data(
     data["event_rate_truth_pct"] = _first_available(
         data, "full_benchmark_cjr", "oracle_cjr"
     )
-    if kind == "score":
+    if kind == "n1":
+        data["factor_label"] = (
+            data["factor_value"].round().astype("Int64").astype(str)
+        )
+    elif kind == "budget":
+        budget_label = (
+            data["factor_value"].round().astype("Int64").astype(str)
+        )
+        n1_label = pd.to_numeric(
+            data["ablation_n1"], errors="coerce"
+        ).round().astype("Int64").astype(str)
+        data["factor_label"] = (
+            budget_label + "\n" + r"($N_1$=" + n1_label + ")"
+        )
+    elif kind in {"hard_soft", "representation", "score", "cmax"}:
         labels = (
             data.loc[
                 ~data["method"].eq("Static"),
@@ -540,9 +579,10 @@ def load_metric_ablation_data(
             .set_index("factor_value")["ablation_label"].to_dict()
         )
         data["factor_label"] = data["factor_value"].map(labels)
-        data["factor_label"] = data["factor_label"].replace(
-            SCORE_DISPLAY_LABELS
-        )
+        if kind == "score":
+            data["factor_label"] = data["factor_label"].replace(
+                SCORE_DISPLAY_LABELS
+            )
     else:
         data["factor_label"] = data["factor_value"].map(
             lambda value: f"{value:g}"
@@ -590,6 +630,7 @@ def _draw_line(
         ylabel: str,
         xlabel: str,
         values: list[float],
+        categorical_spacing: bool = False,
 ) -> pd.DataFrame:
     statistics = summarize_line_statistics(data, metric=metric)
     line_styles = {
@@ -603,7 +644,11 @@ def _draw_line(
         if method_stats.empty:
             continue
         method_stats = method_stats.set_index("factor_value").reindex(values)
-        x_values = np.asarray(values, dtype=float)
+        x_values = (
+            np.arange(len(values), dtype=float)
+            if categorical_spacing
+            else np.asarray(values, dtype=float)
+        )
         means = method_stats["mean"].to_numpy(dtype=float)
         stds = method_stats["std"].fillna(0.0).to_numpy(dtype=float)
         color = METHOD_COLORS[method]
@@ -632,7 +677,12 @@ def _draw_line(
         .dropna().drop_duplicates("factor_value")
         .set_index("factor_value")["factor_label"].to_dict()
     )
-    axis.set_xticks(values)
+    tick_positions = (
+        np.arange(len(values), dtype=float)
+        if categorical_spacing
+        else values
+    )
+    axis.set_xticks(tick_positions)
     tick_labels = (
         [f"{value:g}" for value in values]
         if xlabel.startswith("Target budget")
@@ -691,6 +741,7 @@ def generate_ablation_figure(
             ylabel=ylabel,
             xlabel=str(spec["xlabel"]),
             values=values,
+            categorical_spacing=kind == "cmax",
         )
         statistics["metric"] = metric
         all_statistics.append(statistics)
@@ -873,6 +924,13 @@ def generate_metric_ablation_figure(
         quality: str,
 ) -> pd.DataFrame:
     """Plot metric score quality, including variance over random splits."""
+    if kind == "hard_soft":
+        return generate_metric_categorical_box_figure(
+            data,
+            kind=kind,
+            output_path=output_path,
+            quality=quality,
+        )
     spec = FACTOR_SPECS[kind]
     values = sorted(data["factor_value"].dropna().unique())
     figure, axes = plt.subplots(3, 2, figsize=(11.2, 10.0))
@@ -906,6 +964,7 @@ def generate_metric_ablation_figure(
             ylabel=ylabel,
             xlabel=str(spec["xlabel"]),
             values=values,
+            categorical_spacing=kind == "cmax",
         )
         statistics["metric"] = metric
         all_statistics.append(statistics)
@@ -920,9 +979,24 @@ def generate_metric_ablation_figure(
                     linestyle="--", linewidth=1.2,
                 )
         elif metric == "budget_used_per_sample":
-            axis.axhline(
-                20.0, color="#D62728", linestyle="--", linewidth=1.2
-            )
+            if kind == "budget":
+                axis.plot(
+                    values, values, color="#D62728", linestyle="--",
+                    linewidth=1.2, zorder=2,
+                )
+            else:
+                configured = pd.to_numeric(
+                    data["configured_budget_per_sample"], errors="coerce"
+                ).dropna().unique()
+                if len(configured) > 1:
+                    raise ValueError(
+                        f"Metric {kind} figure mixes budgets: {configured}."
+                    )
+                axis.axhline(
+                    float(configured[0]) if len(configured) else 20.0,
+                    color="#D62728", linestyle="--",
+                    linewidth=1.2,
+                )
     axes.flat[0].legend(
         title="Method", loc="best", frameon=True, framealpha=0.88,
         fontsize=8.5, title_fontsize=9,
@@ -931,7 +1005,11 @@ def generate_metric_ablation_figure(
         legend = axis.get_legend()
         if legend is not None:
             legend.remove()
-    representation_note = "all score maps use $K=2$"
+    representation_note = (
+        "representation varied"
+        if kind == "representation"
+        else "all score maps use $K=2$"
+    )
     figure.suptitle(
         "Metric " + str(spec["title"]).lower()
         + f" ({representation_note}; mean $\\pm$ 1 SD across splits)",
@@ -939,6 +1017,113 @@ def generate_metric_ablation_figure(
         fontsize=13,
     )
     figure.tight_layout(rect=(0.0, 0.015, 1.0, 0.975), h_pad=2.0, w_pad=1.8)
+    save_jpeg(figure, output_path, quality)
+    plt.close(figure)
+    return pd.concat(all_statistics, ignore_index=True)
+
+
+def generate_metric_categorical_box_figure(
+        data: pd.DataFrame,
+        *,
+        kind: str,
+        output_path: Path,
+        quality: str,
+) -> pd.DataFrame:
+    """Paper-style metric boxplots for the four coefficient/support cells."""
+    if kind != "hard_soft":
+        raise ValueError("Only hard_soft is a categorical metric ablation.")
+    spec = FACTOR_SPECS[kind]
+    values = sorted(data["factor_value"].dropna().unique())
+    labels = (
+        data[["factor_value", "factor_label"]]
+        .dropna().drop_duplicates("factor_value")
+        .set_index("factor_value")["factor_label"].to_dict()
+    )
+    order = [labels.get(value, f"{value:g}") for value in values]
+    plot_data = data.copy()
+    plot_data["factor_label"] = plot_data["factor_value"].map(labels)
+    figure, axes = plt.subplots(3, 2, figsize=(11.4, 10.2))
+    panels = (
+        ("event_rate_pct", "Estimated Event Rate", "Event rate (%)"),
+        (
+            "event_rate_abs_error_pp", "Event-Rate Error",
+            "Absolute event-rate error (pp)",
+        ),
+        (
+            "event_rate_across_split_variance_pp2",
+            "Variance of Estimated Event Rate",
+            r"Across-split variance (pp$^2$)",
+        ),
+        (
+            "budget_used_per_sample", "Budget Used per Sample",
+            "Budget Used per Sample",
+        ),
+        ("observed_events", "Observed Events", "Number of observed events"),
+        (
+            "mean_target_a_weight", "Mean Metric Target-A Weight",
+            r"Mean $\mathbf{1}\{T_i\leq M\}/\pi_i$",
+        ),
+    )
+    all_statistics = []
+    for axis, (metric, panel_title, ylabel) in zip(axes.flat, panels):
+        panel = plot_data.dropna(
+            subset=["factor_label", "method", metric]
+        )
+        sns.boxplot(
+            data=panel,
+            x="factor_label",
+            y=metric,
+            hue="method",
+            order=order,
+            hue_order=list(METHOD_ORDER),
+            palette={method: METHOD_COLORS[method] for method in METHOD_ORDER},
+            linewidth=0.9,
+            fliersize=2.2,
+            ax=axis,
+        )
+        _style(axis, xlabel=str(spec["xlabel"]), ylabel=ylabel)
+        axis.set_title(panel_title, fontsize=11)
+        axis.tick_params(axis="x", labelrotation=12)
+        statistics = summarize_line_statistics(data, metric=metric)
+        statistics["metric"] = metric
+        all_statistics.append(statistics)
+        if metric == "event_rate_pct":
+            truth = pd.to_numeric(
+                data["event_rate_truth_pct"], errors="coerce"
+            ).dropna()
+            if not truth.empty:
+                axis.axhline(
+                    float(truth.iloc[0]), color="#D62728",
+                    linestyle="--", linewidth=1.2,
+                )
+        elif metric == "budget_used_per_sample":
+            configured = pd.to_numeric(
+                data["configured_budget_per_sample"], errors="coerce"
+            ).dropna().unique()
+            if len(configured) == 1:
+                axis.axhline(
+                    float(configured[0]), color="#D62728",
+                    linestyle="--", linewidth=1.2,
+                )
+    handles, legend_labels = axes.flat[0].get_legend_handles_labels()
+    if handles:
+        axes.flat[0].legend(
+            handles, legend_labels, title="Method", loc="best",
+            frameon=True, framealpha=0.88, fontsize=8.5, title_fontsize=9,
+        )
+    for axis in axes.flat[1:]:
+        legend = axis.get_legend()
+        if legend is not None:
+            legend.remove()
+    figure.suptitle(
+        "Metric " + str(spec["title"]).lower()
+        + " (50 random calibration/test splits)",
+        y=0.995,
+        fontsize=13,
+    )
+    figure.tight_layout(
+        rect=(0.0, 0.015, 1.0, 0.975), h_pad=2.0, w_pad=1.8
+    )
     save_jpeg(figure, output_path, quality)
     plt.close(figure)
     return pd.concat(all_statistics, ignore_index=True)
@@ -1013,6 +1198,77 @@ def generate_representation_diagnostics(
     return pd.concat(output, ignore_index=True, sort=False)
 
 
+def generate_metric_representation_diagnostics(
+        data: pd.DataFrame,
+        *,
+        output_path: Path,
+        quality: str,
+) -> pd.DataFrame:
+    """Representation diagnostics using the metric target and estimator."""
+    dynamic = data[~data["method"].eq("Static")].copy()
+    values = sorted(dynamic["factor_value"].dropna().unique())
+    figure, axes = plt.subplots(1, 3, figsize=(13.0, 3.7))
+    output = []
+    for axis, metric, title, ylabel in (
+        (
+            axes[0], "phase1_objective", "Phase-I Objective",
+            "Mean fitted variance proxy",
+        ),
+        (
+            axes[1], "phase2_target_weight_objective",
+            "Phase-II Target-Weight Objective",
+            r"Mean $A_i(1/\pi_i-1)$",
+        ),
+    ):
+        statistics = _draw_line(
+            axis, dynamic, metric=metric, ylabel=ylabel,
+            xlabel="Score-map representation", values=values,
+        )
+        statistics["metric"] = metric
+        output.append(statistics)
+        axis.set_title(title)
+
+    variance = (
+        dynamic.groupby(["factor_value", "method"], observed=True)[
+            "event_rate_pct"
+        ].agg(variance="var", count="count").reset_index()
+    )
+    variance["mean"] = variance["variance"]
+    variance["std"] = np.nan
+    variance["metric"] = "event_rate_across_split_variance_pp2"
+    labels = (
+        dynamic[["factor_value", "factor_label"]]
+        .drop_duplicates("factor_value")
+        .set_index("factor_value")["factor_label"].to_dict()
+    )
+    for method, style, marker in (
+        ("DAPRO", "-", "o"), ("DAPRO w/o CRC", "-.", "s")
+    ):
+        rows = variance[variance["method"].eq(method)].set_index(
+            "factor_value"
+        ).reindex(values)
+        axes[2].plot(
+            values, rows["variance"], label=method,
+            color=METHOD_COLORS[method], linestyle=style, marker=marker,
+        )
+    axes[2].set_xticks(values)
+    axes[2].set_xticklabels(
+        [labels.get(value, f"{value:g}") for value in values],
+        rotation=18, ha="right",
+    )
+    _style(
+        axes[2], xlabel="Score-map representation",
+        ylabel=r"Variance of event-rate estimate (pp$^2$)",
+    )
+    axes[2].set_title("Event-Rate Variance")
+    axes[1].legend(title="Method", loc="best", fontsize=8, framealpha=.9)
+    figure.tight_layout(w_pad=1.5)
+    save_jpeg(figure, output_path, quality)
+    plt.close(figure)
+    output.append(variance)
+    return pd.concat(output, ignore_index=True, sort=False)
+
+
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -1048,7 +1304,7 @@ def _parse_args() -> argparse.Namespace:
         nargs="+",
         choices=tuple(FACTOR_SPECS),
         default=list(FACTOR_SPECS),
-        help="Ablation panels to generate (default: all three).",
+        help="Ablation panels to generate (default: all).",
     )
     parser.add_argument("--quality", choices=("low", "high"), default="low")
     parser.add_argument(
@@ -1096,7 +1352,7 @@ def main() -> None:
                 print(f"Generated {diagnostic_path}")
     if "metric" in args.tasks:
         metric_kinds = [
-            kind for kind in args.kinds if kind in {"score_noise", "score"}
+            kind for kind in args.kinds if kind != "attacker_shift"
         ]
         for kind in metric_kinds:
             data, _ = load_metric_ablation_data(
@@ -1118,6 +1374,18 @@ def main() -> None:
             )
             generated_count += int(path.exists())
             print(f"Generated {path}")
+            if kind == "representation":
+                diagnostic_path = (
+                    args.output_dir
+                    / "dapro_metric_representation_diagnostics.jpg"
+                )
+                generate_metric_representation_diagnostics(
+                    data,
+                    output_path=diagnostic_path,
+                    quality=args.quality,
+                )
+                generated_count += int(diagnostic_path.exists())
+                print(f"Generated {diagnostic_path}")
     if generated_count == 0:
         raise ValueError("No requested ablation figures were generated.")
     print(f"Generated {generated_count} ablation figures; no CSV artifacts written.")

@@ -264,7 +264,7 @@ def main():
         '--dapro-ablation-kind',
         choices=[
             'n1', 'score_noise', 'budget', 'hard_soft',
-            'representation', 'score', 'attacker_shift',
+            'representation', 'score', 'cmax', 'attacker_shift',
         ],
         default='n1',
     )

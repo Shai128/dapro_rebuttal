@@ -3,13 +3,16 @@ import inspect
 
 import numpy as np
 import pandas as pd
+import pytest
 import torch
 
 from src.predictive_bounds.experiments.dapro_ablation import (
     summarize_paper as ablation_summarizer,
 )
 from src.predictive_bounds.budget_allocators.dapro_ablation import (
+    AblationHardPrefixDAPRO,
     AblationHardTargetDAPRO,
+    AblationSoftTerminalDAPRO,
     AblationSoftTargetDAPRO,
 )
 from src.predictive_bounds.experiments.dapro_ablation.summarize_paper import (
@@ -188,6 +191,27 @@ def test_server_launcher_exposes_slurm_cpu_and_parallel_controls():
     assert "attacker_shift_toxicity_reverse" in script
     assert "metric_score_noise" in script
     assert "metric_score" in script
+    assert "metric_hard_soft" in script
+    assert "metric_representation" in script
+    assert "metric_cmax" in script
+    assert 'submit "cmax" cmax' in script
+    assert 'submit_metric "metric_budget=' in script
+    assert '"${METRIC_EXPERIMENT_SUFFIX}_n1_n${metric_n1}"' in script
+    assert "--metric-experiment-suffix" in script
+
+
+def test_metric_n1_shards_are_discovered_without_matching_score_noise(
+        tmp_path):
+    metric_n1 = tmp_path / "toxicity_20_m_paper_n1_n50"
+    metric_noise = tmp_path / "toxicity_20_m_paper_score_noise"
+    metric_n1.mkdir()
+    metric_noise.mkdir()
+    (metric_n1 / "all_df.csv").write_text("seed\n0\n", encoding="utf-8")
+    (metric_noise / "all_df.csv").write_text("seed\n0\n", encoding="utf-8")
+
+    assert _discover(tmp_path, "paper_n1") == [metric_n1 / "all_df.csv"]
+    with pytest.raises(FileNotFoundError):
+        _discover(tmp_path, "paper_score")
 
 
 def test_attacker_shift_setup_is_not_executed_before_main_parses_args():
@@ -204,9 +228,10 @@ def test_attacker_shift_setup_is_not_executed_before_main_parses_args():
 def test_additional_ablation_registry_has_static_and_paired_controllers():
     taus = torch.arange(0.01, 0.5, 0.01)
     expected_sizes = {
-        "hard_soft": 5,
+        "hard_soft": 9,
         "representation": 11,
         "score": 11,
+        "cmax": 13,
         "attacker_shift": 3,
     }
     for kind, expected in expected_sizes.items():
@@ -279,6 +304,93 @@ def test_hard_soft_and_score_metadata_are_explicit():
         if a.ablation_score_kind == "oracle_remaining_time"
     )
     assert oracle.objective_metadata()["ablation_score_is_causal"] == 0
+
+
+def test_hard_soft_is_full_coefficient_support_factorial():
+    grid = torch.full((8, 4, 5), 0.2, dtype=torch.float64)
+    taus = torch.arange(0.01, 0.5, 0.01)
+    methods = get_dapro_ablation_calibrations(
+        grid, 2.0, taus, 0.56, 4,
+        ablation_kind="hard_soft", dapro_n1_values=(4,),
+    )
+    allocators = [
+        method.budget_allocator for method in methods
+        if hasattr(method, "budget_allocator")
+        and hasattr(method.budget_allocator, "ablation_kind")
+    ]
+    cells = {
+        (
+            allocator.objective_metadata()["ablation_coefficient_kind"],
+            allocator.objective_metadata()["ablation_support_kind"],
+        )
+        for allocator in allocators
+    }
+    assert cells == {
+        ("hard_realized_target_indicator", "prefix_grid_one_hot"),
+        ("soft_model_probability", "prefix_grid"),
+        ("hard_realized_target_indicator", "terminal_endpoint"),
+        ("soft_initial_model_probability", "terminal_endpoint"),
+    }
+    assert len(allocators) == 8
+
+    hard_prefix = next(
+        allocator for allocator in allocators
+        if isinstance(allocator, AblationHardPrefixDAPRO)
+    )
+    hard_terminal = next(
+        allocator for allocator in allocators
+        if isinstance(allocator, AblationHardTargetDAPRO)
+        and not isinstance(allocator, AblationHardPrefixDAPRO)
+    )
+    quantiles = torch.full((4, len(taus)), 4.0)
+    event_times = torch.tensor([1, 2, 4, 5], dtype=torch.float64)
+    prior = torch.full((4,), 4.0)
+    prefix_masses = hard_prefix.phase1_objective_masses(
+        event_times, prior, quantiles, grid[:4]
+    )
+    terminal_weights = hard_terminal.phase1_objective_weights(
+        event_times, prior, quantiles
+    )
+    expected = torch.zeros_like(prefix_masses)
+    active = torch.minimum(event_times, prior).to(torch.long)
+    expected[torch.arange(4), active - 1] = terminal_weights
+    torch.testing.assert_close(prefix_masses, expected)
+
+    soft_terminal = next(
+        allocator for allocator in allocators
+        if isinstance(allocator, AblationSoftTerminalDAPRO)
+    )
+    terminal_masses = soft_terminal.phase1_objective_masses(
+        event_times, prior, quantiles, grid[:4]
+    )
+    assert terminal_masses.count_nonzero(dim=1).eq(1).all()
+
+
+def test_cmax_ablation_uses_requested_caps_only_for_crc():
+    taus = torch.arange(0.01, 0.5, 0.01)
+    methods = get_dapro_ablation_calibrations(
+        None, 20.0, taus, 0.56, 200,
+        ablation_kind="cmax", dapro_n1_values=(50,),
+    )
+    allocators = [
+        method.budget_allocator for method in methods
+        if hasattr(method, "budget_allocator")
+        and hasattr(method.budget_allocator, "ablation_kind")
+    ]
+    crc = [a for a in allocators if a.budget_control_mode == "crc"]
+    raw = [a for a in allocators if a.budget_control_mode is None]
+    assert [a.risk_candidate_row_cost_cap for a in crc] == [
+        2.0, 10.0, 20.0, 40.0, 100.0, 200.0,
+    ]
+    assert all(a.risk_candidate_row_cost_cap is None for a in raw)
+    assert all(
+        a.objective_metadata()["ablation_row_cost_cap_applied"] == 1
+        for a in crc
+    )
+    assert all(
+        a.objective_metadata()["ablation_row_cost_cap_applied"] == 0
+        for a in raw
+    )
 
 
 def test_continuous_representation_and_causal_target_value_scores():
@@ -373,6 +485,24 @@ def test_metric_registry_uses_event_rate_target_and_paired_controllers():
         == "1{T<=200}"
         for allocator in dynamic
     )
+    expected_sizes = {
+        "n1": 3,
+        "budget": 3,
+        "hard_soft": 9,
+        "representation": 11,
+        "cmax": 13,
+    }
+    for kind, expected in expected_sizes.items():
+        allocators = get_metric_dapro_ablation_allocators(
+            None, 20, taus, .56, 200,
+            ablation_kind=kind, dapro_n1=50, crc_control_size=25,
+        )
+        assert len(allocators) == expected
+        assert len({allocator.name for allocator in allocators}) == expected
+        assert sum(
+            getattr(allocator, "budget_control_mode", None) == "crc"
+            for allocator in allocators
+        ) == (expected - 1) // 2
 
 
 def test_metric_current_hazard_matches_zero_noise_canonical_configuration():

@@ -23,7 +23,7 @@ from src.predictive_bounds.budget_allocators.DAPRO import (
 
 _VALID_ABLATION_KINDS = {
     "n1", "score_noise", "budget", "hard_soft", "representation",
-    "score", "attacker_shift",
+    "score", "cmax", "attacker_shift",
 }
 _VALID_SCORE_KINDS = {
     "hazard", "remaining_quantile", "target_value", "random",
@@ -87,7 +87,14 @@ class _DAPROAblationMixin:
         taus = torch.as_tensor(
             self.taus_range, dtype=torch.float64, device=quantile_est.device
         )
-        index = int(torch.argmin(torch.abs(taus - self.target_alpha)).item())
+        eligible = torch.nonzero(
+            taus < self.target_alpha, as_tuple=False
+        ).reshape(-1)
+        if len(eligible) == 0:
+            raise ValueError(
+                "The LPB tau grid has no candidate strictly below target alpha."
+            )
+        index = int(eligible[-1].item())
         return quantile_est[:, index].reshape(-1).clamp(
             min=1, max=self.conditional_grid.shape[1]
         )
@@ -247,6 +254,24 @@ class _DAPROAblationMixin:
     def objective_metadata(self) -> dict:
         metadata = super().objective_metadata()
         is_metric = getattr(self, "metric_estimation_horizon", None) is not None
+        coefficient_kind = getattr(
+            self,
+            "_ablation_coefficient_kind",
+            (
+                "soft_prefix_model_probability"
+                if isinstance(self, (SoftTargetDAPRO, SoftTargetCRCDAPRO))
+                else "hard_realized_target_indicator"
+            ),
+        )
+        support_kind = getattr(
+            self,
+            "_ablation_support_kind",
+            (
+                "prefix_grid"
+                if isinstance(self, (SoftTargetDAPRO, SoftTargetCRCDAPRO))
+                else "terminal_endpoint"
+            ),
+        )
         metadata.update({
             "ablation_study": (
                 "dapro_metric_event_rate" if is_metric else "dapro_lpb"
@@ -285,16 +310,22 @@ class _DAPROAblationMixin:
             "ablation_continuous_score_map": int(
                 getattr(self, "smooth_score_rank_map", False)
             ),
-            "ablation_coefficient_kind": (
-                "soft_prefix_model_probability"
-                if isinstance(self, (SoftTargetDAPRO, SoftTargetCRCDAPRO))
-                else "hard_realized_target_indicator"
+            "ablation_coefficient_kind": coefficient_kind,
+            "ablation_support_kind": support_kind,
+            "ablation_row_cost_cap_multiplier": (
+                getattr(self, "row_cost_cap_multiplier", np.nan)
+            ),
+            "ablation_row_cost_cap_applied": int(
+                getattr(self, "risk_candidate_row_cost_cap", None) is not None
             ),
         })
         return metadata
 
 
 class AblationSoftTargetDAPRO(_DAPROAblationMixin, SoftTargetDAPRO):
+    _ablation_coefficient_kind = "soft_model_probability"
+    _ablation_support_kind = "prefix_grid"
+
     def __init__(self, *args, ablation_kind: str, ablation_value: float,
                  ablation_label: str = "", score_kind: str = "hazard",
                  score_noise_lambda: float = 0.0,
@@ -309,6 +340,9 @@ class AblationSoftTargetDAPRO(_DAPROAblationMixin, SoftTargetDAPRO):
 
 
 class AblationSoftTargetCRCDAPRO(_DAPROAblationMixin, SoftTargetCRCDAPRO):
+    _ablation_coefficient_kind = "soft_model_probability"
+    _ablation_support_kind = "prefix_grid"
+
     def __init__(self, *args, ablation_kind: str, ablation_value: float,
                  ablation_label: str = "", score_kind: str = "hazard",
                  score_noise_lambda: float = 0.0,
@@ -323,6 +357,9 @@ class AblationSoftTargetCRCDAPRO(_DAPROAblationMixin, SoftTargetCRCDAPRO):
 
 
 class AblationHardTargetDAPRO(_DAPROAblationMixin, DefinitiveDAPRO):
+    _ablation_coefficient_kind = "hard_realized_target_indicator"
+    _ablation_support_kind = "terminal_endpoint"
+
     def __init__(self, *args, ablation_kind: str, ablation_value: float,
                  ablation_label: str = "", score_kind: str = "hazard",
                  score_noise_lambda: float = 0.0,
@@ -337,6 +374,172 @@ class AblationHardTargetDAPRO(_DAPROAblationMixin, DefinitiveDAPRO):
 
 
 class AblationHardTargetCRCDAPRO(_DAPROAblationMixin, DefinitiveCRCDAPRO):
+    _ablation_coefficient_kind = "hard_realized_target_indicator"
+    _ablation_support_kind = "terminal_endpoint"
+
+    def __init__(self, *args, ablation_kind: str, ablation_value: float,
+                 ablation_label: str = "", score_kind: str = "hazard",
+                 score_noise_lambda: float = 0.0,
+                 score_noise_seed: int = 314159, **kwargs):
+        self._initialize_ablation(
+            ablation_kind=ablation_kind, ablation_value=ablation_value,
+            ablation_label=ablation_label, score_kind=score_kind,
+            score_noise_lambda=score_noise_lambda,
+            score_noise_seed=score_noise_seed,
+        )
+        super().__init__(*args, **kwargs)
+
+
+class _HardPrefixObjectiveMixin:
+    """Represent the realized hard target on the full prefix-time grid.
+
+    A realized event contributes a one-hot mass at its event prefix.  Hence
+    this is algebraically equivalent to the hard terminal objective; keeping
+    it as a separate, explicitly grid-valued implementation is useful in the
+    four-cell coefficient/support ablation and verifies that changing only the
+    internal representation does not change the fitted objective.
+    """
+
+    _ablation_coefficient_kind = "hard_realized_target_indicator"
+    _ablation_support_kind = "prefix_grid_one_hot"
+
+    def phase1_objective_masses(
+            self,
+            event_times: torch.Tensor,
+            prior_q: torch.Tensor,
+            quantile_est: torch.Tensor,
+            conditional_grid: torch.Tensor,
+    ) -> torch.Tensor:
+        width = conditional_grid.shape[1]
+        active_lengths = torch.minimum(
+            event_times.reshape(-1).to(torch.long),
+            prior_q.reshape(-1).to(torch.long),
+        ).clamp(min=0, max=width)
+        horizons, strict = self._task_target_horizons(quantile_est)
+        times = event_times.reshape(-1).to(torch.float64)
+        horizons = horizons.reshape(-1).to(
+            device=times.device, dtype=torch.float64
+        )
+        target = (
+            times < horizons if strict else times <= horizons
+        ).to(torch.float64)
+        regularization = float(getattr(self, "global_regularization", 0.0))
+        weights = (target + regularization) / (1.0 + regularization)
+        masses = torch.zeros(
+            (len(times), width),
+            dtype=torch.float64,
+            device=times.device,
+        )
+        positive = active_lengths > 0
+        rows = torch.arange(len(times), device=times.device)[positive]
+        masses[rows, active_lengths[positive] - 1] = weights[positive]
+        return masses
+
+
+class _SoftTerminalObjectiveMixin:
+    """Place an initial-prefix model target probability at one endpoint.
+
+    This differs from soft-prefix DAPRO only in support: it aggregates the
+    model's target-event probability at ``X_i0`` into a single row weight and
+    lets the ordinary terminal backend attach that weight to the observed
+    active endpoint.  It therefore isolates the benefit of updating and
+    distributing soft coefficients over observed prefixes.
+    """
+
+    _ablation_coefficient_kind = "soft_initial_model_probability"
+    _ablation_support_kind = "terminal_endpoint"
+
+    def phase1_objective_masses(
+            self,
+            event_times: torch.Tensor,
+            prior_q: torch.Tensor,
+            quantile_est: torch.Tensor,
+            conditional_grid: torch.Tensor,
+    ) -> torch.Tensor:
+        pmf = conditional_grid[:, 0, :].to(torch.float64).clamp_min(0.0)
+        horizons, strict = self._task_target_horizons(quantile_est)
+        horizons = horizons.reshape(-1).to(
+            device=pmf.device, dtype=torch.float64
+        )
+        one_based_time = torch.arange(
+            1, pmf.shape[1] + 1, device=pmf.device, dtype=torch.float64
+        ).unsqueeze(0)
+        target_mask = (
+            one_based_time < horizons[:, None]
+            if strict
+            else one_based_time <= horizons[:, None]
+        )
+        target_probability = (pmf * target_mask).sum(dim=1).clamp(0.0, 1.0)
+        regularization = float(getattr(self, "global_regularization", 0.0))
+        weights = (
+            target_probability + regularization
+        ) / (1.0 + regularization)
+        active_lengths = torch.minimum(
+            event_times.reshape(-1).to(torch.long),
+            prior_q.reshape(-1).to(torch.long),
+        ).clamp(min=0, max=conditional_grid.shape[1])
+        masses = torch.zeros(
+            (len(event_times), conditional_grid.shape[1]),
+            dtype=torch.float64,
+            device=pmf.device,
+        )
+        positive = active_lengths > 0
+        rows = torch.arange(len(event_times), device=pmf.device)[positive]
+        masses[rows, active_lengths[positive] - 1] = weights[positive]
+        return masses
+
+
+class AblationHardPrefixDAPRO(
+        _HardPrefixObjectiveMixin, _DAPROAblationMixin, DefinitiveDAPRO
+):
+    def __init__(self, *args, ablation_kind: str, ablation_value: float,
+                 ablation_label: str = "", score_kind: str = "hazard",
+                 score_noise_lambda: float = 0.0,
+                 score_noise_seed: int = 314159, **kwargs):
+        self._initialize_ablation(
+            ablation_kind=ablation_kind, ablation_value=ablation_value,
+            ablation_label=ablation_label, score_kind=score_kind,
+            score_noise_lambda=score_noise_lambda,
+            score_noise_seed=score_noise_seed,
+        )
+        super().__init__(*args, **kwargs)
+
+
+class AblationHardPrefixCRCDAPRO(
+        _HardPrefixObjectiveMixin, _DAPROAblationMixin, DefinitiveCRCDAPRO
+):
+    def __init__(self, *args, ablation_kind: str, ablation_value: float,
+                 ablation_label: str = "", score_kind: str = "hazard",
+                 score_noise_lambda: float = 0.0,
+                 score_noise_seed: int = 314159, **kwargs):
+        self._initialize_ablation(
+            ablation_kind=ablation_kind, ablation_value=ablation_value,
+            ablation_label=ablation_label, score_kind=score_kind,
+            score_noise_lambda=score_noise_lambda,
+            score_noise_seed=score_noise_seed,
+        )
+        super().__init__(*args, **kwargs)
+
+
+class AblationSoftTerminalDAPRO(
+        _SoftTerminalObjectiveMixin, _DAPROAblationMixin, DefinitiveDAPRO
+):
+    def __init__(self, *args, ablation_kind: str, ablation_value: float,
+                 ablation_label: str = "", score_kind: str = "hazard",
+                 score_noise_lambda: float = 0.0,
+                 score_noise_seed: int = 314159, **kwargs):
+        self._initialize_ablation(
+            ablation_kind=ablation_kind, ablation_value=ablation_value,
+            ablation_label=ablation_label, score_kind=score_kind,
+            score_noise_lambda=score_noise_lambda,
+            score_noise_seed=score_noise_seed,
+        )
+        super().__init__(*args, **kwargs)
+
+
+class AblationSoftTerminalCRCDAPRO(
+        _SoftTerminalObjectiveMixin, _DAPROAblationMixin, DefinitiveCRCDAPRO
+):
     def __init__(self, *args, ablation_kind: str, ablation_value: float,
                  ablation_label: str = "", score_kind: str = "hazard",
                  score_noise_lambda: float = 0.0,
@@ -351,6 +554,8 @@ class AblationHardTargetCRCDAPRO(_DAPROAblationMixin, DefinitiveCRCDAPRO):
 
 
 __all__ = [
+    "AblationHardPrefixCRCDAPRO", "AblationHardPrefixDAPRO",
     "AblationHardTargetCRCDAPRO", "AblationHardTargetDAPRO",
+    "AblationSoftTerminalCRCDAPRO", "AblationSoftTerminalDAPRO",
     "AblationSoftTargetCRCDAPRO", "AblationSoftTargetDAPRO",
 ]
