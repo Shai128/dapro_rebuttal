@@ -265,6 +265,7 @@ def main():
         choices=[
             'n1', 'score_noise', 'budget', 'hard_soft',
             'representation', 'score', 'cmax', 'attacker_shift',
+            'optimization',
         ],
         default='n1',
     )

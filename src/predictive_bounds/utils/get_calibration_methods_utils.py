@@ -89,6 +89,7 @@ from src.predictive_bounds.budget_allocators.dapro_ablation import (
     AblationSoftTerminalDAPRO,
     AblationSoftTargetCRCDAPRO,
     AblationSoftTargetDAPRO,
+    AblationUniformContinuationCRCDAPRO,
 )
 from src.predictive_bounds.budget_allocators.uncalibrated_metric_allocator import (
     UncalibratedMetricAllocator,
@@ -130,7 +131,7 @@ def get_dapro_ablation_calibrations(
     kind = str(ablation_kind).lower()
     supported = {
         "n1", "score_noise", "budget", "hard_soft", "representation",
-        "score", "cmax", "attacker_shift",
+        "score", "cmax", "attacker_shift", "optimization",
     }
     if kind not in supported:
         raise ValueError(f"DAPRO ablations support {sorted(supported)}.")
@@ -240,11 +241,18 @@ def get_dapro_ablation_calibrations(
             )
             for multiplier in multipliers
         ]
-    else:  # attacker_shift
+    elif kind == "attacker_shift":
         configurations = [
             dict(
                 n1=n1_values[0], value=0.0,
                 label="Source calibration -> shifted test",
+            )
+        ]
+    else:  # optimization
+        configurations = [
+            dict(
+                n1=n1_values[0], value=1.0,
+                label="DAPRO optimization",
             )
         ]
 
@@ -310,6 +318,21 @@ def get_dapro_ablation_calibrations(
             SurvivalCalibrationWithKnownWeights(raw, taus_range, tau_prior),
             SurvivalCalibrationWithKnownWeights(crc, taus_range, tau_prior),
         ])
+    if kind == "optimization":
+        uniform_crc = AblationUniformContinuationCRCDAPRO(
+            conditional_grid=conditional_grid,
+            budget_per_sample=budget_per_sample,
+            taus_range=taus_range,
+            tau_prior=tau_prior,
+            m_upper_bound=m_upper_bound,
+            n1=n1_values[0],
+            terminal_pi_min=0.005,
+            ablation_value=0.0,
+            ablation_label="Uniform continuation",
+        )
+        calibrations.append(SurvivalCalibrationWithKnownWeights(
+            uniform_crc, taus_range, tau_prior
+        ))
     return calibrations
 
 
@@ -338,7 +361,7 @@ def get_metric_dapro_ablation_allocators(
     kind = str(ablation_kind).lower()
     if kind not in {
             "n1", "score_noise", "budget", "hard_soft",
-            "representation", "score", "cmax"
+            "representation", "score", "cmax", "optimization"
     }:
         raise ValueError(
             "Unsupported metric DAPRO ablation kind."
@@ -433,7 +456,7 @@ def get_metric_dapro_ablation_allocators(
                 noise=0.0, bins=4, smooth=True,
             )
         ]
-    else:  # cmax
+    elif kind == "cmax":
         maximum_multiplier = float(m_upper_bound) / float(budget_per_sample)
         multipliers = []
         for value in (0.1, 0.5, 1.0, 2.0, 5.0, 10.0, maximum_multiplier):
@@ -453,6 +476,13 @@ def get_metric_dapro_ablation_allocators(
                 cap_multiplier=multiplier,
             )
             for multiplier in multipliers
+        ]
+    else:  # optimization
+        configurations = [
+            dict(
+                value=1.0, label="DAPRO optimization", score_kind="hazard",
+                noise=0.0, bins=CANONICAL_DAPRO_SCORE_BIN_COUNT,
+            )
         ]
 
     common = dict(
@@ -513,6 +543,18 @@ def get_metric_dapro_ablation_allocators(
                 ),
             ),
         ])
+    if kind == "optimization":
+        allocators.append(AblationUniformContinuationCRCDAPRO(
+            conditional_grid=conditional_grid,
+            budget_per_sample=budget_per_sample,
+            taus_range=taus_range,
+            tau_prior=tau_prior,
+            m_upper_bound=m_upper_bound,
+            n1=dapro_n1,
+            terminal_pi_min=0.005,
+            ablation_value=0.0,
+            ablation_label="Uniform continuation",
+        ))
     return allocators
 
 

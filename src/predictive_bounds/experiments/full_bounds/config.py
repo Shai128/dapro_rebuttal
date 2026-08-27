@@ -86,7 +86,7 @@ DATASET_SPECS = (
             "judge_llm-judge_qwen25_14b_instruct"
         ),
         "bound_type": "lpb",
-        "budget": 20.0,
+        "budget": 10.0,
         "tau_prior": 0.56,
         "target_coverage": 0.90,
         "figure_name": "red_team_qwen",
@@ -128,7 +128,7 @@ DATASET_SPECS = (
             "judge_llama_guard"
         ),
         "bound_type": "upb",
-        "budget": 10.0,
+        "budget": 20.0,
         "tau_prior": 0.97,
         "target_coverage": 0.70,
         "figure_name": "red_team_llama_guard_upb",
@@ -156,7 +156,7 @@ DATASET_SPECS = (
             "{target}_judge_llm-judge_qwen25_14b_instruct"
         ),
         "bound_type": "upb",
-        "budget": 10.0,
+        "budget": 20.0,
         "tau_prior": 0.97,
         "target_coverage": 0.70,
         "figure_name": "hallucination3_upb",
@@ -170,7 +170,7 @@ DATASET_SPECS = (
             "judge_autoif"
         ),
         "bound_type": "lpb",
-        "budget": 20.0,
+        "budget": 10.0,
         "tau_prior": 0.56,
         "target_coverage": 0.90,
         "figure_name": "autoif",
@@ -184,7 +184,7 @@ DATASET_SPECS = (
             "judge_autoif"
         ),
         "bound_type": "upb",
-        "budget": 30.0,
+        "budget": 20.0,
         "tau_prior": 0.97,
         "target_coverage": 0.70,
         "figure_name": "autoif_upb",

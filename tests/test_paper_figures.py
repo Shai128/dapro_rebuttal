@@ -24,10 +24,33 @@ from src.paper_figures.metrics import (
 def test_recommended_paper_cells_match_final_table():
     assert RECOMMENDED_CONFIGURATIONS["lpb"]["autoif"].budget_per_sample == 10
     assert RECOMMENDED_CONFIGURATIONS["lpb"]["toxicity"].n1 == 50
-    assert RECOMMENDED_CONFIGURATIONS["upb"]["autoif"].target_coverage == 0.80
+    assert RECOMMENDED_CONFIGURATIONS["lpb"]["red_team_qwen_judge"].budget_per_sample == 10
+    assert RECOMMENDED_CONFIGURATIONS["upb"]["autoif"].target_coverage == 0.70
+    assert RECOMMENDED_CONFIGURATIONS["upb"]["autoif"].n1 == 100
     assert RECOMMENDED_CONFIGURATIONS["upb"]["hallucination3"].n1 == 100
-    assert RECOMMENDED_CONFIGURATIONS["metrics"]["autoif"].n1 == 50
+    assert RECOMMENDED_CONFIGURATIONS["metrics"]["autoif"].n1 == 100
     assert RECOMMENDED_CONFIGURATIONS["metrics"]["hallucination3"].n1 == 100
+
+
+def test_paper_cells_use_common_task_level_hyperparameters():
+    for task, recommendations in RECOMMENDED_CONFIGURATIONS.items():
+        n1_by_budget: dict[float, set[int]] = {}
+        for recommendation in recommendations.values():
+            n1_by_budget.setdefault(
+                recommendation.budget_per_sample, set()
+            ).add(recommendation.n1)
+        assert all(len(values) == 1 for values in n1_by_budget.values()), task
+
+        assert (
+            recommendations["red_team_qwen_judge"].budget_per_sample
+            == recommendations["red_team_llama_guard"].budget_per_sample
+        )
+
+    upb_coverages = {
+        recommendation.target_coverage
+        for recommendation in RECOMMENDED_CONFIGURATIONS["upb"].values()
+    }
+    assert upb_coverages == {0.70}
 
 
 def test_legacy_ordinary_ht_columns_reconstruct_exact_restricted_mean():

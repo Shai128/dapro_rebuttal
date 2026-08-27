@@ -26,6 +26,13 @@ from src.predictive_bounds.experiments.full_bounds.config import (  # noqa: E402
 
 
 METHOD_ORDER = ("Static", "DAPRO", "DAPRO w/o CRC")
+OPTIMIZATION_METHOD_ORDER = (
+    "Static", "Uniform + CRC", "DAPRO", "DAPRO w/o CRC",
+)
+ABLATION_METHOD_COLORS = {
+    **METHOD_COLORS,
+    "Uniform + CRC": "#9467BD",
+}
 ATTACKER_SHIFT_BUDGET = 10.0
 SCORE_DISPLAY_LABELS = {
     "Current hazard": "Current\nhazard",
@@ -63,6 +70,10 @@ FACTOR_SPECS = {
     "cmax": {
         "xlabel": r"CRC row-cost cap $C_{\max}$",
         "title": r"CRC row-cost-cap ablation",
+    },
+    "optimization": {
+        "xlabel": "Policy construction",
+        "title": "Optimization-process ablation",
     },
     "attacker_shift": {
         "xlabel": "Calibration attacker to test attacker",
@@ -175,9 +186,19 @@ def _ablation_method_name(calibration_name: str) -> str | None:
     name = str(calibration_name)
     if name == "calibration_optimized_allocation":
         return "Static"
+    if "uniform_continuation_crc_ablation_optimization" in name:
+        return "Uniform + CRC"
     if "_ablation_" in name and "dapro_" in name:
         return "DAPRO" if "budget_crc" in name else "DAPRO w/o CRC"
     return method_display_name(name)
+
+
+def _method_order(kind: str) -> tuple[str, ...]:
+    return (
+        OPTIMIZATION_METHOD_ORDER
+        if kind == "optimization"
+        else METHOD_ORDER
+    )
 
 
 def _attacker_name(dataset_setup: object) -> str:
@@ -248,8 +269,9 @@ def load_ablation_data(
         frame["method"] = frame["calibration_name"].map(
             _ablation_method_name
         )
-        frame = frame[frame["method"].isin(METHOD_ORDER)].copy()
-        dynamic = frame["method"].isin({"DAPRO", "DAPRO w/o CRC"})
+        method_order = _method_order(kind)
+        frame = frame[frame["method"].isin(method_order)].copy()
+        dynamic = ~frame["method"].eq("Static")
         dynamic_rows = frame[dynamic].copy()
         dynamic_rows = dynamic_rows[
             dynamic_rows["ablation_kind"].astype(str).eq(kind)
@@ -257,20 +279,33 @@ def load_ablation_data(
         # Do not silently combine pre-standardization K4/regularization-zero
         # files with the canonical paper ablations.  Representation is the
         # sole study allowed to vary K.
+        dapro_rows = dynamic_rows["method"].isin(
+            {"DAPRO", "DAPRO w/o CRC"}
+        )
         bins = pd.to_numeric(
-            dynamic_rows["ablation_score_bin_count"], errors="coerce"
+            dynamic_rows.loc[dapro_rows, "ablation_score_bin_count"],
+            errors="coerce",
         )
         if kind != "representation" and bins.notna().any():
-            dynamic_rows = dynamic_rows[np.isclose(
-                bins, 2.0, atol=5e-7
-            )].copy()
+            keep_dapro = np.isclose(bins, 2.0, atol=5e-7)
+            dynamic_rows = pd.concat([
+                dynamic_rows.loc[~dapro_rows],
+                dynamic_rows.loc[bins.index[keep_dapro]],
+            ]).sort_index().copy()
         regularization = pd.to_numeric(
-            dynamic_rows["global_regularization"], errors="coerce"
+            dynamic_rows.loc[
+                dynamic_rows["method"].isin({"DAPRO", "DAPRO w/o CRC"}),
+                "global_regularization",
+            ],
+            errors="coerce",
         )
         if regularization.notna().any():
-            dynamic_rows = dynamic_rows[np.isclose(
-                regularization.loc[dynamic_rows.index], 0.001, atol=5e-10
-            )].copy()
+            dapro_index = regularization.index
+            keep = np.isclose(regularization, 0.001, atol=5e-10)
+            dynamic_rows = pd.concat([
+                dynamic_rows.drop(index=dapro_index),
+                dynamic_rows.loc[dapro_index[keep]],
+            ]).sort_index().copy()
         values = sorted(
             pd.to_numeric(dynamic_rows["ablation_value"], errors="coerce")
             .dropna().unique()
@@ -359,6 +394,9 @@ def load_ablation_data(
         data["coverage"], errors="coerce"
     )
     data["coverage_diff_pct"] = (data["coverage_pct"] - 90.0).abs()
+    data["coverage_across_split_variance_pp2"] = data.groupby(
+        ["source_file", "factor_value", "method"], observed=True
+    )["coverage_pct"].transform("var")
     assigned = pd.to_numeric(
         data["reported_assigned_budget_per_sample"], errors="coerce"
     )
@@ -392,7 +430,10 @@ def load_ablation_data(
             data["ablation_n1"], errors="coerce"
         ).round().astype("Int64").astype(str)
         data["factor_label"] = budget_label + "\n" + r"($N_1$=" + n1_label + ")"
-    elif kind in {"hard_soft", "representation", "score", "cmax"}:
+    elif kind in {
+            "hard_soft", "representation", "score", "cmax",
+            "optimization",
+    }:
         labels = (
             data.loc[~data["method"].eq("Static"), ["factor_value", "ablation_label"]]
             .dropna().drop_duplicates("factor_value")
@@ -443,25 +484,39 @@ def load_metric_ablation_data(
         frame["method"] = frame["calibration_name"].map(
             _ablation_method_name
         )
-        frame = frame[frame["method"].isin(METHOD_ORDER)].copy()
+        method_order = _method_order(kind)
+        frame = frame[frame["method"].isin(method_order)].copy()
         dynamic_rows = frame[
-            frame["method"].isin({"DAPRO", "DAPRO w/o CRC"})
+            ~frame["method"].eq("Static")
             & frame["ablation_kind"].astype(str).eq(kind)
         ].copy()
+        dapro_rows = dynamic_rows["method"].isin(
+            {"DAPRO", "DAPRO w/o CRC"}
+        )
         bins = pd.to_numeric(
-            dynamic_rows["ablation_score_bin_count"], errors="coerce"
+            dynamic_rows.loc[dapro_rows, "ablation_score_bin_count"],
+            errors="coerce",
         )
         if kind != "representation" and bins.notna().any():
-            dynamic_rows = dynamic_rows[np.isclose(
-                bins, 2.0, atol=5e-7
-            )].copy()
+            keep_dapro = np.isclose(bins, 2.0, atol=5e-7)
+            dynamic_rows = pd.concat([
+                dynamic_rows.loc[~dapro_rows],
+                dynamic_rows.loc[bins.index[keep_dapro]],
+            ]).sort_index().copy()
         regularization = pd.to_numeric(
-            dynamic_rows["global_regularization"], errors="coerce"
+            dynamic_rows.loc[
+                dynamic_rows["method"].isin({"DAPRO", "DAPRO w/o CRC"}),
+                "global_regularization",
+            ],
+            errors="coerce",
         )
         if regularization.notna().any():
-            dynamic_rows = dynamic_rows[np.isclose(
-                regularization.loc[dynamic_rows.index], 0.001, atol=5e-10
-            )].copy()
+            dapro_index = regularization.index
+            keep = np.isclose(regularization, 0.001, atol=5e-10)
+            dynamic_rows = pd.concat([
+                dynamic_rows.drop(index=dapro_index),
+                dynamic_rows.loc[dapro_index[keep]],
+            ]).sort_index().copy()
         values = sorted(
             pd.to_numeric(dynamic_rows["ablation_value"], errors="coerce")
             .dropna().unique()
@@ -569,7 +624,10 @@ def load_metric_ablation_data(
         data["factor_label"] = (
             budget_label + "\n" + r"($N_1$=" + n1_label + ")"
         )
-    elif kind in {"hard_soft", "representation", "score", "cmax"}:
+    elif kind in {
+            "hard_soft", "representation", "score", "cmax",
+            "optimization",
+    }:
         labels = (
             data.loc[
                 ~data["method"].eq("Static"),
@@ -704,7 +762,7 @@ def generate_ablation_figure(
         output_path: Path,
         quality: str,
 ) -> pd.DataFrame:
-    if kind in {"hard_soft", "attacker_shift"}:
+    if kind in {"hard_soft", "attacker_shift", "optimization"}:
         return generate_categorical_box_figure(
             data,
             kind=kind,
@@ -812,9 +870,13 @@ def generate_categorical_box_figure(
         quality: str,
 ) -> pd.DataFrame:
     """Use boxplots for categorical coefficient and distribution shifts."""
-    if kind not in {"hard_soft", "attacker_shift"}:
-        raise ValueError("Categorical boxplots support hard_soft/attacker_shift.")
+    if kind not in {"hard_soft", "attacker_shift", "optimization"}:
+        raise ValueError(
+            "Categorical boxplots support hard_soft, attacker_shift, and "
+            "optimization."
+        )
     spec = FACTOR_SPECS[kind]
+    method_order = _method_order(kind)
     values = sorted(data["factor_value"].dropna().unique())
     labels = (
         data[["factor_value", "factor_label"]]
@@ -824,8 +886,13 @@ def generate_categorical_box_figure(
     plot_data = data.copy()
     plot_data["factor_label"] = plot_data["factor_value"].map(labels)
     order = [labels.get(value, f"{value:g}") for value in values]
-    figure, axes = plt.subplots(2, 2, figsize=(11.2, 7.1))
-    panels = (
+    optimization = kind == "optimization"
+    figure, axes = plt.subplots(
+        3 if optimization else 2,
+        2,
+        figsize=(11.2, 9.8 if optimization else 7.1),
+    )
+    panels = [
         ("coverage_pct", "Coverage Rate", "Coverage rate (%)"),
         (
             "budget_used_per_sample", "Budget Used per Sample",
@@ -839,22 +906,56 @@ def generate_categorical_box_figure(
             "mean_target_a_weight", "Mean Target-A Weight",
             r"Mean selected-target weight $A_i(q_{\hat\tau})/\pi_i$",
         ),
-    )
+    ]
+    if optimization:
+        panels.insert(1, (
+            "coverage_across_split_variance_pp2",
+            "Variance of Coverage Rate",
+            r"Across-split coverage variance (pp$^2$)",
+        ))
     all_statistics = []
     for axis, (metric, panel_title, ylabel) in zip(axes.flat, panels):
         panel = plot_data.dropna(subset=["factor_label", "method", metric])
-        sns.boxplot(
-            data=panel,
-            x="factor_label",
-            y=metric,
-            hue="method",
-            order=order,
-            hue_order=list(METHOD_ORDER),
-            palette={method: METHOD_COLORS[method] for method in METHOD_ORDER},
-            linewidth=0.9,
-            fliersize=2.2,
-            ax=axis,
-        )
+        if metric == "coverage_across_split_variance_pp2":
+            cell_values = (
+                panel.groupby(
+                    ["factor_label", "method"], observed=True
+                )[metric]
+                .first()
+                .unstack("method")
+                .reindex(index=order, columns=list(method_order))
+            )
+            x_positions = np.arange(len(order), dtype=float)
+            bar_width = 0.8 / len(method_order)
+            for method_index, method in enumerate(method_order):
+                axis.bar(
+                    x_positions
+                    + (method_index - (len(method_order) - 1) / 2)
+                    * bar_width,
+                    cell_values[method].to_numpy(dtype=float),
+                    width=bar_width,
+                    color=ABLATION_METHOD_COLORS[method],
+                    label=method,
+                    zorder=3,
+                )
+            axis.set_xticks(x_positions)
+            axis.set_xticklabels(order)
+        else:
+            sns.boxplot(
+                data=panel,
+                x="factor_label",
+                y=metric,
+                hue="method",
+                order=order,
+                hue_order=list(method_order),
+                palette={
+                    method: ABLATION_METHOD_COLORS[method]
+                    for method in method_order
+                },
+                linewidth=0.9,
+                fliersize=2.2,
+                ax=axis,
+            )
         _style(axis, xlabel=str(spec["xlabel"]), ylabel=ylabel)
         axis.set_title(panel_title, fontsize=11)
         axis.tick_params(axis="x", labelrotation=0)
@@ -889,14 +990,19 @@ def generate_categorical_box_figure(
                 linestyle="--",
                 linewidth=1.2,
             )
-    handles, legend_labels = axes.flat[1].get_legend_handles_labels()
+    for axis in axes.flat[len(panels):]:
+        axis.set_visible(False)
+    legend_axis = axes.flat[1]
+    handles, legend_labels = legend_axis.get_legend_handles_labels()
     if handles:
-        axes.flat[1].legend(
+        legend_axis.legend(
             handles, legend_labels,
             title="Method", loc="best", frameon=True, framealpha=0.88,
             fontsize=9, title_fontsize=9,
         )
-    for axis in (axes.flat[0], axes.flat[2], axes.flat[3]):
+    for axis in axes.flat:
+        if axis is legend_axis:
+            continue
         legend = axis.get_legend()
         if legend is not None:
             legend.remove()
@@ -924,7 +1030,7 @@ def generate_metric_ablation_figure(
         quality: str,
 ) -> pd.DataFrame:
     """Plot metric score quality, including variance over random splits."""
-    if kind == "hard_soft":
+    if kind in {"hard_soft", "optimization"}:
         return generate_metric_categorical_box_figure(
             data,
             kind=kind,
@@ -1030,9 +1136,12 @@ def generate_metric_categorical_box_figure(
         quality: str,
 ) -> pd.DataFrame:
     """Paper-style metric boxplots for the four coefficient/support cells."""
-    if kind != "hard_soft":
-        raise ValueError("Only hard_soft is a categorical metric ablation.")
+    if kind not in {"hard_soft", "optimization"}:
+        raise ValueError(
+            "Categorical metric ablations support hard_soft and optimization."
+        )
     spec = FACTOR_SPECS[kind]
+    method_order = _method_order(kind)
     values = sorted(data["factor_value"].dropna().unique())
     labels = (
         data[["factor_value", "factor_label"]]
@@ -1069,18 +1178,52 @@ def generate_metric_categorical_box_figure(
         panel = plot_data.dropna(
             subset=["factor_label", "method", metric]
         )
-        sns.boxplot(
-            data=panel,
-            x="factor_label",
-            y=metric,
-            hue="method",
-            order=order,
-            hue_order=list(METHOD_ORDER),
-            palette={method: METHOD_COLORS[method] for method in METHOD_ORDER},
-            linewidth=0.9,
-            fliersize=2.2,
-            ax=axis,
-        )
+        if metric == "event_rate_across_split_variance_pp2":
+            # There is exactly one across-split variance per
+            # factor-by-method cell. Repeating that scalar on every seed row
+            # is convenient for the shared data pipeline, but a boxplot of a
+            # constant has zero height and appears empty. Plot the cell
+            # estimates directly as grouped bars instead.
+            cell_values = (
+                panel.groupby(
+                    ["factor_label", "method"], observed=True
+                )[metric]
+                .first()
+                .unstack("method")
+                .reindex(index=order, columns=list(method_order))
+            )
+            x_positions = np.arange(len(order), dtype=float)
+            bar_width = 0.8 / len(method_order)
+            for method_index, method in enumerate(method_order):
+                heights = cell_values[method].to_numpy(dtype=float)
+                axis.bar(
+                    x_positions
+                    + (method_index - (len(method_order) - 1) / 2)
+                    * bar_width,
+                    heights,
+                    width=bar_width,
+                    color=ABLATION_METHOD_COLORS[method],
+                    label=method,
+                    zorder=3,
+                )
+            axis.set_xticks(x_positions)
+            axis.set_xticklabels(order)
+        else:
+            sns.boxplot(
+                data=panel,
+                x="factor_label",
+                y=metric,
+                hue="method",
+                order=order,
+                hue_order=list(method_order),
+                palette={
+                    method: ABLATION_METHOD_COLORS[method]
+                    for method in method_order
+                },
+                linewidth=0.9,
+                fliersize=2.2,
+                ax=axis,
+            )
         _style(axis, xlabel=str(spec["xlabel"]), ylabel=ylabel)
         axis.set_title(panel_title, fontsize=11)
         axis.tick_params(axis="x", labelrotation=12)
@@ -1287,10 +1430,10 @@ def _parse_args() -> argparse.Namespace:
         default=_ROOT / "figures" / "paper" / "ablations",
     )
     parser.add_argument(
-        "--experiment-prefix", default="dapro_lpb_ablation_v1"
+        "--experiment-prefix", default="lpb_ablv1"
     )
     parser.add_argument(
-        "--metric-experiment-prefix", default="dapro_metric_ablation_v1"
+        "--metric-experiment-prefix", default="m_ablv1"
     )
     parser.add_argument(
         "--tasks",

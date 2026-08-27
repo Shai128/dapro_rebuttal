@@ -183,14 +183,14 @@ def generate_metric_appendix_figures(
 def generate_metric_main_figures(
     frame: pd.DataFrame, *, output_dir: Path, quality: str
 ) -> pd.DataFrame:
-    """Generate Red-Team/Qwen-judge event-rate panels and one legend."""
-    dataset_key = "red_team_qwen_judge"
+    """Generate Red-Team/Llama-Guard event-rate panels and one legend."""
+    dataset_key = "red_team_llama_guard"
     dataset = frame[frame["dataset_key"].eq(dataset_key)].copy()
     dataset["target_model"] = dataset["target_model"].replace(
         MAIN_TARGET_MODEL_LABELS
     )
     rows: list[dict] = []
-    path = output_dir / "red_team_qwen_event_rate_boxplot.jpg"
+    path = output_dir / "red_team_llama_guard_event_rate_boxplot.jpg"
     generated = plot_grouped_boxplot(
         dataset,
         metric="estimated_cjr",
@@ -216,7 +216,7 @@ def generate_metric_main_figures(
         generated=generated,
         scope="metrics-main",
     )
-    path = output_dir / "red_team_qwen_event_rate_variance_barplot.jpg"
+    path = output_dir / "red_team_llama_guard_event_rate_variance_barplot.jpg"
     generated, _ = plot_grouped_variance(
         dataset,
         metric="estimated_cjr",
@@ -238,7 +238,7 @@ def generate_metric_main_figures(
         generated=generated,
         scope="metrics-main",
     )
-    legend_path = output_dir / "red_team_qwen_metric_legend.jpg"
+    legend_path = output_dir / "red_team_llama_guard_metric_legend.jpg"
     generated = plot_shared_legend(
         output_path=legend_path,
         quality=quality,

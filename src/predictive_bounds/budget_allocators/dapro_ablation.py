@@ -19,11 +19,27 @@ from src.predictive_bounds.budget_allocators.DAPRO import (
     SoftTargetCRCDAPRO,
     SoftTargetDAPRO,
 )
+from src.predictive_bounds.budget_allocators.budget_allocator import (
+    BudgetAllocationResult,
+    BudgetAllocator,
+    candidate_reach_probabilities,
+    summarize_expected_budget,
+)
+from src.predictive_bounds.budget_allocators.risk_controlled_budget import (
+    cumulative_policy_costs,
+    select_crc_budget_candidate,
+)
+from src.predictive_bounds.budget_allocators.vectorized_adaptive_allocator_patch import (
+    simulate_process_vectorized,
+)
+from src.predictive_bounds.calibration.calibration_utils import (
+    get_prior,
+)
 
 
 _VALID_ABLATION_KINDS = {
     "n1", "score_noise", "budget", "hard_soft", "representation",
-    "score", "cmax", "attacker_shift",
+    "score", "cmax", "attacker_shift", "optimization",
 }
 _VALID_SCORE_KINDS = {
     "hazard", "remaining_quantile", "target_value", "random",
@@ -553,9 +569,367 @@ class AblationSoftTerminalCRCDAPRO(
         super().__init__(*args, **kwargs)
 
 
+class AblationUniformContinuationCRCDAPRO(
+        BudgetAllocator
+):
+    """No-optimization control: one fixed continuation family plus CRC.
+
+    The policy family is fixed before any trajectory labels are inspected:
+    every eligible row and time uses the same core conditional continuation
+    probability.  The only learned scalar is its aggressiveness, selected on
+    an ``n1``-row CRC fold.  Consequently all fully observed Phase-I rows are
+    budget-control rows and none are used to fit a score map or a DAPRO
+    objective.  A row-level always-follow mixture preserves terminal reach
+    probability ``terminal_pi_min`` and is included in the CRC costs.
+    """
+
+    def __init__(
+            self,
+            conditional_grid,
+            budget_per_sample,
+            taus_range,
+            tau_prior,
+            m_upper_bound,
+            *,
+            n1: int,
+            terminal_pi_min: float = 0.005,
+            budget_candidate_count: int = 401,
+            row_cost_cap_multiplier: float = 2.0,
+            ablation_kind: str = "optimization",
+            ablation_value: float = 0.0,
+            ablation_label: str = "Uniform continuation",
+            reach_t_max_is_success: bool = False,
+    ) -> None:
+        if str(ablation_kind).lower() != "optimization":
+            raise ValueError(
+                "Uniform continuation is only defined for the optimization "
+                "ablation."
+            )
+        self.ablation_kind = "optimization"
+        self.ablation_value = float(ablation_value)
+        self.ablation_label = str(ablation_label)
+        self.n1 = int(n1)
+        if self.n1 <= 0:
+            raise ValueError("`n1` must be a positive CRC-fold size.")
+        if not 0 < terminal_pi_min <= 1:
+            raise ValueError("`terminal_pi_min` must lie in (0, 1].")
+        if budget_candidate_count < 2:
+            raise ValueError("`budget_candidate_count` must be at least two.")
+        if not np.isfinite(row_cost_cap_multiplier) or row_cost_cap_multiplier <= 0:
+            raise ValueError(
+                "`row_cost_cap_multiplier` must be finite and positive."
+            )
+        super().__init__(budget_per_sample, taus_range, tau_prior)
+        self.conditional_grid = conditional_grid
+        self.m_upper_bound = int(m_upper_bound)
+        self.phase1_size = self.n1
+        self.budget_control_size = self.n1
+        self.budget_control_mode = "crc"
+        self.budget_candidate_count = int(budget_candidate_count)
+        self.row_cost_cap_multiplier = float(row_cost_cap_multiplier)
+        self.risk_candidate_row_cost_cap = min(
+            self.row_cost_cap_multiplier * float(budget_per_sample),
+            float(m_upper_bound),
+        )
+        self.terminal_pi_min = float(terminal_pi_min)
+        self.min_pi = self.terminal_pi_min
+        self.schedule_family = "constant"
+        self.reach_t_max_is_success = bool(reach_t_max_is_success)
+
+    @property
+    def name(self) -> str:
+        floor = _float_token(float(self.min_pi))
+        cap = _float_token(self.row_cost_cap_multiplier)
+        return (
+            "uniform_continuation_crc_ablation_optimization"
+            f"_floor_{floor}_row_cap_{cap}x_budget_v2_n1_{self.n1}"
+        )
+
+    def _cumulative_path(
+            self, core_probability: float, width: int
+    ) -> np.ndarray:
+        times = np.arange(1, width + 1, dtype=np.float64)
+        return self.min_pi + (1.0 - self.min_pi) * np.power(
+            float(core_probability), times
+        )
+
+    def _largest_capped_core_probability(self, width: int) -> float:
+        minimum_cost = float(self._cumulative_path(0.0, width).sum())
+        if minimum_cost > self.risk_candidate_row_cost_cap + 1e-12:
+            raise ValueError(
+                "The terminal reach floor alone exceeds the requested "
+                "candidate row-cost cap."
+            )
+        if width <= self.risk_candidate_row_cost_cap + 1e-12:
+            return 1.0
+        low, high = 0.0, 1.0
+        for _ in range(80):
+            middle = (low + high) / 2.0
+            if (
+                    self._cumulative_path(middle, width).sum()
+                    <= self.risk_candidate_row_cost_cap
+            ):
+                low = middle
+            else:
+                high = middle
+        return low
+
+    def allocate_budget(
+            self,
+            probability_est: torch.Tensor,
+            x: torch.Tensor,
+            t: torch.Tensor,
+            quantile_est: torch.Tensor,
+    ) -> BudgetAllocationResult:
+        del probability_est, x
+        device = self.conditional_grid.device
+        n_samples, width, _ = self.conditional_grid.shape
+        if self.n1 >= n_samples:
+            raise ValueError("The CRC fold must be smaller than the sample count.")
+        prior = get_prior(
+            quantile_est, self.taus_range, self.tau_prior
+        ).to(torch.long).clamp(min=1, max=width)
+        event_times = t.reshape(-1).to(torch.long)
+        active_lengths = torch.minimum(event_times, prior).clamp(
+            min=0, max=width
+        )
+
+        permutation = np.random.permutation(n_samples)
+        control_indices = permutation[:self.n1]
+        deployment_indices = permutation[self.n1:]
+        control_lengths = active_lengths[control_indices].detach().cpu().numpy()
+        deployment_lengths = active_lengths[
+            deployment_indices
+        ].detach().cpu().numpy()
+
+        maximum_core_probability = self._largest_capped_core_probability(
+            width
+        )
+        core_probabilities = np.linspace(
+            maximum_core_probability,
+            0.0,
+            self.budget_candidate_count,
+            dtype=np.float64,
+        )
+        cumulative_family = np.stack([
+            self._cumulative_path(probability, width)
+            for probability in core_probabilities
+        ])
+        control_candidate_costs = cumulative_policy_costs(
+            cumulative_family, control_lengths
+        )
+        maximum_candidate_cost = float(cumulative_family[0].sum())
+        selection = select_crc_budget_candidate(
+            control_candidate_costs,
+            control_lengths.astype(np.float64),
+            total_budget_after_policy_fit=(
+                float(self.budget_per_sample) * n_samples
+            ),
+            deployment_sample_count=len(deployment_indices),
+            maximum_cost_per_sample=float(width),
+            maximum_candidate_cost_per_sample=maximum_candidate_cost,
+            maximum_pilot_cost_per_sample=float(width),
+        )
+        selected_index = selection.selected_index
+        selected_core_probability = float(
+            core_probabilities[selected_index]
+        )
+        selected_cumulative = cumulative_family[selected_index]
+        previous_cumulative = np.concatenate([
+            np.ones(1, dtype=np.float64), selected_cumulative[:-1]
+        ])
+        selected_conditionals = np.clip(
+            selected_cumulative / previous_cumulative, 0.0, 1.0
+        )
+
+        deployment_count = len(deployment_indices)
+        expected_remaining = torch.ones(
+            (deployment_count, width),
+            dtype=self.conditional_grid.dtype,
+            device=device,
+        )
+        conditional_tensor = torch.as_tensor(
+            selected_conditionals, dtype=torch.float64, device=device
+        )
+
+        def deployment_policy(_):
+            return conditional_tensor.unsqueeze(0).expand(
+                deployment_count, -1
+            )
+
+        uniforms = self.get_acquisition_uniforms(
+            n_samples,
+            width,
+            device=device,
+            dtype=torch.float64,
+        )
+        deployment_uniforms = (
+            None if uniforms is None else uniforms[deployment_indices]
+        )
+        if uniforms is None:
+            self.reset_acquisition_rng()
+        deployment_c, deployment_pi, deployment_realized_cost = (
+            simulate_process_vectorized(
+                expected_remaining,
+                prior[deployment_indices],
+                event_times[deployment_indices],
+                selected_core_probability,
+                stochastic=True,
+                reach_t_max_is_success=self.reach_t_max_is_success,
+                pi_func=deployment_policy,
+                terminal_pi_min=None,
+                terminal_floor_mode="none",
+                uniforms=deployment_uniforms,
+            )
+        )
+
+        final_c = torch.empty(
+            n_samples, dtype=prior.dtype, device=device
+        )
+        final_c[control_indices] = prior[control_indices]
+        final_c[deployment_indices] = deployment_c.to(final_c.dtype)
+        final_pi = torch.empty(
+            n_samples, dtype=torch.float64, device=device
+        )
+        final_pi[control_indices] = 1.0
+        final_pi[deployment_indices] = deployment_pi.to(torch.float64)
+
+        control_pilot_cost = float(active_lengths[control_indices].sum().item())
+        deployment_expected_costs = cumulative_policy_costs(
+            selected_cumulative[None, :], deployment_lengths
+        )[:, 0]
+        deployment_expected_cost = float(deployment_expected_costs.sum())
+        total_expected_cost = control_pilot_cost + deployment_expected_cost
+        total_realized_cost = (
+            control_pilot_cost + float(deployment_realized_cost)
+        )
+        crc_rho = self.n1 / deployment_count
+        selected_control_costs = control_candidate_costs[:, selected_index]
+        metrics = {
+            "objective_kind": "uniform_continuation_no_optimization_crc",
+            "ablation_study": "dapro_optimization_process",
+            "ablation_kind": self.ablation_kind,
+            "ablation_value": self.ablation_value,
+            "ablation_label": self.ablation_label,
+            "ablation_n1": self.n1,
+            "ablation_crc_control_size": self.n1,
+            "ablation_uses_crc": 1,
+            "ablation_coefficient_kind": "none_no_objective_fit",
+            "ablation_support_kind": "uniform_row_time_policy",
+            "ablation_score_kind": "none",
+            "ablation_score_is_causal": 1,
+            "ablation_score_bin_count": np.nan,
+            "ablation_continuous_score_map": 0,
+            "ablation_row_cost_cap_multiplier": self.row_cost_cap_multiplier,
+            "ablation_row_cost_cap_applied": 1,
+            "policy_fit_label_count": 0,
+            "crc_control_sample_count": self.n1,
+            "optimization_process_enabled": 0,
+            "uniform_continuation_policy": 1,
+            "uniform_continuation_core_probability": (
+                selected_core_probability
+            ),
+            "uniform_continuation_terminal_reach_floor": self.min_pi,
+            "random_constant_continuation_probability": (
+                selected_core_probability
+            ),
+            "random_constant_probability": selected_core_probability,
+            "random_schedule_family": "constant",
+            "random_policy_uses_phase2_event_times": 0,
+            "terminal_pi_min": self.min_pi,
+            "phase1_sample_count": self.n1,
+            "phase2_sample_count": deployment_count,
+            "phase1_realized_cost_total": control_pilot_cost,
+            "phase1_realized_cost_per_sample": control_pilot_cost / self.n1,
+            "phase2_expected_cost_total": deployment_expected_cost,
+            "phase2_expected_cost_per_sample": (
+                deployment_expected_cost / deployment_count
+            ),
+            "phase2_realized_cost_per_sample": (
+                float(deployment_realized_cost) / deployment_count
+            ),
+            "risk_budget_control_enabled": 1,
+            "risk_budget_control_mode": "crc",
+            "risk_budget_control_size": self.n1,
+            "risk_budget_policy_fit_size": 0,
+            "risk_budget_candidate_count": self.budget_candidate_count,
+            "risk_budget_maximum_candidate_cost_per_sample": (
+                maximum_candidate_cost
+            ),
+            "risk_budget_maximum_pilot_cost_per_sample": float(width),
+            "risk_budget_selected_index": selected_index,
+            "risk_budget_selected_mixture_parameter": (
+                selected_core_probability
+            ),
+            "risk_budget_empirical_control_cost_per_sample": (
+                selection.empirical_expected_cost_per_sample
+            ),
+            "risk_budget_control_pilot_cost_total": control_pilot_cost,
+            "risk_budget_control_pilot_cost_per_sample": (
+                control_pilot_cost / self.n1
+            ),
+            "risk_budget_control_to_deployment_ratio": crc_rho,
+            "risk_budget_deployment_target_per_sample": (
+                selection.deployment_budget_per_sample
+            ),
+            "risk_budget_selector_left_side_per_sample": (
+                selection.selector_left_side_per_sample
+            ),
+            "risk_budget_correction_per_sample": (
+                selection.correction_per_sample
+            ),
+            "risk_budget_guarantee_kind": selection.guarantee_kind,
+            "risk_budget_selector_valid": int(
+                selection.selector_left_side_per_sample
+                <= selection.deployment_budget_per_sample + 1e-12
+            ),
+            "risk_budget_crc_empirical_combined_loss_per_sample": float(
+                selected_control_costs.mean()
+                + crc_rho * control_lengths.mean()
+            ),
+            "risk_budget_row_cost_cap_enabled": 1,
+            "risk_budget_row_cost_cap_per_sample": maximum_candidate_cost,
+            "risk_budget_row_cost_cap_kind": (
+                "fixed_uniform_continuation_family_horizon_cap"
+            ),
+            "budget_guarantee_kind": selection.guarantee_kind,
+            "expected_budget_guarantee_kind": selection.guarantee_kind,
+            **summarize_expected_budget(
+                total_expected_cost,
+                n_samples,
+                self.budget_per_sample,
+                cost_semantics=(
+                    "crc_control_full_plus_uniform_continuation_event_stopped"
+                ),
+            ),
+        }
+        all_conditionals = torch.ones(
+            (n_samples, width), dtype=torch.float64, device=device
+        )
+        all_conditionals[deployment_indices] = (
+            conditional_tensor.unsqueeze(0).expand(deployment_count, -1)
+        )
+        return BudgetAllocationResult(
+            quantile_est,
+            final_c,
+            final_pi,
+            total_budget_used=total_realized_cost,
+            mean_weight=float(final_pi.reciprocal().mean().item()),
+            max_weight=float(final_pi.reciprocal().max().item()),
+            additional_metrics=metrics,
+            candidate_C_probs=candidate_reach_probabilities(
+                all_conditionals,
+                quantile_est,
+                infinity_value=width + 1,
+            ),
+            continuation_probabilities=all_conditionals,
+        )
+
+
 __all__ = [
     "AblationHardPrefixCRCDAPRO", "AblationHardPrefixDAPRO",
     "AblationHardTargetCRCDAPRO", "AblationHardTargetDAPRO",
     "AblationSoftTerminalCRCDAPRO", "AblationSoftTerminalDAPRO",
     "AblationSoftTargetCRCDAPRO", "AblationSoftTargetDAPRO",
+    "AblationUniformContinuationCRCDAPRO",
 ]

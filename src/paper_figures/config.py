@@ -87,26 +87,30 @@ METHOD_COLORS = {
     "Oracle": "#555555",
 }
 
+# Paper cells are selected with task-level hyperparameters rather than
+# dataset-specific N1 tuning.  Within each task, every dataset at the same
+# budget uses the same N1; both Red-Team judge variants also share one budget.
+# UPB uses one target coverage for the entire benchmark matrix.
 RECOMMENDED_CONFIGURATIONS = {
     "lpb": {
         "autoif": RecommendedConfiguration(10.0, 50, 0.90),
         "hallucination3": RecommendedConfiguration(10.0, 50, 0.90),
-        "red_team_qwen_judge": RecommendedConfiguration(20.0, 50, 0.90),
-        "red_team_llama_guard": RecommendedConfiguration(20.0, 50, 0.90),
+        "red_team_qwen_judge": RecommendedConfiguration(10.0, 50, 0.90),
+        "red_team_llama_guard": RecommendedConfiguration(10.0, 50, 0.90),
         "toxicity": RecommendedConfiguration(20.0, 50, 0.90),
     },
     "upb": {
-        "autoif": RecommendedConfiguration(20.0, 50, 0.80),
-        "hallucination3": RecommendedConfiguration(20.0, 100, 0.80),
-        "red_team_qwen_judge": RecommendedConfiguration(20.0, 100, 0.80),
-        "red_team_llama_guard": RecommendedConfiguration(20.0, 100, 0.80),
-        "toxicity": RecommendedConfiguration(20.0, 100, 0.80),
+        "autoif": RecommendedConfiguration(20.0, 100, 0.70),
+        "hallucination3": RecommendedConfiguration(20.0, 100, 0.70),
+        "red_team_qwen_judge": RecommendedConfiguration(20.0, 100, 0.70),
+        "red_team_llama_guard": RecommendedConfiguration(20.0, 100, 0.70),
+        "toxicity": RecommendedConfiguration(20.0, 100, 0.70),
     },
     "metrics": {
-        "autoif": RecommendedConfiguration(20.0, 50),
+        "autoif": RecommendedConfiguration(20.0, 100),
         "hallucination3": RecommendedConfiguration(20.0, 100),
-        "red_team_qwen_judge": RecommendedConfiguration(20.0, 50),
-        "red_team_llama_guard": RecommendedConfiguration(20.0, 50),
-        "toxicity": RecommendedConfiguration(20.0, 50),
+        "red_team_qwen_judge": RecommendedConfiguration(20.0, 100),
+        "red_team_llama_guard": RecommendedConfiguration(20.0, 100),
+        "toxicity": RecommendedConfiguration(20.0, 100),
     },
 }

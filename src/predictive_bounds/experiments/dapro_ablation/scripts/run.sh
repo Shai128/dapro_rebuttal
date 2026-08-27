@@ -13,7 +13,9 @@
 # Canonical cells use soft-prefix coefficients, current hazard, K=2, global
 # regularization 0.001, raw margin 0, and the same capped CRC controller.  The
 # representation study alone varies K; the Cmax study alone varies the CRC
-# row-cost cap; every other study changes only its named x-axis factor.
+# row-cost cap; the optimization study adds a uniform-in-row-and-time
+# continuation family calibrated on an N1-row CRC-only fold; every other
+# study changes only its named x-axis factor.
 set -uo pipefail
 
 # ======================== EDITABLE CONFIGURATION ========================
@@ -138,7 +140,11 @@ run_metric_configuration() {
     --score-noise-seed 314159
     --seed-start "$SEED_START" --seed-end "$SEED_END"
   )
-  echo "[metric $kind | B=$budget | N1=$n1 | CRC=$control] estimating event rate"
+  if [[ "$kind" == "optimization" ]]; then
+    echo "[metric $kind | B=$budget | DAPRO N1=$n1/CRC=$control | Uniform CRC=$n1] estimating event rate"
+  else
+    echo "[metric $kind | B=$budget | N1=$n1 | CRC=$control] estimating event rate"
+  fi
   if ! run_module "metric_${kind}_b${budget}_n${n1}_estimate" src.evaluation.estimate "${common[@]}"; then
     echo "ERROR: metric estimation failed for $kind; merge skipped." >&2
     return 1
@@ -166,7 +172,11 @@ run_configuration() {
     --target-coverages 0.90 --definitive-dapro-margins 0.0
     --seed-start "$SEED_START" --seed-end "$SEED_END"
   )
-  echo "[$kind | B=$budget | N1=${n1_args[*]}] constructing 50-split LPB ablation"
+  if [[ "$kind" == "optimization" ]]; then
+    echo "[$kind | B=$budget | DAPRO N1=${n1_args[*]}/CRC=N1/2 | Uniform CRC=N1] constructing 50-split LPB ablation"
+  else
+    echo "[$kind | B=$budget | N1=${n1_args[*]}] constructing 50-split LPB ablation"
+  fi
   if ! run_module "${kind}_b${budget}_construct" src.predictive_bounds.construct_calibrated_bound "${common[@]}"; then
     echo "ERROR: construction failed for $kind/B=$budget; merge skipped." >&2
     return 1
@@ -239,6 +249,8 @@ submit "hard_soft" hard_soft 20 50 "${BASE_EXPERIMENT_SUFFIX}_hard_soft"
 submit "representation" representation 20 50 "${BASE_EXPERIMENT_SUFFIX}_representation"
 submit "score" score 20 50 "${BASE_EXPERIMENT_SUFFIX}_score"
 submit "cmax" cmax 20 50 "${BASE_EXPERIMENT_SUFFIX}_cmax"
+submit "optimization" optimization 20 50 \
+  "${BASE_EXPERIMENT_SUFFIX}_optimization"
 
 # Metric estimation: the same Toxicity/Qwen cache and paired outer splits.
 # Attacker shift is intentionally LPB-only. Every other factor includes
@@ -263,6 +275,9 @@ submit_metric "metric_score" score 20 \
 submit_metric "metric_cmax" cmax 20 \
   "$METRIC_DAPRO_N1" "$METRIC_CRC_CONTROL_SIZE" \
   "${METRIC_EXPERIMENT_SUFFIX}_cmax"
+submit_metric "metric_optimization" optimization 20 \
+  "$METRIC_DAPRO_N1" "$METRIC_CRC_CONTROL_SIZE" \
+  "${METRIC_EXPERIMENT_SUFFIX}_optimization"
 for i in "${!BUDGET_VALUES[@]}"; do
   submit "budget=${BUDGET_VALUES[$i]}" budget "${BUDGET_VALUES[$i]}" \
     "${BUDGET_N1_VALUES[$i]}" "${BASE_EXPERIMENT_SUFFIX}_budget"

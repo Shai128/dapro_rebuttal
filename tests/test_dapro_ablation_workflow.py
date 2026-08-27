@@ -14,6 +14,7 @@ from src.predictive_bounds.budget_allocators.dapro_ablation import (
     AblationHardTargetDAPRO,
     AblationSoftTerminalDAPRO,
     AblationSoftTargetDAPRO,
+    AblationUniformContinuationCRCDAPRO,
 )
 from src.predictive_bounds.experiments.dapro_ablation.summarize_paper import (
     _discover,
@@ -194,6 +195,8 @@ def test_server_launcher_exposes_slurm_cpu_and_parallel_controls():
     assert "metric_hard_soft" in script
     assert "metric_representation" in script
     assert "metric_cmax" in script
+    assert 'submit "optimization" optimization' in script
+    assert 'submit_metric "metric_optimization" optimization' in script
     assert 'submit "cmax" cmax' in script
     assert 'submit_metric "metric_budget=' in script
     assert '"${METRIC_EXPERIMENT_SUFFIX}_n1_n${metric_n1}"' in script
@@ -233,6 +236,7 @@ def test_additional_ablation_registry_has_static_and_paired_controllers():
         "score": 11,
         "cmax": 13,
         "attacker_shift": 3,
+        "optimization": 4,
     }
     for kind, expected in expected_sizes.items():
         methods = get_dapro_ablation_calibrations(
@@ -247,25 +251,37 @@ def test_additional_ablation_registry_has_static_and_paired_controllers():
         names = [method.name for method in methods]
         assert len(names) == expected
         assert len(names) == len(set(names))
-        assert sum("budget_crc" in name for name in names) == (expected - 1) // 2
+        expected_dapro_crc = 1 if kind == "optimization" else (expected - 1) // 2
+        expected_dapro_raw = 1 if kind == "optimization" else (expected - 1) // 2
+        assert sum("budget_crc" in name for name in names) == expected_dapro_crc
         assert sum("projection_margin_0p00" in name for name in names) == (
-            expected - 1
-        ) // 2
+            expected_dapro_raw
+        )
         allocators = [
             method.budget_allocator for method in methods
             if hasattr(method, "budget_allocator")
             and hasattr(method.budget_allocator, "ablation_kind")
         ]
+        dapro_allocators = [
+            a for a in allocators
+            if not isinstance(a, AblationUniformContinuationCRCDAPRO)
+        ]
         if kind != "representation":
-            assert all(a.score_bin_count == 2 for a in allocators)
+            assert all(a.score_bin_count == 2 for a in dapro_allocators)
         assert all(
             np.isclose(a.global_regularization, 0.001)
+            for a in dapro_allocators
+        )
+        assert all(
+            np.isclose(
+                getattr(a, "terminal_pi_min", getattr(a, "min_pi", np.nan)),
+                0.005,
+            )
             for a in allocators
         )
-        assert all(np.isclose(a.terminal_pi_min, 0.005) for a in allocators)
         assert all(
             a.budget_candidate_count == 401
-            for a in allocators if a.budget_control_mode == "crc"
+            for a in dapro_allocators if a.budget_control_mode == "crc"
         )
 
 
@@ -491,6 +507,7 @@ def test_metric_registry_uses_event_rate_target_and_paired_controllers():
         "hard_soft": 9,
         "representation": 11,
         "cmax": 13,
+        "optimization": 4,
     }
     for kind, expected in expected_sizes.items():
         allocators = get_metric_dapro_ablation_allocators(
@@ -499,10 +516,51 @@ def test_metric_registry_uses_event_rate_target_and_paired_controllers():
         )
         assert len(allocators) == expected
         assert len({allocator.name for allocator in allocators}) == expected
+        expected_crc = 2 if kind == "optimization" else (expected - 1) // 2
         assert sum(
             getattr(allocator, "budget_control_mode", None) == "crc"
             for allocator in allocators
-        ) == (expected - 1) // 2
+        ) == expected_crc
+
+
+def test_optimization_ablation_uniform_arm_uses_crc_only_fold_and_floor():
+    n, width, n1 = 40, 5, 8
+    grid = torch.ones(n, width, width, dtype=torch.float64)
+    taus = torch.tensor([0.10, 0.56], dtype=torch.float64)
+    allocators = get_metric_dapro_ablation_allocators(
+        grid, 4.0, taus, .56, width,
+        ablation_kind="optimization", dapro_n1=n1,
+        crc_control_size=n1 // 2,
+    )
+    uniform = next(
+        allocator for allocator in allocators
+        if isinstance(allocator, AblationUniformContinuationCRCDAPRO)
+    )
+    assert uniform.phase1_size == n1
+    assert uniform.min_pi == pytest.approx(0.005)
+    assert uniform.schedule_family == "constant"
+    assert uniform.budget_control_mode == "crc"
+
+    event_times = (torch.arange(n) % width + 1).to(torch.long)
+    quantiles = torch.full((n, len(taus)), width, dtype=torch.long)
+    uniform.set_acquisition_randomness(
+        seed=19,
+        uniforms=np.random.default_rng(19).random((n, width)),
+    )
+    np.random.seed(7)
+    result = uniform.allocate_budget(
+        torch.empty(n), torch.empty(n), event_times, quantiles
+    )
+    metrics = result.additional_metrics
+    assert metrics["policy_fit_label_count"] == 0
+    assert metrics["crc_control_sample_count"] == n1
+    assert metrics["ablation_crc_control_size"] == n1
+    assert metrics["optimization_process_enabled"] == 0
+    assert metrics["uniform_continuation_policy"] == 1
+    assert metrics["total_expected_budget_valid"] == 1
+    assert metrics["budget_guarantee_kind"] == (
+        "crc_marginal_expected_total_budget"
+    )
 
 
 def test_metric_current_hazard_matches_zero_noise_canonical_configuration():
