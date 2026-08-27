@@ -92,7 +92,7 @@ def main(argv=None):
         marker="o", ax=axis,
     )
     axis.set_xlabel("DAPRO Phase-I size")
-    axis.set_ylabel("Coverage variance (squared pp)")
+    axis.set_ylabel(r"Coverage variance (pp$^2$)")
     figure.tight_layout()
     figure.savefig(output_dir / "variance_by_n1.pdf", bbox_inches="tight")
     plt.close(figure)

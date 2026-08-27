@@ -46,25 +46,29 @@ BOUND_BOX_SPECS = (
     (
         "mean_weight",
         "mean_weight_boxplot.jpg",
-        r"Mean inverse-probability weight $1/\pi_i$",
+        "Mean inverse-probability weight\n"
+        r"$n^{-1}\sum_i 1/\pi_i$",
         True,
     ),
     (
         "mean_selected_a_weight",
         "mean_calibrated_a_weight_boxplot.jpg",
-        r"Mean selected-target weight $A_i(q_{\hat\tau})/\pi_i$",
+        "Mean weighted error\n"
+        r"$A_i(q_{\hat\tau})/\pi_i$",
         True,
     ),
     (
         "mean_prior_a_weight",
         "mean_prior_a_weight_boxplot.jpg",
-        r"Mean prior-target weight $A_i(q_{\tau_{prior}})/\pi_i$",
+        "Mean weighted error\n"
+        r"$A_i(q_{\tau_{\rm prior}})/\pi_i$",
         True,
     ),
     (
         "mean_tau_0p10_a_weight",
         "mean_tau_0p10_a_weight_boxplot.jpg",
-        r"Mean $\alpha=0.1$ target weight $A_i(q_{0.1})/\pi_i$",
+        "Mean weighted error\n"
+        r"$A_i(q_{0.1})/\pi_i$",
         True,
     ),
 )
@@ -144,7 +148,7 @@ def generate_bound_appendix_figures(
             dataset,
             metric="coverage_pct",
             output_path=variance_path,
-            ylabel="Coverage variance across splits (squared pp)",
+            ylabel=r"Coverage variance across splits (pp$^2$)",
             quality=quality,
             x_order=TARGET_MODEL_ORDER,
             method_order=METHOD_ORDER,

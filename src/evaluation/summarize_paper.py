@@ -11,6 +11,9 @@ if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
 from src.paper_figures.data import load_metric_paper_data  # noqa: E402
+from src.paper_figures.config import (  # noqa: E402
+    write_paper_configuration_summary,
+)
 from src.paper_figures.metrics import (  # noqa: E402
     generate_metric_appendix_figures,
     generate_metric_main_figures,
@@ -52,6 +55,9 @@ def main() -> None:
         frame,
         output_dir=args.figures_root / "paper" / "main",
         quality=args.quality,
+    )
+    write_paper_configuration_summary(
+        args.figures_root / "paper" / "experiment_configurations.txt"
     )
     generated = int(appendix["generated"].sum()) + int(
         main_manifest["generated"].sum()

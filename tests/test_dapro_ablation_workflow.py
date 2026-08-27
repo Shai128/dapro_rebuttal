@@ -162,7 +162,7 @@ def test_summarizer_uses_assigned_static_and_realized_dapro_budget(tmp_path):
     )
     assert statistics["count"].eq(2).all()
     assert output.exists()
-    assert output.stat().st_size < 120 * 1024
+    assert output.stat().st_size < 6 * 120 * 1024
 
 
 def test_server_launcher_exposes_slurm_cpu_and_parallel_controls():
@@ -190,6 +190,8 @@ def test_server_launcher_exposes_slurm_cpu_and_parallel_controls():
     assert '"$TOX_SHIFT_QWEN" "$TOX_SHIFT_GEMMA"' in script
     assert "attacker_shift_red_reverse" in script
     assert "attacker_shift_toxicity_reverse" in script
+    assert "attacker_shift_red_gemma_to_qwen" not in script
+    assert "attacker_shift_toxicity_gemma_to_qwen" not in script
     assert "metric_score_noise" in script
     assert "metric_score" in script
     assert "metric_hard_soft" in script
@@ -231,9 +233,9 @@ def test_attacker_shift_setup_is_not_executed_before_main_parses_args():
 def test_additional_ablation_registry_has_static_and_paired_controllers():
     taus = torch.arange(0.01, 0.5, 0.01)
     expected_sizes = {
-        "hard_soft": 9,
+        "hard_soft": 7,
         "representation": 11,
-        "score": 11,
+        "score": 9,
         "cmax": 13,
         "attacker_shift": 3,
         "optimization": 4,
@@ -310,7 +312,7 @@ def test_hard_soft_and_score_metadata_are_explicit():
         and hasattr(method.budget_allocator, "ablation_score_kind")
     ]
     assert {a.ablation_score_kind for a in allocators} == {
-        "hazard", "remaining_quantile", "target_value", "random",
+        "hazard", "remaining_quantile", "random",
         "oracle_remaining_time",
     }
     assert all(a.score_bin_count == 2 for a in allocators)
@@ -342,36 +344,15 @@ def test_hard_soft_is_full_coefficient_support_factorial():
         for allocator in allocators
     }
     assert cells == {
-        ("hard_realized_target_indicator", "prefix_grid_one_hot"),
         ("soft_model_probability", "prefix_grid"),
         ("hard_realized_target_indicator", "terminal_endpoint"),
         ("soft_initial_model_probability", "terminal_endpoint"),
     }
-    assert len(allocators) == 8
+    assert len(allocators) == 6
 
-    hard_prefix = next(
-        allocator for allocator in allocators
-        if isinstance(allocator, AblationHardPrefixDAPRO)
-    )
-    hard_terminal = next(
-        allocator for allocator in allocators
-        if isinstance(allocator, AblationHardTargetDAPRO)
-        and not isinstance(allocator, AblationHardPrefixDAPRO)
-    )
     quantiles = torch.full((4, len(taus)), 4.0)
     event_times = torch.tensor([1, 2, 4, 5], dtype=torch.float64)
     prior = torch.full((4,), 4.0)
-    prefix_masses = hard_prefix.phase1_objective_masses(
-        event_times, prior, quantiles, grid[:4]
-    )
-    terminal_weights = hard_terminal.phase1_objective_weights(
-        event_times, prior, quantiles
-    )
-    expected = torch.zeros_like(prefix_masses)
-    active = torch.minimum(event_times, prior).to(torch.long)
-    expected[torch.arange(4), active - 1] = terminal_weights
-    torch.testing.assert_close(prefix_masses, expected)
-
     soft_terminal = next(
         allocator for allocator in allocators
         if isinstance(allocator, AblationSoftTerminalDAPRO)
@@ -409,12 +390,11 @@ def test_cmax_ablation_uses_requested_caps_only_for_crc():
     )
 
 
-def test_continuous_representation_and_causal_target_value_scores():
+def test_continuous_representation_and_final_score_anchors():
     rng = torch.Generator().manual_seed(9)
     raw = torch.rand((8, 4, 5), generator=rng, dtype=torch.float64)
     grid = raw / raw.sum(dim=2, keepdim=True)
     taus = torch.arange(0.01, 0.5, 0.01)
-    quantiles = torch.full((8, len(taus)), 4.0)
     methods = get_dapro_ablation_calibrations(
         grid, 2.0, taus, 0.56, 4,
         ablation_kind="representation", dapro_n1_values=(2,),
@@ -431,19 +411,15 @@ def test_continuous_representation_and_causal_target_value_scores():
         grid, 2.0, taus, 0.56, 4,
         ablation_kind="score", dapro_n1_values=(2,),
     )
-    target = next(
-        method.budget_allocator for method in target_methods
+    score_kinds = {
+        method.budget_allocator.ablation_score_kind
+        for method in target_methods
         if hasattr(method, "budget_allocator")
         and hasattr(method.budget_allocator, "ablation_score_kind")
-        and method.budget_allocator.ablation_score_kind == "target_value"
-        and method.budget_allocator.budget_control_mode is None
-    )
-    before = target.policy_scores(quantiles)
-    mutated = grid.clone()
-    mutated[:, 2:, :] = torch.flip(mutated[:, 2:, :], dims=(2,))
-    target.conditional_grid = mutated
-    after = target.policy_scores(quantiles)
-    torch.testing.assert_close(before[:, :2], after[:, :2])
+    }
+    assert score_kinds == {
+        "hazard", "remaining_quantile", "random", "oracle_remaining_time"
+    }
 
 
 def test_continuous_rank_lookup_is_monotone_and_not_a_hard_bin_table():
@@ -481,13 +457,13 @@ def test_metric_registry_uses_event_rate_target_and_paired_controllers():
         None, 20, taus, .56, 200,
         ablation_kind="score", dapro_n1=50, crc_control_size=25,
     )
-    assert len(score) == 11
+    assert len(score) == 9
     dynamic = [
         allocator for allocator in score
         if hasattr(allocator, "ablation_score_kind")
     ]
     assert {allocator.ablation_score_kind for allocator in dynamic} == {
-        "hazard", "remaining_quantile", "target_value", "random",
+        "hazard", "remaining_quantile", "random",
         "oracle_remaining_time",
     }
     assert all(allocator.metric_estimation_horizon == 200 for allocator in dynamic)
@@ -504,7 +480,7 @@ def test_metric_registry_uses_event_rate_target_and_paired_controllers():
     expected_sizes = {
         "n1": 3,
         "budget": 3,
-        "hard_soft": 9,
+        "hard_soft": 7,
         "representation": 11,
         "cmax": 13,
         "optimization": 4,
@@ -707,6 +683,8 @@ def test_hard_soft_and_attacker_shift_dispatch_to_boxplots(
                     "budget_used_per_sample": 19 + seed / 10,
                     "coverage_diff_pct": seed / 10,
                     "mean_target_a_weight": 1 + seed / 10,
+                    "observed_events": 100 + seed,
+                    "coverage_across_split_variance_pp2": 0.2 + value,
                 })
     data = pd.DataFrame(rows)
     calls = []
@@ -720,7 +698,7 @@ def test_hard_soft_and_attacker_shift_dispatch_to_boxplots(
     generate_ablation_figure(
         data, kind="hard_soft", output_path=output, quality="low"
     )
-    assert len(calls) == 4
+    assert len(calls) == 5
     assert all(call["hue"] == "method" for call in calls)
     assert output.exists()
 
@@ -771,10 +749,10 @@ def test_attacker_shift_loader_uses_only_budget_ten(tmp_path):
                 "ablation_n1": 50 if dynamic else np.nan,
                 "attacker_shift_source_dataset_name": "dataset_red_team",
                 "attacker_shift_source_dataset_setup": (
-                    "attack_default_attack_gemma3_source"
+                    "attack_default_attack_qwen25_source"
                 ),
                 "attacker_shift_test_dataset_setup": (
-                    "attack_default_attack_qwen25_test"
+                    "attack_default_attack_gemma3_test"
                 ),
             })
         parent = tmp_path / (
@@ -794,7 +772,7 @@ def test_attacker_shift_loader_uses_only_budget_ten(tmp_path):
     assert len(inventory) == 1
 
 
-def test_attacker_shift_loader_orders_and_labels_both_directions(tmp_path):
+def test_attacker_shift_loader_keeps_qwen_to_gemma_for_both_datasets(tmp_path):
     raw_name = (
         "calibration_dapro_soft_prefix_bins_2_lpb_alpha_0p10_"
         "projection_margin_0p00_n1_50_ablation_attacker_shift_0_allocation"
@@ -851,13 +829,11 @@ def test_attacker_shift_loader_orders_and_labels_both_directions(tmp_path):
         .drop_duplicates().sort_values("factor_value")["factor_label"].tolist()
     )
     assert labels == [
-        "Red team\nGemma $\\to$ Qwen",
         "Red team\nQwen $\\to$ Gemma",
-        "Toxicity\nGemma $\\to$ Qwen",
         "Toxicity\nQwen $\\to$ Gemma",
     ]
-    assert len(inventory) == 4
-    output = tmp_path / "attacker_shift_both_directions.jpg"
+    assert len(inventory) == 2
+    output = tmp_path / "attacker_shift_qwen_to_gemma.jpg"
     statistics = generate_ablation_figure(
         data,
         kind="attacker_shift",

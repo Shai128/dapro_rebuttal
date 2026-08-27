@@ -66,8 +66,8 @@ BOX_METRICS = {
     "mean_a_weight": {
         "filename": "target-weight.jpg",
         "ylabel": (
-            r"Mean raw-HT target weight $A_i/\pi_i$ "
-            "(not AHT variance)"
+            "Mean weighted error\n"
+            r"$A_i/\pi_i$"
         ),
         "allocation_only": True,
         "exclude_oracle": True,
@@ -76,7 +76,10 @@ BOX_METRICS = {
     },
     "mean_prior_a_weighted_inverse_probability": {
         "filename": "prior-target-weight.jpg",
-        "ylabel": r"Mean prior-target weight $A_i(q_{\tau_{prior}})/\pi_i$",
+        "ylabel": (
+            "Mean weighted error\n"
+            r"$A_i(q_{\tau_{\rm prior}})/\pi_i$"
+        ),
         "allocation_only": True,
         "exclude_oracle": True,
         "log_scale": True,
@@ -84,7 +87,10 @@ BOX_METRICS = {
     },
     "mean_tau_0p10_a_weighted_inverse_probability": {
         "filename": "tau-0p10-target-weight.jpg",
-        "ylabel": r"Mean $\alpha=0.1$ target weight $A_i(q_{0.1})/\pi_i$",
+        "ylabel": (
+            "Mean weighted error\n"
+            r"$A_i(q_{0.1})/\pi_i$"
+        ),
         "allocation_only": True,
         "exclude_oracle": True,
         "log_scale": True,
@@ -92,7 +98,7 @@ BOX_METRICS = {
     },
     "estimated_conditional_variance_upb_coverage_estimator": {
         "filename": "upb-estimator-conditional-variance.jpg",
-        "ylabel": "UPB estimator conditional variance (squared pp)",
+        "ylabel": r"UPB estimator conditional variance (pp$^2$)",
         "allocation_only": True,
         "log_scale": True,
         "group": "core",
@@ -1014,7 +1020,7 @@ def _plot_coverage_variance(
         errorbar=None,
         ax=axis,
     )
-    _style_axis(axis, "Coverage variance (squared pp)")
+    _style_axis(axis, r"Coverage variance (pp$^2$)")
     dataset_name = str(variance["dataset_display"].iloc[0])
     context = ""
     if "plot_context" in frame:

@@ -66,10 +66,10 @@ METRICS = {
     "estimated_cjr": "Estimated unsafe-event rate (%)",
     "abs_diff_cjr": "Absolute unsafe-event-rate error (pp)",
     "conditional_variance_unsafe_event_rate_estimator_pp2": (
-        "Exact conditional acquisition variance of event rate (squared pp)"
+        r"Exact conditional acquisition variance of event rate (pp$^2$)"
     ),
     "estimated_conditional_variance_unsafe_event_rate_estimator_pp2": (
-        "Observed-only event-rate variance estimate (squared pp)"
+        r"Observed-only event-rate variance estimate (pp$^2$)"
     ),
     "estimated_rmttu": "Historical mean event time conditional on event",
     "abs_diff_rmttu": "Absolute conditional-event-time error",
@@ -92,7 +92,8 @@ METRICS = {
     ),
     "mean_weight": "Mean inverse-probability weight",
     "mean_metric_target_a_weighted_inverse_probability": (
-        r"Mean metric-target weight $A_i/\pi_i$"
+        "Mean weighted error\n"
+        r"$A_i/\pi_i$"
     ),
     "num_events_observed": "Number of unsafe events observed",
     "metric_a_weighted_effective_sample_size": (

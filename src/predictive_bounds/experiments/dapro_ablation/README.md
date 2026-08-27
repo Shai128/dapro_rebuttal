@@ -14,17 +14,17 @@ recorded and does not cancel the remaining configurations. Each construction
 job is merged immediately.
 
 The main LPB studies use Toxicity/Qwen2.5-14B, target coverage 90%, budget 20,
-and `N1=50`, except for the pre-existing N1 and budget sweeps and the
+and total adaptive-calibration size
+`|I_cal1|+|I_crc|=50`, except for the sample-size and budget sweeps and the
 attacker-shift studies, which use budget 10:
 
-- the four coefficient/support cells: hard-prefix, soft-prefix,
-  hard-terminal, and soft-terminal;
+- three distinct optimization objectives: soft-prefix, hard-terminal, and
+  soft-terminal (hard-prefix is omitted because it equals hard-terminal);
 - `K=1,2,4,8` quantile-bin maps and a continuous monotone four-knot rank map;
-- current hazard, remaining-time quantile, causal target value, random rank,
-  and a clearly tagged noncausal oracle remaining-time score;
-- Gemma-to-Qwen and Qwen-to-Gemma attacker shifts for Red Team and Toxicity
-  at `B=10`;
-- the existing N1, score-noise, and budget sweeps;
+- estimated current event probability, estimated remaining-time quantile,
+  random rank, and a clearly tagged noncausal oracle remaining-time score;
+- Qwen-to-Gemma attacker shifts for Red Team and Toxicity at `B=10`;
+- the existing sample-size, score-noise, and budget sweeps;
 - the CRC row-cost cap at `0.1B, 0.5B, B, 2B, 5B, 10B`, capped at the
   executable horizon 200.
 
@@ -36,28 +36,24 @@ unchanged and repeated as a horizontal no-CRC control across that sweep.
 
 The score study fixes the paper-wide `K=2` representation and the controller
 within each raw/CRC comparison.
-“Remaining-time quantile” is the inverse conditional median number of turns
-remaining (larger means a predicted earlier event). “Causal target value” is
-the current-prefix probability
-`P(t < T < q_alpha(X) | T > t, X_it)`. The random anchor independently
+“Est. remaining-time quantile” is the inverse conditional median number of
+turns remaining (larger means a predicted earlier event). The random anchor independently
 permutes the hazard ranks at every time. The oracle anchor uses the latent
 target indicator divided by true remaining time and is therefore explicitly
 noncausal.
 
 The same launcher runs every applicable ablation for event-rate metric
-estimation on the same Toxicity/Qwen2.5-14B setup. This includes N1, budget,
-score noise, the four coefficient/support cells, representation, named score,
+estimation on the same Toxicity/Qwen2.5-14B setup. This includes sample size,
+budget, score noise, the three distinct objectives, representation, score,
 and Cmax. Attacker shift remains LPB-only. Default cells use the recommended
-`B=20`, `N1=50`, and CRC control size 25; N1 and budget studies vary their
-named factor and use a half-N1 control fold.
-Metric N1 cells are written to one merged directory per N1, preventing
+`B=20`, total adaptive-calibration size 50, and CRC control size 25; sample-
+size and budget studies vary their named factor and use a half-size control
+fold. Metric sample-size cells are written to one merged directory per size, preventing
 parallel Slurm jobs from racing on a shared CSV; the summarizer combines those
 directories automatically.
 
-For metrics, the DAPRO objective and causal target-value score both use the
-event-rate target `A_i = 1{T_i <= 200}`. Thus the target-value score is
-`P(t < T <= 200 | T > t, X_it)`, rather than the LPB-specific
-`P(t < T < q_alpha(X) | T > t, X_it)`. The oracle remaining-time score uses
+For metrics, the DAPRO objective uses the event-rate target
+`A_i = 1{T_i <= 200}`. The oracle remaining-time score uses
 the latent realization and is retained only as a nondeployable upper-quality
 anchor. Every metric factor cell again contains Static, raw zero-margin DAPRO,
 and DAPRO+CRC.
@@ -75,18 +71,21 @@ Generate the paper figures with:
 
 ```bash
 python -m src.predictive_bounds.experiments.dapro_ablation.summarize_paper \
-  --quality low
+  --quality high
 ```
 
 This generates both task families by default. Use `--tasks lpb` or
 `--tasks metric` to generate only one. Metric outputs are
 named `dapro_metric_<kind>_ablation.jpg`; each reports the event-rate estimate,
 absolute error, variance over the random calibration/test splits, budget,
-observed events, and mean metric Target-A inverse-propensity weight.
+observed events, and mean weighted error.
 
 The standard four-panel figure reports coverage, realized DAPRO budget
 (assigned/static truncation budget for Static), absolute coverage deviation,
-and the selected-target mean inverse-propensity weight. The representation
+and the selected-target mean weighted error. The sample-
+size, score-noise, budget, optimization-objective, representation, and
+optimization-process figures additionally report coverage variance and the
+number of observed events. The representation
 study additionally writes LPB and metric representation-diagnostic figures
 containing the Phase-I fitted objective, Phase-II target-weight objective, and
 the relevant estimator variance across random splits. The summarizer writes

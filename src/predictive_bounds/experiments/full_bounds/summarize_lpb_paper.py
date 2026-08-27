@@ -15,6 +15,9 @@ from src.paper_figures.bounds import (  # noqa: E402
     generate_lpb_main_figures,
 )
 from src.paper_figures.data import load_bound_paper_data  # noqa: E402
+from src.paper_figures.config import (  # noqa: E402
+    write_paper_configuration_summary,
+)
 
 
 def _parse_args() -> argparse.Namespace:
@@ -53,6 +56,9 @@ def main() -> None:
         frame,
         output_dir=args.figures_root / "paper" / "main",
         quality=args.quality,
+    )
+    write_paper_configuration_summary(
+        args.figures_root / "paper" / "experiment_configurations.txt"
     )
     generated = int(appendix["generated"].sum()) + int(
         main_manifest["generated"].sum()

@@ -54,7 +54,8 @@ METRIC_BOX_SPECS = (
     (
         "mean_metric_a_weight",
         "mean_a_weight_boxplot.jpg",
-        r"Mean metric-target weight $A_i/\pi_i$",
+        "Mean weighted error\n"
+        r"$A_i/\pi_i$",
         ("Uncalibrated", "Oracle"),
         None,
     ),
@@ -64,12 +65,12 @@ METRIC_VARIANCE_SPECS = (
     (
         "estimated_cjr",
         "estimated_cjr_variance_barplot.jpg",
-        "Event-rate estimator variance (squared pp)",
+        r"Event-rate estimator variance (pp$^2$)",
     ),
     (
         "estimated_restricted_mean",
         "estimated_rmttu_variance_barplot.jpg",
-        "Restricted-mean estimator variance (turns squared)",
+        "Restricted-mean estimator variance\n(turns squared)",
     ),
 )
 

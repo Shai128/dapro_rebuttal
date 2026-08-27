@@ -183,10 +183,6 @@ def get_dapro_ablation_calibrations(
     elif kind == "hard_soft":
         configurations = [
             dict(
-                n1=n1_values[0], value=0.0, label="Hard prefix",
-                variant="hard_prefix",
-            ),
-            dict(
                 n1=n1_values[0], value=1.0, label="Soft prefix",
                 variant="soft_prefix",
             ),
@@ -217,7 +213,6 @@ def get_dapro_ablation_calibrations(
             for index, (score_kind, label) in enumerate([
                 ("hazard", "Current hazard"),
                 ("remaining_quantile", "Remaining-time quantile"),
-                ("target_value", "Causal target value"),
                 ("random", "Random"),
                 ("oracle_remaining_time", "Oracle remaining time"),
             ])
@@ -232,11 +227,7 @@ def get_dapro_ablation_calibrations(
         configurations = [
             dict(
                 n1=n1_values[0], value=multiplier,
-                label=(
-                    f"Cmax={m_upper_bound:g}"
-                    if np.isclose(multiplier, maximum_multiplier)
-                    else f"Cmax={multiplier:g}B"
-                ),
+                label=f"{multiplier:g}B",
                 cap_multiplier=multiplier,
             )
             for multiplier in multipliers
@@ -354,9 +345,10 @@ def get_metric_dapro_ablation_allocators(
     These allocators optimize the event-rate target
     ``A_i = 1{T_i <= m_upper_bound}``. Each study retains the canonical
     soft-prefix, current-hazard, two-bin policy except for the component named
-    by that study. The hard/soft study is the explicit four-cell
-    coefficient-by-support comparison, and the representation study alone
-    varies the number/form of score-map bins.
+    by that study. The hard/soft study compares soft prefix, hard terminal,
+    and soft terminal; the redundant hard-prefix cell is omitted because it
+    equals hard terminal. The representation study alone varies the
+    number/form of score-map bins.
     """
     kind = str(ablation_kind).lower()
     if kind not in {
@@ -407,7 +399,6 @@ def get_metric_dapro_ablation_allocators(
             for index, (score_kind, label) in enumerate([
                 ("hazard", "Current hazard"),
                 ("remaining_quantile", "Remaining-time quantile"),
-                ("target_value", "Causal event-rate target value"),
                 ("random", "Random"),
                 ("oracle_remaining_time", "Oracle remaining time"),
             ])
@@ -422,11 +413,6 @@ def get_metric_dapro_ablation_allocators(
         ]
     elif kind == "hard_soft":
         configurations = [
-            dict(
-                value=0.0, label="Hard prefix", score_kind="hazard",
-                noise=0.0, bins=CANONICAL_DAPRO_SCORE_BIN_COUNT,
-                variant="hard_prefix",
-            ),
             dict(
                 value=1.0, label="Soft prefix", score_kind="hazard",
                 noise=0.0, bins=CANONICAL_DAPRO_SCORE_BIN_COUNT,
@@ -466,11 +452,7 @@ def get_metric_dapro_ablation_allocators(
         configurations = [
             dict(
                 value=multiplier,
-                label=(
-                    f"Cmax={m_upper_bound:g}"
-                    if np.isclose(multiplier, maximum_multiplier)
-                    else f"Cmax={multiplier:g}B"
-                ),
+                label=f"{multiplier:g}B",
                 score_kind="hazard", noise=0.0,
                 bins=CANONICAL_DAPRO_SCORE_BIN_COUNT,
                 cap_multiplier=multiplier,

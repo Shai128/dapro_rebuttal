@@ -19,7 +19,10 @@ if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
 from src.paper_figures.common import save_jpeg  # noqa: E402
-from src.paper_figures.config import METHOD_COLORS  # noqa: E402
+from src.paper_figures.config import (  # noqa: E402
+    METHOD_COLORS,
+    write_paper_configuration_summary,
+)
 from src.predictive_bounds.experiments.full_bounds.config import (  # noqa: E402
     method_display_name,
 )
@@ -35,36 +38,41 @@ ABLATION_METHOD_COLORS = {
 }
 ATTACKER_SHIFT_BUDGET = 10.0
 SCORE_DISPLAY_LABELS = {
-    "Current hazard": "Current\nhazard",
-    "Remaining-time quantile": "Remaining-time\nquantile",
-    "Causal target value": "Causal target\nvalue",
-    "Causal event-rate target value": "Causal target\nvalue",
+    "Current hazard": "Est. current event\nprobability",
+    "Remaining-time quantile": "Est. remaining-time\nquantile",
     "Random": "Random",
     "Oracle remaining time": "Oracle remaining\ntime",
 }
 FACTOR_SPECS = {
     "n1": {
-        "xlabel": r"Phase-I sample size $N_1$",
-        "title": r"Phase-I sample-size ablation",
+        "xlabel": (
+            "Total adaptive-calibration size\n"
+            r"$|\mathcal{I}_{\rm cal1}|+|\mathcal{I}_{\rm crc}|$"
+        ),
+        "title": r"Adaptive-calibration sample-size ablation",
     },
     "score_noise": {
         "xlabel": r"Score-noise strength $\lambda$",
         "title": r"Score-quality ablation",
     },
     "budget": {
-        "xlabel": r"Target budget per sample (paired $N_1$ shown)",
+        "xlabel": (
+            "Target budget per sample\n"
+            r"(parentheses: $|\mathcal{I}_{\rm cal1}|+"
+            r"|\mathcal{I}_{\rm crc}|$)"
+        ),
         "title": r"Budget ablation",
     },
     "hard_soft": {
-        "xlabel": "Target coefficient",
-        "title": "Hard-vs-soft target ablation",
+        "xlabel": "Optimization objective",
+        "title": "Optimization-objective ablation",
     },
     "representation": {
         "xlabel": "Score-map representation",
         "title": "Representation-capacity ablation",
     },
     "score": {
-        "xlabel": "Score definition",
+        "xlabel": "Score function",
         "title": "Score-function ablation",
     },
     "cmax": {
@@ -72,11 +80,11 @@ FACTOR_SPECS = {
         "title": r"CRC row-cost-cap ablation",
     },
     "optimization": {
-        "xlabel": "Policy construction",
+        "xlabel": "",
         "title": "Optimization-process ablation",
     },
     "attacker_shift": {
-        "xlabel": "Calibration attacker to test attacker",
+        "xlabel": r"Calibration attacker $\rightarrow$ test attacker",
         "title": "Attacker-shift ablation",
     },
 }
@@ -123,6 +131,7 @@ SOURCE_COLUMNS = {
     "oracle_cjr",
     "full_benchmark_cjr",
     "abs_diff_cjr",
+    "n_observed_events",
     "num_events_observed",
     "mean_metric_target_a_weighted_inverse_probability",
     "conditional_variance_unsafe_event_rate_estimator",
@@ -201,6 +210,40 @@ def _method_order(kind: str) -> tuple[str, ...]:
     )
 
 
+def _filter_requested_factor_levels(
+        frame: pd.DataFrame, *, kind: str) -> pd.DataFrame:
+    """Remove redundant or intentionally omitted paper-ablation levels."""
+    selected = frame.copy()
+    if kind == "hard_soft":
+        # The realized hard prefix collapses algebraically to the hard
+        # terminal objective, so displaying both would duplicate one cell.
+        selected = selected[
+            ~selected["ablation_label"].astype(str).str.casefold().eq(
+                "hard prefix"
+            )
+        ]
+    elif kind == "score":
+        # The causal target-value construction is omitted from the final
+        # score-function comparison; the current-event probability,
+        # remaining-time estimate, random anchor, and oracle anchor provide
+        # the clean model-quality progression used in the paper.
+        selected = selected[
+            ~selected["ablation_score_kind"].astype(str).eq("target_value")
+        ]
+    elif kind == "attacker_shift":
+        source = selected["attacker_shift_source_dataset_setup"].astype(
+            str
+        ).str.lower()
+        target = selected["attacker_shift_test_dataset_setup"].astype(
+            str
+        ).str.lower()
+        selected = selected[
+            source.str.contains("attack_qwen25", regex=False)
+            & target.str.contains("attack_gemma3", regex=False)
+        ]
+    return selected.copy()
+
+
 def _attacker_name(dataset_setup: object) -> str:
     """Return the attacker family encoded in an experiment setup string."""
     setup = str(dataset_setup).lower()
@@ -276,6 +319,9 @@ def load_ablation_data(
         dynamic_rows = dynamic_rows[
             dynamic_rows["ablation_kind"].astype(str).eq(kind)
         ]
+        dynamic_rows = _filter_requested_factor_levels(
+            dynamic_rows, kind=kind
+        )
         # Do not silently combine pre-standardization K4/regularization-zero
         # files with the canonical paper ablations.  Representation is the
         # sole study allowed to vary K.
@@ -411,6 +457,9 @@ def load_ablation_data(
         "mean_calibrated_a_weighted_inverse_probability",
         "mean_a_weighted_inverse_probability",
     )
+    data["observed_events"] = pd.to_numeric(
+        data["n_observed_events"], errors="coerce"
+    )
     data["phase1_objective"] = _first_available(
         data,
         "soft_mass_phase1_raw_policy_fit_mean_variance_proxy",
@@ -429,7 +478,7 @@ def load_ablation_data(
         n1_label = pd.to_numeric(
             data["ablation_n1"], errors="coerce"
         ).round().astype("Int64").astype(str)
-        data["factor_label"] = budget_label + "\n" + r"($N_1$=" + n1_label + ")"
+        data["factor_label"] = budget_label + "\n(" + n1_label + ")"
     elif kind in {
             "hard_soft", "representation", "score", "cmax",
             "optimization",
@@ -444,6 +493,14 @@ def load_ablation_data(
             data["factor_label"] = data["factor_label"].replace(
                 SCORE_DISPLAY_LABELS
             )
+        elif kind == "cmax":
+            data["factor_label"] = data["factor_value"].map(
+                lambda value: rf"${value:g}\bar B$"
+            )
+        elif kind == "optimization":
+            # There is one policy-construction comparison; methods are the
+            # hue, not separate x-axis cells.
+            data["factor_label"] = " "
     elif kind == "attacker_shift":
         dynamic_labels = data[~data["method"].eq("Static")].copy()
         dynamic_labels["label"] = dynamic_labels.apply(
@@ -490,6 +547,9 @@ def load_metric_ablation_data(
             ~frame["method"].eq("Static")
             & frame["ablation_kind"].astype(str).eq(kind)
         ].copy()
+        dynamic_rows = _filter_requested_factor_levels(
+            dynamic_rows, kind=kind
+        )
         dapro_rows = dynamic_rows["method"].isin(
             {"DAPRO", "DAPRO w/o CRC"}
         )
@@ -622,7 +682,7 @@ def load_metric_ablation_data(
             data["ablation_n1"], errors="coerce"
         ).round().astype("Int64").astype(str)
         data["factor_label"] = (
-            budget_label + "\n" + r"($N_1$=" + n1_label + ")"
+            budget_label + "\n(" + n1_label + ")"
         )
     elif kind in {
             "hard_soft", "representation", "score", "cmax",
@@ -641,6 +701,12 @@ def load_metric_ablation_data(
             data["factor_label"] = data["factor_label"].replace(
                 SCORE_DISPLAY_LABELS
             )
+        elif kind == "cmax":
+            data["factor_label"] = data["factor_value"].map(
+                lambda value: rf"${value:g}\bar B$"
+            )
+        elif kind == "optimization":
+            data["factor_label"] = " "
     else:
         data["factor_label"] = data["factor_value"].map(
             lambda value: f"{value:g}"
@@ -741,15 +807,15 @@ def _draw_line(
         else values
     )
     axis.set_xticks(tick_positions)
-    tick_labels = (
-        [f"{value:g}" for value in values]
-        if xlabel.startswith("Target budget")
-        else [labels.get(value, f"{value:g}") for value in values]
+    tick_labels = [labels.get(value, f"{value:g}") for value in values]
+    rotate_labels = (
+        (len(values) >= 5 and not xlabel.startswith("Target budget"))
+        or xlabel == "Score function"
     )
     axis.set_xticklabels(
         tick_labels,
-        rotation=18 if len(values) >= 5 and not xlabel.startswith("Target budget") else 0,
-        ha="right" if len(values) >= 5 and not xlabel.startswith("Target budget") else "center",
+        rotation=18 if rotate_labels else 0,
+        ha="right" if rotate_labels else "center",
     )
     _style(axis, xlabel=xlabel, ylabel=ylabel)
     return statistics
@@ -771,8 +837,7 @@ def generate_ablation_figure(
         )
     spec = FACTOR_SPECS[kind]
     values = sorted(data["factor_value"].dropna().unique())
-    figure, axes = plt.subplots(2, 2, figsize=(11.2, 7.1))
-    panels = (
+    base_panels = (
         ("coverage_pct", "Coverage Rate", "Coverage rate (%)"),
         (
             "budget_used_per_sample",
@@ -786,9 +851,37 @@ def generate_ablation_figure(
         ),
         (
             "mean_target_a_weight",
-            "Mean Target-A Weight",
-            r"Mean selected-target weight $A_i(q_{\hat\tau})/\pi_i$",
+            "Mean Weighted Error",
+            "Mean weighted error\n"
+            r"$A_i(q_{\hat\tau})/\pi_i$",
         ),
+    )
+    extended = kind in {"n1", "score_noise", "budget", "representation"}
+    panels = (
+        (
+            ("coverage_pct", "Coverage Rate", "Coverage rate (%)"),
+            (
+                "coverage_across_split_variance_pp2",
+                "Coverage Variance",
+                r"Across-split coverage variance (pp$^2$)",
+            ),
+            (
+                "budget_used_per_sample", "Budget Used per Sample",
+                "Budget Used per Sample",
+            ),
+            (
+                "observed_events", "Observed Events",
+                "Number of observed events",
+            ),
+            base_panels[2],
+            base_panels[3],
+        )
+        if extended else base_panels
+    )
+    figure, axes = plt.subplots(
+        3 if extended else 2,
+        2,
+        figsize=(11.4, 10.2 if extended else 7.1),
     )
     all_statistics = []
     for axis, (metric, panel_title, ylabel) in zip(axes.flat, panels):
@@ -799,7 +892,7 @@ def generate_ablation_figure(
             ylabel=ylabel,
             xlabel=str(spec["xlabel"]),
             values=values,
-            categorical_spacing=kind == "cmax",
+            categorical_spacing=kind in {"cmax", "score"},
         )
         statistics["metric"] = metric
         all_statistics.append(statistics)
@@ -827,7 +920,9 @@ def generate_ablation_figure(
         fontsize=9,
         title_fontsize=9,
     )
-    for axis in (axes.flat[0], axes.flat[2], axes.flat[3]):
+    for axis in axes.flat:
+        if axis is axes.flat[1]:
+            continue
         legend = axis.get_legend()
         if legend is not None:
             legend.remove()
@@ -836,28 +931,10 @@ def generate_ablation_figure(
         y=0.995,
         fontsize=13,
     )
-    bottom = 0.075 if kind == "budget" else 0.02
-    if kind == "budget":
-        mapping = (
-            data[["factor_value", "ablation_n1"]]
-            .dropna()
-            .drop_duplicates("factor_value")
-            .sort_values("factor_value")
-        )
-        mapping_text = ", ".join(
-            f"{row.factor_value:g}$\\to${int(row.ablation_n1)}"
-            for row in mapping.itertuples(index=False)
-        )
-        figure.text(
-            0.5,
-            0.012,
-            r"Paired budget $\to N_1$: " + mapping_text,
-            ha="center",
-            va="bottom",
-            fontsize=8.5,
-        )
-    figure.tight_layout(rect=(0.0, bottom, 1.0, 0.97), h_pad=2.0, w_pad=1.7)
-    save_jpeg(figure, output_path, quality)
+    figure.tight_layout(rect=(0.0, 0.02, 1.0, 0.97), h_pad=2.0, w_pad=1.7)
+    save_jpeg(
+        figure, output_path, quality, tight=False, panel_count=len(panels)
+    )
     plt.close(figure)
     return pd.concat(all_statistics, ignore_index=True)
 
@@ -887,12 +964,23 @@ def generate_categorical_box_figure(
     plot_data["factor_label"] = plot_data["factor_value"].map(labels)
     order = [labels.get(value, f"{value:g}") for value in values]
     optimization = kind == "optimization"
+    if optimization:
+        # All four policies belong to one comparison cell.  The x-axis does
+        # not encode a factor here; policy identity is represented only by
+        # hue.  Static was paired to both dynamic factor values by the loader,
+        # so retain one copy per split before collapsing the category.
+        plot_data = plot_data.drop_duplicates(
+            ["source_file", "seed", "method"], keep="first"
+        ).copy()
+        plot_data["factor_label"] = " "
+        order = [" "]
+    extended = kind in {"hard_soft", "optimization"}
     figure, axes = plt.subplots(
-        3 if optimization else 2,
+        3 if extended else 2,
         2,
-        figsize=(11.2, 9.8 if optimization else 7.1),
+        figsize=(11.4, 10.2 if extended else 7.1),
     )
-    panels = [
+    base_panels = [
         ("coverage_pct", "Coverage Rate", "Coverage rate (%)"),
         (
             "budget_used_per_sample", "Budget Used per Sample",
@@ -903,16 +991,29 @@ def generate_categorical_box_figure(
             "|Coverage - target| (pp)",
         ),
         (
-            "mean_target_a_weight", "Mean Target-A Weight",
-            r"Mean selected-target weight $A_i(q_{\hat\tau})/\pi_i$",
+            "mean_target_a_weight", "Mean Weighted Error",
+            "Mean weighted error\n"
+            r"$A_i(q_{\hat\tau})/\pi_i$",
         ),
     ]
-    if optimization:
-        panels.insert(1, (
-            "coverage_across_split_variance_pp2",
-            "Variance of Coverage Rate",
-            r"Across-split coverage variance (pp$^2$)",
-        ))
+    panels = (
+        [
+            base_panels[0],
+            (
+                "coverage_across_split_variance_pp2",
+                "Coverage Variance",
+                r"Across-split coverage variance (pp$^2$)",
+            ),
+            base_panels[1],
+            (
+                "observed_events", "Observed Events",
+                "Number of observed events",
+            ),
+            base_panels[2],
+            base_panels[3],
+        ]
+        if extended else base_panels
+    )
     all_statistics = []
     for axis, (metric, panel_title, ylabel) in zip(axes.flat, panels):
         panel = plot_data.dropna(subset=["factor_label", "method", metric])
@@ -959,6 +1060,8 @@ def generate_categorical_box_figure(
         _style(axis, xlabel=str(spec["xlabel"]), ylabel=ylabel)
         axis.set_title(panel_title, fontsize=11)
         axis.tick_params(axis="x", labelrotation=0)
+        if optimization:
+            axis.set_xticks([])
         statistics = summarize_line_statistics(data, metric=metric)
         statistics["metric"] = metric
         all_statistics.append(statistics)
@@ -1006,18 +1109,11 @@ def generate_categorical_box_figure(
         legend = axis.get_legend()
         if legend is not None:
             legend.remove()
-    budget_note = (
-        f", $B={ATTACKER_SHIFT_BUDGET:g}$"
-        if kind == "attacker_shift"
-        else ""
-    )
-    figure.suptitle(
-        f"{spec['title']} (50 random calibration/test splits{budget_note})",
-        y=0.995,
-        fontsize=13,
-    )
+    figure.suptitle(str(spec["title"]), y=0.995, fontsize=13)
     figure.tight_layout(rect=(0.0, 0.02, 1.0, 0.97), h_pad=2.0, w_pad=1.7)
-    save_jpeg(figure, output_path, quality)
+    save_jpeg(
+        figure, output_path, quality, tight=False, panel_count=len(panels)
+    )
     plt.close(figure)
     return pd.concat(all_statistics, ignore_index=True)
 
@@ -1039,7 +1135,7 @@ def generate_metric_ablation_figure(
         )
     spec = FACTOR_SPECS[kind]
     values = sorted(data["factor_value"].dropna().unique())
-    figure, axes = plt.subplots(3, 2, figsize=(11.2, 10.0))
+    figure, axes = plt.subplots(3, 2, figsize=(11.4, 10.2))
     panels = (
         ("event_rate_pct", "Estimated Event Rate", "Event rate (%)"),
         (
@@ -1057,8 +1153,9 @@ def generate_metric_ablation_figure(
         ),
         ("observed_events", "Observed Events", "Number of observed events"),
         (
-            "mean_target_a_weight", "Mean Metric Target-A Weight",
-            r"Mean $\mathbf{1}\{T_i\leq M\}/\pi_i$",
+            "mean_target_a_weight", "Mean Weighted Error",
+            "Mean weighted error\n"
+            r"$A_i/\pi_i$",
         ),
     )
     all_statistics = []
@@ -1070,7 +1167,7 @@ def generate_metric_ablation_figure(
             ylabel=ylabel,
             xlabel=str(spec["xlabel"]),
             values=values,
-            categorical_spacing=kind == "cmax",
+            categorical_spacing=kind in {"cmax", "score"},
         )
         statistics["metric"] = metric
         all_statistics.append(statistics)
@@ -1111,19 +1208,15 @@ def generate_metric_ablation_figure(
         legend = axis.get_legend()
         if legend is not None:
             legend.remove()
-    representation_note = (
-        "representation varied"
-        if kind == "representation"
-        else "all score maps use $K=2$"
-    )
     figure.suptitle(
-        "Metric " + str(spec["title"]).lower()
-        + f" ({representation_note}; mean $\\pm$ 1 SD across splits)",
+        str(spec["title"]) + " (mean $\\pm$ 1 SD across splits)",
         y=0.995,
         fontsize=13,
     )
     figure.tight_layout(rect=(0.0, 0.015, 1.0, 0.975), h_pad=2.0, w_pad=1.8)
-    save_jpeg(figure, output_path, quality)
+    save_jpeg(
+        figure, output_path, quality, tight=False, panel_count=len(panels)
+    )
     plt.close(figure)
     return pd.concat(all_statistics, ignore_index=True)
 
@@ -1135,7 +1228,7 @@ def generate_metric_categorical_box_figure(
         output_path: Path,
         quality: str,
 ) -> pd.DataFrame:
-    """Paper-style metric boxplots for the four coefficient/support cells."""
+    """Paper-style metric boxplots for categorical ablation cells."""
     if kind not in {"hard_soft", "optimization"}:
         raise ValueError(
             "Categorical metric ablations support hard_soft and optimization."
@@ -1151,6 +1244,13 @@ def generate_metric_categorical_box_figure(
     order = [labels.get(value, f"{value:g}") for value in values]
     plot_data = data.copy()
     plot_data["factor_label"] = plot_data["factor_value"].map(labels)
+    optimization = kind == "optimization"
+    if optimization:
+        plot_data = plot_data.drop_duplicates(
+            ["source_file", "seed", "method"], keep="first"
+        ).copy()
+        plot_data["factor_label"] = " "
+        order = [" "]
     figure, axes = plt.subplots(3, 2, figsize=(11.4, 10.2))
     panels = (
         ("event_rate_pct", "Estimated Event Rate", "Event rate (%)"),
@@ -1169,8 +1269,9 @@ def generate_metric_categorical_box_figure(
         ),
         ("observed_events", "Observed Events", "Number of observed events"),
         (
-            "mean_target_a_weight", "Mean Metric Target-A Weight",
-            r"Mean $\mathbf{1}\{T_i\leq M\}/\pi_i$",
+            "mean_target_a_weight", "Mean Weighted Error",
+            "Mean weighted error\n"
+            r"$A_i/\pi_i$",
         ),
     )
     all_statistics = []
@@ -1227,6 +1328,8 @@ def generate_metric_categorical_box_figure(
         _style(axis, xlabel=str(spec["xlabel"]), ylabel=ylabel)
         axis.set_title(panel_title, fontsize=11)
         axis.tick_params(axis="x", labelrotation=12)
+        if optimization:
+            axis.set_xticks([])
         statistics = summarize_line_statistics(data, metric=metric)
         statistics["metric"] = metric
         all_statistics.append(statistics)
@@ -1259,15 +1362,16 @@ def generate_metric_categorical_box_figure(
         if legend is not None:
             legend.remove()
     figure.suptitle(
-        "Metric " + str(spec["title"]).lower()
-        + " (50 random calibration/test splits)",
+        str(spec["title"]),
         y=0.995,
         fontsize=13,
     )
     figure.tight_layout(
         rect=(0.0, 0.015, 1.0, 0.975), h_pad=2.0, w_pad=1.8
     )
-    save_jpeg(figure, output_path, quality)
+    save_jpeg(
+        figure, output_path, quality, tight=False, panel_count=len(panels)
+    )
     plt.close(figure)
     return pd.concat(all_statistics, ignore_index=True)
 
@@ -1290,8 +1394,9 @@ def generate_representation_diagnostics(
         ),
         (
             axes[1], "phase2_target_weight_objective",
-            "Phase-II Target-Weight Objective",
-            r"Mean $A_i(1/\pi_i-1)$",
+            "Phase-II Weighted-Error Objective",
+            "Mean weighted-error proxy\n"
+            r"$A_i(1/\pi_i-1)$",
         ),
     ):
         statistics = _draw_line(
@@ -1335,7 +1440,9 @@ def generate_representation_diagnostics(
     axes[2].set_title("Coverage Variance")
     axes[1].legend(title="Method", loc="best", fontsize=8, framealpha=.9)
     figure.tight_layout(w_pad=1.5)
-    save_jpeg(figure, output_path, quality)
+    save_jpeg(
+        figure, output_path, quality, tight=False, panel_count=3
+    )
     plt.close(figure)
     output.append(variance)
     return pd.concat(output, ignore_index=True, sort=False)
@@ -1359,8 +1466,9 @@ def generate_metric_representation_diagnostics(
         ),
         (
             axes[1], "phase2_target_weight_objective",
-            "Phase-II Target-Weight Objective",
-            r"Mean $A_i(1/\pi_i-1)$",
+            "Phase-II Weighted-Error Objective",
+            "Mean weighted-error proxy\n"
+            r"$A_i(1/\pi_i-1)$",
         ),
     ):
         statistics = _draw_line(
@@ -1406,7 +1514,9 @@ def generate_metric_representation_diagnostics(
     axes[2].set_title("Event-Rate Variance")
     axes[1].legend(title="Method", loc="best", fontsize=8, framealpha=.9)
     figure.tight_layout(w_pad=1.5)
-    save_jpeg(figure, output_path, quality)
+    save_jpeg(
+        figure, output_path, quality, tight=False, panel_count=3
+    )
     plt.close(figure)
     output.append(variance)
     return pd.concat(output, ignore_index=True, sort=False)
@@ -1461,6 +1571,9 @@ def _parse_args() -> argparse.Namespace:
 def main() -> None:
     args = _parse_args()
     args.output_dir.mkdir(parents=True, exist_ok=True)
+    write_paper_configuration_summary(
+        args.output_dir.parent / "experiment_configurations.txt"
+    )
     generated_count = 0
     if "lpb" in args.tasks:
         for kind in args.kinds:

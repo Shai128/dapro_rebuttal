@@ -286,17 +286,9 @@ for i in "${!BUDGET_VALUES[@]}"; do
     "${BUDGET_VALUES[$i]}" "$metric_n1" "$((metric_n1 / 2))" \
     "${METRIC_EXPERIMENT_SUFFIX}_budget"
 done
-run_shift_configuration "red_gemma_to_qwen" "dataset_red_team" "$RED_SHIFT_GEMMA" "$RED_SHIFT_QWEN" \
-  "${BASE_EXPERIMENT_SUFFIX}_attacker_shift_red" &
-PIDS+=("$!"); LABELS+=("attacker_shift_red_gemma_to_qwen")
-if (( ${#PIDS[@]} >= PARALLEL_JOBS )); then wait_batch; fi
 run_shift_configuration "red_qwen_to_gemma" "dataset_red_team" "$RED_SHIFT_QWEN" "$RED_SHIFT_GEMMA" \
   "${BASE_EXPERIMENT_SUFFIX}_attacker_shift_red_reverse" &
 PIDS+=("$!"); LABELS+=("attacker_shift_red_qwen_to_gemma")
-if (( ${#PIDS[@]} >= PARALLEL_JOBS )); then wait_batch; fi
-run_shift_configuration "toxicity_gemma_to_qwen" "dataset_toxicity" "$TOX_SHIFT_GEMMA" "$TOX_SHIFT_QWEN" \
-  "${BASE_EXPERIMENT_SUFFIX}_attacker_shift_toxicity" &
-PIDS+=("$!"); LABELS+=("attacker_shift_toxicity_gemma_to_qwen")
 if (( ${#PIDS[@]} >= PARALLEL_JOBS )); then wait_batch; fi
 run_shift_configuration "toxicity_qwen_to_gemma" "dataset_toxicity" "$TOX_SHIFT_QWEN" "$TOX_SHIFT_GEMMA" \
   "${BASE_EXPERIMENT_SUFFIX}_attacker_shift_toxicity_reverse" &

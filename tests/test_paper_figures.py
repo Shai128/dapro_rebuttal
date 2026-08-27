@@ -25,9 +25,9 @@ def test_recommended_paper_cells_match_final_table():
     assert RECOMMENDED_CONFIGURATIONS["lpb"]["autoif"].budget_per_sample == 10
     assert RECOMMENDED_CONFIGURATIONS["lpb"]["toxicity"].n1 == 50
     assert RECOMMENDED_CONFIGURATIONS["lpb"]["red_team_qwen_judge"].budget_per_sample == 10
-    assert RECOMMENDED_CONFIGURATIONS["upb"]["autoif"].target_coverage == 0.70
-    assert RECOMMENDED_CONFIGURATIONS["upb"]["autoif"].n1 == 100
-    assert RECOMMENDED_CONFIGURATIONS["upb"]["hallucination3"].n1 == 100
+    assert RECOMMENDED_CONFIGURATIONS["upb"]["autoif"].target_coverage == 0.80
+    assert RECOMMENDED_CONFIGURATIONS["upb"]["autoif"].n1 == 200
+    assert RECOMMENDED_CONFIGURATIONS["upb"]["hallucination3"].n1 == 200
     assert RECOMMENDED_CONFIGURATIONS["metrics"]["autoif"].n1 == 100
     assert RECOMMENDED_CONFIGURATIONS["metrics"]["hallucination3"].n1 == 100
 
@@ -50,7 +50,7 @@ def test_paper_cells_use_common_task_level_hyperparameters():
         recommendation.target_coverage
         for recommendation in RECOMMENDED_CONFIGURATIONS["upb"].values()
     }
-    assert upb_coverages == {0.70}
+    assert upb_coverages == {0.80}
 
 
 def test_legacy_ordinary_ht_columns_reconstruct_exact_restricted_mean():

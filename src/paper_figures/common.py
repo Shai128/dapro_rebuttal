@@ -33,8 +33,18 @@ def save_jpeg(
     quality: str,
     *,
     tight: bool = True,
+    panel_count: int = 1,
 ) -> None:
-    """Save a paper-ready JPEG, aggressively compressing low-quality output."""
+    """Save a paper-ready JPEG with an area-aware preview resolution.
+
+    ``panel_count`` scales the low-quality pixel and byte budgets with the
+    amount of information in the canvas.  Multiplying DPI by the number of
+    panels would scale the total pixel count quadratically; instead, the
+    multi-panel canvas itself supplies most of the extra area and we apply a
+    modest DPI increase for readable draft exports.  High-quality exports are
+    always written at the publication-standard 300 DPI.
+    """
+    panel_count = max(1, int(panel_count))
     path.parent.mkdir(parents=True, exist_ok=True)
     bbox_inches = "tight" if tight else None
     pad_inches = 0.16 if tight else 0.0
@@ -49,16 +59,18 @@ def save_jpeg(
         )
         return
 
+    preview_dpi = min(240, 120 + 20 * (panel_count - 1))
+    maximum_bytes = LOW_QUALITY_MAX_BYTES * panel_count
     figure.savefig(
         path,
         format="jpg",
-        dpi=120,
+        dpi=preview_dpi,
         bbox_inches=bbox_inches,
         pad_inches=pad_inches,
         pil_kwargs={"quality": 78, "optimize": True, "progressive": True},
     )
     jpeg_quality = 76
-    while path.stat().st_size > LOW_QUALITY_MAX_BYTES:
+    while path.stat().st_size > maximum_bytes:
         with Image.open(path) as opened:
             image = opened.convert("RGB")
             if jpeg_quality < 48:
@@ -77,8 +89,11 @@ def save_jpeg(
                 progressive=True,
             )
         jpeg_quality -= 8
-        if jpeg_quality < 30 and path.stat().st_size > LOW_QUALITY_MAX_BYTES:
-            raise RuntimeError(f"Could not compress {path} below 120 KiB.")
+        if jpeg_quality < 30 and path.stat().st_size > maximum_bytes:
+            raise RuntimeError(
+                f"Could not compress {path} below "
+                f"{maximum_bytes // 1024} KiB."
+            )
 
 
 def _style_axis(
@@ -118,9 +133,12 @@ def _legend_outside(
             labels,
             title="Method",
             loc="center left",
-            bbox_to_anchor=(0.985, 0.5),
+            # Keep the legend inside a fixed reserved column.  This makes
+            # every exported diagnostic exactly the same pixel size instead
+            # of allowing a tight bounding box to grow with label length.
+            bbox_to_anchor=(0.785, 0.5),
             frameon=False,
-            ncol=1 if columns <= 3 else 2,
+            ncol=1,
             fontsize=8.8 * font_scale,
             title_fontsize=9.2 * font_scale,
         )
@@ -260,8 +278,14 @@ def plot_grouped_boxplot(
         )
     elif axis.legend_ is not None:
         axis.legend_.remove()
-    figure.tight_layout(rect=(0, 0, 0.83 if show_legend else 1, 1))
-    save_jpeg(figure, output_path, quality)
+    compact = figsize[0] < 5.0
+    figure.subplots_adjust(
+        left=0.255 if compact else 0.19,
+        right=(0.76 if show_legend else 0.97),
+        bottom=0.21 if compact else 0.18,
+        top=0.95,
+    )
+    save_jpeg(figure, output_path, quality, tight=False)
     plt.close(figure)
     return True
 
@@ -339,8 +363,14 @@ def plot_grouped_variance(
         )
     elif axis.legend_ is not None:
         axis.legend_.remove()
-    figure.tight_layout(rect=(0, 0, 0.83 if show_legend else 1, 1))
-    save_jpeg(figure, output_path, quality)
+    compact = figsize[0] < 5.0
+    figure.subplots_adjust(
+        left=0.255 if compact else 0.19,
+        right=(0.76 if show_legend else 0.97),
+        bottom=0.21 if compact else 0.18,
+        top=0.95,
+    )
+    save_jpeg(figure, output_path, quality, tight=False)
     plt.close(figure)
     return True, variance
 
