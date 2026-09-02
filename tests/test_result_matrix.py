@@ -37,7 +37,7 @@ def test_parse_metric_budget_n1_matrix_path():
     result = parse_metric_result(path)
 
     assert result is not None
-    assert result.dataset_display == "Red Team (Llama-Guard)"
+    assert result.dataset_display == "Red-Team (Llama-Guard)"
     assert result.budget_per_sample == 20
     assert result.dapro_n1 == 50
     assert result.crc_control_size == 25

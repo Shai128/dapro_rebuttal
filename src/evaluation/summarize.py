@@ -19,6 +19,13 @@ import numpy as np
 import pandas as pd
 import seaborn as sns
 
+from src.paper_figures.common import (
+    FULL_DATA_REFERENCE_COLOR,
+    FULL_DATA_REFERENCE_LINESTYLE,
+    TARGET_REFERENCE_COLOR,
+    TARGET_REFERENCE_LINESTYLE,
+)
+
 from src.evaluation.result_matrix import (
     METHOD_COLORS,
     METHOD_ORDER,
@@ -219,7 +226,7 @@ def _oracle_reference(frame: pd.DataFrame, metric: str) -> float:
         raise ValueError(f"No finite full-budget oracle value for {metric}.")
     if not np.allclose(values, values.iloc[0], rtol=1e-10, atol=1e-10):
         raise ValueError(
-            f"Full-benchmark reference values vary across seeds for {metric}: "
+            f"Full-data reference values vary across seeds for {metric}: "
             f"{values.tolist()}"
         )
     return float(values.iloc[0])
@@ -273,10 +280,10 @@ def _plot_metric(
         reference = _oracle_reference(frame, metric)
         axis.axhline(
             reference,
-            color="#c62828",
-            linestyle="--",
+            color=FULL_DATA_REFERENCE_COLOR,
+            linestyle=FULL_DATA_REFERENCE_LINESTYLE,
             linewidth=1.8,
-            label=f"Full-benchmark truth ({reference:.4g})",
+            label=f"Full-data value ({reference:.4g})",
         )
     elif metric in TARGET_BUDGET_REFERENCE_METRICS:
         target = pd.to_numeric(frame["target_budget"], errors="coerce").dropna()
@@ -284,8 +291,8 @@ def _plot_metric(
             raise ValueError("Expected one configured target budget.")
         axis.axhline(
             float(target.iloc[0]),
-            color="#c62828",
-            linestyle="--",
+            color=TARGET_REFERENCE_COLOR,
+            linestyle=TARGET_REFERENCE_LINESTYLE,
             linewidth=1.8,
             label=f"Target budget ({target.iloc[0]:g})",
         )
@@ -560,16 +567,16 @@ def _plot_grouped_metric(
             if not np.allclose(
                     values, values.iloc[0], rtol=1e-10, atol=1e-10):
                 raise ValueError(
-                    f"Full-benchmark {metric} varies across seeds for {target}.")
+                    f"Full-data {metric} varies across seeds for {target}.")
             axis.hlines(
                 float(values.iloc[0]),
                 target_index - 0.42,
                 target_index + 0.42,
-                color="#c62828",
-                linestyle="--",
+                color=FULL_DATA_REFERENCE_COLOR,
+                linestyle=FULL_DATA_REFERENCE_LINESTYLE,
                 linewidth=1.8,
                 zorder=5,
-                label="Full-benchmark truth" if target_index == 0 else None,
+                label="Full-data value" if target_index == 0 else None,
             )
     elif metric in TARGET_BUDGET_REFERENCE_METRICS:
         targets = pd.to_numeric(
@@ -580,8 +587,8 @@ def _plot_grouped_metric(
         target_budget = float(targets.iloc[0])
         axis.axhline(
             target_budget,
-            color="#c62828",
-            linestyle="--",
+            color=TARGET_REFERENCE_COLOR,
+            linestyle=TARGET_REFERENCE_LINESTYLE,
             linewidth=1.8,
             zorder=5,
             label=f"Target budget ({target_budget:g})",
@@ -625,7 +632,7 @@ def _plot_grouped_variance(
         output_path: Path,
         quality: str,
 ) -> pd.DataFrame:
-    """Plot sample variance across random calibration/test splits."""
+    """Plot the sample variance over repeated calibration/test partitions."""
     plot_frame = frame.copy()
     plot_frame = plot_frame[
         plot_frame["method_display"].isin(INCLUDED_DISPLAY_METHODS)
@@ -650,7 +657,7 @@ def _plot_grouped_variance(
     )
     if variance.empty:
         raise ValueError(
-            f"No variance across random splits is available for {metric}."
+            f"No repeated-partition variance is available for {metric}."
         )
 
     target_order = list(dict.fromkeys(plot_frame["target_model"]))
@@ -678,9 +685,7 @@ def _plot_grouped_variance(
     if not positive.empty and positive.max() / positive.min() >= 1_000:
         axis.set_yscale("log")
     axis.set_xlabel("Target model")
-    axis.set_ylabel(
-        f"Variance across random calibration/test splits of {ylabel.lower()}"
-    )
+    axis.set_ylabel(f"Variance of {ylabel.lower()}")
     axis.grid(axis="y", linestyle=":", linewidth=0.8, alpha=0.55)
     axis.set_axisbelow(True)
     axis.spines["top"].set_visible(False)
@@ -688,8 +693,7 @@ def _plot_grouped_variance(
     dataset = str(frame["dataset_display"].iloc[0])
     context = str(frame["plot_context"].iloc[0])
     figure.suptitle(
-        f"{dataset}: variance across random calibration/test splits of "
-        f"{ylabel.lower()} ({context})",
+        f"{dataset}: variance of {ylabel.lower()} ({context})",
         y=0.995,
     )
     handles, labels = axis.get_legend_handles_labels()

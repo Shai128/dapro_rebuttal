@@ -1,0 +1,61 @@
+% Concise pseudocode for the current LPB implementation of DAPRO.
+
+\begin{algorithm}[htbp]
+\caption{Dynamic Allocation via PRojected Optimization (\textbf{\ttmethod})}
+\label{alg:main_alg}
+\small
+\begin{algorithmic}[1]
+\REQUIRE Calibration prompts \(\Dcal=\{X_i\}_{i=1}^{N}\), prior bounds
+\(\{\qprior(X_i)\}_{i=1}^{N}\), horizon \(\maxl\), total budget \(B\), score
+functions \(\{\mathcal S_t\}_{t=1}^{\maxl}\), and optional CRC control.
+
+\STATE Randomly partition \(\calI\) into \(\calIone,\calIcrc,\calItwo\);
+set \(\calIcrc=\emptyset\) when CRC is disabled.
+\FOR{\(i\in\calIone\cup\calIcrc\)}
+    \STATE Observe until the event or \(\qprior(X_i)\); set
+    \(b_i\gets\min\{T_i,\qprior(X_i)\}\) and compute
+    \(S_i(t)=\mathcal S_t(H_i(t))\) for \(t\leq b_i\).
+\ENDFOR
+\STATE Require \(B\geq\sum_{i\in\calIone\cup\calIcrc}b_i\) and set
+\(\Bbar\gets(B-\sum_{i\in\calIone}b_i)/(|\calIcrc|+|\calItwo|)\).
+
+\STATE \textbf{Phase I: learn and budget-calibrate the policy.}
+\STATE Using only \(\calIone\), form Eq.~\eqref{eq:lpb_impl_soft_mass}, solve
+Eq.~\eqref{eq:opt_prob}, fit the monotone score map, and apply
+Eq.~\eqref{eq:lpb_impl_cumulative_correction} to obtain \(M^{\rm base}\).
+\IF{CRC is enabled}
+    \STATE Build the frozen capped family in
+    Eqs.~\eqref{eq:lpb_impl_shared_envelope}--\eqref{eq:lpb_impl_crc_family},
+    evaluate its costs on \(\calIcrc\), and select \(\widehat\lambda\) by
+    Eq.~\eqref{eq:dapro_main_crc_selector}.
+    \STATE Set the deployed policy to
+    \(M_t(S(1{:}t))\gets M_t(S(1{:}t);\widehat\lambda)\) from
+    Eq.~\eqref{eq:lpb_impl_crc_family}.
+\ELSE
+    \STATE Set \(M\gets M^{\rm base}\).
+\ENDIF
+
+\STATE \textbf{Phase II: acquire interactions adaptively.}
+\FOR{\(i\in\calItwo\)}
+    \STATE Initialize \(t\gets1\) and \(t_i^{\rm stop}\gets0\).
+    \WHILE{\(t\leq\qprior(X_i)\)}
+        \STATE Compute \(S_i(t)\), obtain \(P_i(t)\) from the frozen causal
+        policy \(M_t(S_i(1{:}t))\), and draw
+        \(Z_i(t)\sim\operatorname{Bern}(P_i(t))\).
+        \IF{\(Z_i(t)=0\)} \STATE \textbf{break}. \ENDIF
+        \STATE Acquire turn \(t\) and set \(t_i^{\rm stop}\gets t\); if the
+        event occurs, \textbf{break}; otherwise set \(t\gets t+1\).
+    \ENDWHILE
+    \STATE Set \(C_i\gets\qprior(X_i)\) if the event or prior was reached;
+    otherwise set \(C_i\gets t_i^{\rm stop}\).
+    \STATE Set the inclusion weight
+    \(w(i)\gets\{\prod_{t=1}^{\min\{T_i,\qprior(X_i)\}}P_i(t)\}^{-1}\).
+\ENDFOR
+\FOR{\(i\in\calIone\cup\calIcrc\)}
+    \STATE Set \(C_i\gets\qprior(X_i)\) and \(w(i)\gets1\).
+\ENDFOR
+\STATE Set \(\widetilde T_i\gets\min\{T_i,C_i\}\) for all \(i\in\calI\).
+\RETURN \(\{\widetilde T_i,C_i,w(i)\}_{i\in\calI}\) for
+Algorithm~\ref{alg:lpb_construct}.
+\end{algorithmic}
+\end{algorithm}

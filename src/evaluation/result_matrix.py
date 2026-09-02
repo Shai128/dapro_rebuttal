@@ -66,8 +66,8 @@ class MatrixResult:
             "toxicity": "Toxicity",
             "autoif": "AutoIF",
             "hallucination3": "Hallucination",
-            "red_team_llama_guard": "Red Team (Llama-Guard)",
-            "red_team_qwen_judge": "Red Team (Qwen judge)",
+            "red_team_llama_guard": "Red-Team (Llama-Guard)",
+            "red_team_qwen_judge": "Red-Team (Qwen judge)",
         }
         return labels.get(self.dataset_key, self.dataset_key.replace("_", " ").title())
 

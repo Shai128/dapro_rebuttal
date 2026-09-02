@@ -22,7 +22,7 @@ method/N1/controller configuration.
   error from 90%, mean bound value, and expected budget.
 - UPB: the same quantities separately at 70%, 80%, and 90% coverage, plus the
   exact conditional variance of the estimator actually used.
-- Metrics: MSE relative to the fixed full-benchmark value for both unsafe-event
+- Metrics: MSE relative to the fixed full-data value for both unsafe-event
   rate and the implemented event-time ratio.  Ratios are normalized to Static
   inside each dataset/model/budget cell.  The joint score is the worse of the
   two normalized MSE ratios, preventing one metric from hiding failure on the
@@ -177,15 +177,15 @@ at the expense of another.
 |---|---|---:|---:|---:|
 | LPB | AutoIF | 10 | 90% | 50 |
 | LPB | Hallucination3 | 10 | 90% | 50 |
-| LPB | Red team | 20 | 90% | 50 |
+| LPB | Red-Team | 20 | 90% | 50 |
 | LPB | Toxicity | 20 | 90% | 50 |
 | UPB | AutoIF | 20 | 80% | 50 |
 | UPB | Hallucination3 | 20 | 80% | 100 |
-| UPB | Red team | 20 | 80% | 100 |
+| UPB | Red-Team | 20 | 80% | 100 |
 | UPB | Toxicity | 20 | 80% | 100 |
 | Metrics | AutoIF | 20 | n/a | 50 |
 | Metrics | Hallucination3 | 20 | n/a | 100 |
-| Metrics | Red team | 20 | n/a | 50 |
+| Metrics | Red-Team | 20 | n/a | 50 |
 | Metrics | Toxicity | 20 | n/a | 50 |
 
 The UPB target is not an ordinary tuning parameter: 70%, 80%, and 90% define
@@ -194,7 +194,7 @@ as a common main-paper operating point, with 70% and 90% retained as sensitivity
 analyses.  Selecting a different target for each dataset because it happens to
 have lower empirical variance would be outcome-dependent estimand selection.
 At 80%, the selected configurations' mean rates of the sentinel value 201 are
-55.6% (AutoIF), 0.45% (Hallucination3), 26.2% (Red team), and 49.6% (Toxicity),
+55.6% (AutoIF), 0.45% (Hallucination3), 26.2% (Red-Team), and 49.6% (Toxicity),
 which must accompany the variance result because lower variance can arise from
 an increasingly degenerate upper bound.
 
@@ -205,7 +205,7 @@ budget 20 are:
 |---|---:|---:|---:|
 | AutoIF | 50 | 50 | 50 |
 | Hallucination3 | 200 | 100 | 200 |
-| Red team | 200 | 100 | 100 |
+| Red-Team | 200 | 100 | 100 |
 | Toxicity | 100 | 100 | 50 |
 
 AutoIF LPB at budget 10 versus 20 is a near tie: budget 10 has the lower mean

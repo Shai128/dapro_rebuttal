@@ -49,16 +49,16 @@ def main() -> None:
     appendix = generate_bound_appendix_figures(
         frame,
         task="lpb",
-        output_dir=args.figures_root / "paper" / "full" / "lpb",
+        output_dir=args.figures_root / "full" / "lpb",
         quality=args.quality,
     )
     main_manifest = generate_lpb_main_figures(
         frame,
-        output_dir=args.figures_root / "paper" / "main",
+        output_dir=args.figures_root / "main",
         quality=args.quality,
     )
     write_paper_configuration_summary(
-        args.figures_root / "paper" / "experiment_configurations.txt"
+        args.figures_root / "experiment_configurations.txt"
     )
     generated = int(appendix["generated"].sum()) + int(
         main_manifest["generated"].sum()

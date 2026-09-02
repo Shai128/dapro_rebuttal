@@ -59,11 +59,11 @@ def main() -> None:
     main_manifest = generate_autoif_main_figures(
         lpb_frame,
         frame,
-        output_dir=args.figures_root / "paper" / "main",
+        output_dir=args.figures_root / "main",
         quality=args.quality,
     )
     write_paper_configuration_summary(
-        args.figures_root / "paper" / "experiment_configurations.txt"
+        args.figures_root / "experiment_configurations.txt"
     )
     print(
         f"UPB: generated {int(main_manifest['generated'].sum())}/"

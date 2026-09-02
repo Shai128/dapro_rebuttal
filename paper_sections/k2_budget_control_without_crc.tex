@@ -834,7 +834,7 @@ $23.57$ and maxima near $30$.
 We next kept the soft-prefix target, hazard score, median K2 table, and DAPRO
 optimizer fixed and changed only the budget controller.  The screening study
 used four real setups, five matched splits, and $N_1=50$.  Budgets were $20$
-for toxicity, red team, and AutoIF and $10$ for hallucination.  The metric
+for toxicity, Red-Team, and AutoIF and $10$ for hallucination.  The metric
 results averaged over setups were:
 \begin{center}
 \begin{tabular}{lrrrr}
@@ -855,7 +855,7 @@ theorem is marginal over its independent control draw, so $85\%$ is not a
 violation of that theorem.  The online controller's mean absolute log-change
 to an active K2 probability was only $0.003$--$0.007$.  It was best on the
 hallucination and AutoIF screens, while raw no-CRC was best on toxicity and
-CRC was best on red team; the small study does not establish universal
+CRC was best on Red-Team; the small study does not establish universal
 dominance.
 
 For a sharper design check, we froze three toxicity and three red-team
@@ -864,7 +864,7 @@ were $6.58$ and $8.16$ squared percentage points; the means of the unbiased
 estimator~\eqref{eq:k2bc_online_variance} were $6.97$ and $10.18$.  The
 agreement is consistent with fifty-draw Monte Carlo error.  The corresponding
 within-split LPB coverage variances were $0$ and $0.058$ squared percentage
-points.  Across the four five-split LPB screens, the online controller used
+points.  Over the four five-partition LPB screens, the online controller used
 $17.40$ expected queries on average and satisfied the budget on every split;
 its selected-bound coverage variance matched raw K2 and the all-high
 controller because their candidate selections were usually identical.

@@ -1,0 +1,153 @@
+% Concise, code-aligned details for the LPB implementation of DAPRO.
+% This section is intended to follow the main-text method description.
+
+\subsection{Implementation details for LPB \ttmethod}
+\label{sec:lpb_dapro_implementation}
+
+We give only the details needed to reproduce the LPB allocator that are not
+specified in Section~\ref{sec:method}. Recall that
+$b_i:=\min\{T_i,\qprior(X_i)\}$. After fully observing \(\calIone\), the
+policy-shape budget is
+\(
+\Bbar=(B-\sum_{i\in\calIone}b_i)/(|\calIcrc|+|\calItwo|)
+\), as in the main text. The rows in \(\calIcrc\) are also fully observed,
+but their realized costs enter the CRC selector in
+Eq.~\eqref{eq:dapro_main_crc_selector}; subtracting them again in \(\Bbar\)
+would count the same cost twice.
+
+\paragraph{Soft-prefix target and score.}
+At an observed prefix \(H_i(t)\), the survival model supplies the causal
+current-event probability
+\begin{equation}
+    \widehat h_i(t)
+    :=\widehat{\mathbb P}\!\left(T_i=t\mid T_i\geq t,H_i(t)\right),
+    \qquad S_i(t):=\widehat h_i(t).
+    \label{eq:lpb_impl_hazard_score}
+\end{equation}
+The numerator of Eq.~\eqref{eq:opt_prob} is implemented with the soft-prefix
+coefficient
+\begin{equation}
+    a_i(t)
+    :=\mathbb I\{t\leq b_i\}\widehat h_i(t)
+      \frac{\mathbb I\{t<\fhat_\alpha(X_i)\}+\delta}{1+\delta}.
+    \label{eq:lpb_impl_soft_mass}
+\end{equation}
+The leading term estimates the probability that the event occurs at turn
+\(t\) and contributes to LPB miscoverage; the small global term \(\delta\)
+prevents all other observable events from receiving zero optimization signal.
+Both \(S_i(t)\) and \(a_i(t)\) use only the history available before the
+continuation decision at turn \(t\).
+
+\paragraph{Deployable score map and numerical optimization.}
+At each turn, the active Phase-I scores are divided at their empirical median.
+The optimizer assigns one continuation probability to each of the two bins,
+constrained to be nondecreasing in the score. Ties enter the upper bin, an
+empty bin inherits the nearest nonempty value, and a turn with no active
+Phase-I row is continued deterministically.
+
+Equation~\eqref{eq:opt_prob} is solved in log conditional probabilities. For
+each dual multiplier, at most \(30\) coordinate sweeps solve the monotone
+subproblems by pool-adjacent-violators updates, stopping when the largest
+log-probability change is below \(5\times10^{-4}\). An outer geometric
+bisection uses at most \(60\) iterations and stops when the mean-cost error is
+at most \(10^{-9}\max\{\Bbar,1\}\).
+
+Projection to two score bins can perturb the Phase-I cost. The implementation
+therefore applies one shared logit shift to the projected cumulative reaches.
+If \(\rho_i^{\rm raw}(t):=\prod_{s=1}^tP_i^{\rm raw}(s)\), define
+\begin{equation}
+    \rho_i^{\rm base}(t)
+    :=\varepsilon+(1-\varepsilon)
+      \min_{u\leq t}
+      \sigma\!\left(\operatorname{logit}\rho_i^{\rm raw}(u)+\kappa\right).
+    \label{eq:lpb_impl_cumulative_correction}
+\end{equation}
+Here \(\kappa\) is the largest shift whose empirical cost on \(\calIone\) is
+at most \(\Bbar\); it is found by at most \(80\) bisection steps, with shift
+tolerance \(10^{-10}\) and cost tolerance \(10^{-7}\). We recover
+\(P_i^{\rm base}(t)=\rho_i^{\rm base}(t)/\rho_i^{\rm base}(t-1)\), where
+\(\rho_i^{\rm base}(0)=1\). The cumulative minimum makes the reach path
+temporally coherent, and \(\varepsilon>0\) gives positive inclusion
+probabilities.
+
+\paragraph{Independent CRC calibration.}
+CRC requires every candidate policy to have bounded per-row expected cost.
+Using only \(\calIone\), the implementation first pools the soft masses as
+\(\bar a(t):=N_1^{-1}\sum_{i\in\calIone}a_i(t)\) and fits a shared
+nonincreasing cumulative-reach envelope \(e(1)\geq\cdots\geq e(\maxl)\) by
+\begin{equation}
+    \min_e\ \sum_{t=1}^{\maxl}\frac{\bar a(t)}{e(t)}
+    \quad\text{s.t.}\quad
+    1\geq e(1)\geq\cdots\geq e(\maxl)\geq\varepsilon,
+    \qquad \sum_{t=1}^{\maxl}e(t)\leq C_{\max}.
+    \label{eq:lpb_impl_shared_envelope}
+\end{equation}
+This one-dimensional problem is solved by antitonic PAV and a common scale.
+The resulting \(e\) is frozen before examining \(\calIcrc\). For any new
+score history, let
+\begin{equation}
+    \rho_i^{\rm cap}(t)
+      :=\min\{\rho_i^{\rm base}(t),e(t)\},
+    \qquad
+    P_i^{\rm cap}(t)
+      :=\frac{\rho_i^{\rm cap}(t)}{\rho_i^{\rm cap}(t-1)},
+    \qquad \rho_i^{\rm cap}(0):=1.
+    \label{eq:lpb_impl_capped_policy}
+\end{equation}
+Equivalently, the capped policy is the causal, stateful map
+\(M_t^{\rm cap}(S_i(1{:}t)):=P_i^{\rm cap}(t)\). It remains deployable
+because it needs only the current base probability and the previous cumulative
+reach. Moreover,
+\(
+\bfunc(M^{\rm cap}(S_i))
+=\sum_{t\leq\qprior(X_i)}\rho_i^{\rm cap}(t)
+\leq\sum_t e(t)\leq C_{\max}
+\)
+for every trajectory, which supplies the bounded loss required by CRC.
+
+The nested CRC family contracts this capped cumulative reach toward the
+positivity floor:
+\begin{equation}
+    \rho_i(t;\lambda)
+    :=\varepsilon+\lambda
+      \bigl(\rho_i^{\rm cap}(t)-\varepsilon\bigr),
+    \qquad
+    M_t(S_i(1{:}t);\lambda)
+    :=P_i(t;\lambda)
+    :=\frac{\rho_i(t;\lambda)}{\rho_i(t-1;\lambda)},
+    \quad \lambda\in[0,1].
+    \label{eq:lpb_impl_crc_family}
+\end{equation}
+Thus increasing \(\lambda\) increases every cumulative reach and hence
+\(\bfunc(M(S_i;\lambda))\), while retaining the allocation learned in
+Phase~I. The implementation evaluates this frozen family on \(\calIcrc\)
+and selects \(\widehat\lambda\) by
+Eq.~\eqref{eq:dapro_main_crc_selector}. Without CRC, it deploys
+\(M^{\rm base}\) directly, with no projection-error reserve; this version
+satisfies the empirical Phase-I constraint but does not claim the CRC
+finite-sample budget guarantee.
+
+\paragraph{Bookkeeping, defaults, and cost.}
+Once the event or \(\qprior(X_i)\) is reached, the stored censoring time is
+\(C_i=\qprior(X_i)\), although an earlier event consumes only \(T_i\)
+interactions. For \(i\in\calIone\cup\calIcrc\), the implementation sets
+\(C_i=\qprior(X_i)\) and \(w(i)=1\). The reported LPB experiments use two
+score bins, \(\delta=10^{-3}\), \(\varepsilon=0.005\), and zero
+projection-error margin. The CRC version uses
+\(C_{\max}=\min\{\maxl,2B/|\calI|\}\) and \(401\) candidate values of
+\(\lambda\); these choices vary only in their designated ablations.
+
+For completeness, let \(H=\maxl\), \(n_1=|\calIone|\),
+\(n_c=|\calIcrc|\), \(n_2=|\calItwo|\), and let \(J\) be the number of CRC
+candidates. With the fixed iteration limits above, the worst-case running
+time is
+\begin{equation}
+    \mathcal O\!\left(
+      60\cdot30\,n_1H^2+n_1H\log n_1+Jn_cH+n_2H
+    \right),
+\end{equation}
+where the first term is the coordinate solver, the second fits the score maps,
+and the last two evaluate CRC and deploy the policy. Memory usage is
+\(\mathcal O((n_1+n_c+n_2)H+Jn_c)\). These are conservative worst-case
+bounds; early stopping and convergence usually reduce both computation and
+acquisition substantially.

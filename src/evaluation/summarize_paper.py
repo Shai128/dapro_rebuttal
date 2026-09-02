@@ -48,16 +48,16 @@ def main() -> None:
         )
     appendix = generate_metric_appendix_figures(
         frame,
-        output_dir=args.figures_root / "paper" / "full" / "metric",
+        output_dir=args.figures_root / "full" / "metric",
         quality=args.quality,
     )
     main_manifest = generate_metric_main_figures(
         frame,
-        output_dir=args.figures_root / "paper" / "main",
+        output_dir=args.figures_root / "main",
         quality=args.quality,
     )
     write_paper_configuration_summary(
-        args.figures_root / "paper" / "experiment_configurations.txt"
+        args.figures_root / "experiment_configurations.txt"
     )
     generated = int(appendix["generated"].sum()) + int(
         main_manifest["generated"].sum()

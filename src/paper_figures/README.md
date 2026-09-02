@@ -16,10 +16,10 @@ write image files only.
 
 Outputs are organized for direct copying to Overleaf:
 
-- `figures/paper/main`: main-text figures;
-- `figures/paper/full/lpb`: complete LPB figures;
-- `figures/paper/full/metric/dataset_*`: complete metric-estimation figures;
-- `figures/paper/ablations`: DAPRO ablation figures.
+- `figures/main`: main-text figures;
+- `figures/full/lpb`: complete LPB figures;
+- `figures/full/metric/dataset_*`: complete metric-estimation figures;
+- `figures/ablations`: DAPRO ablation figures.
 
 The UPB generator contributes the combined AutoIF main-text panels but does not
 write a separate full UPB figure suite. Each main-text experiment exports two

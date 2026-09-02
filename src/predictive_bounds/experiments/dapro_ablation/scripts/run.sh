@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# LPB and metric ablations for Generalized DAPRO on Toxicity/Qwen.
+# LPB, metric, and UPB-estimator ablations for Generalized DAPRO.
 #
 # Examples:
 #   bash src/predictive_bounds/experiments/dapro_ablation/scripts/run.sh --local --cpu
@@ -24,6 +24,7 @@ DEVICE="cuda:0"
 PARALLEL_JOBS=8
 DRY_RUN=0
 AVAILABLE_ONLY=0
+ONLY_UPB_ESTIMATOR=0
 SEED_START=0
 SEED_END=50
 CAL_SIZE=3000
@@ -31,12 +32,17 @@ TAU_PRIOR=0.56
 M_UPPER_BOUND=200
 BASE_EXPERIMENT_SUFFIX="lpb_ablv1"
 METRIC_EXPERIMENT_SUFFIX="m_ablv1"
+UPB_ESTIMATOR_EXPERIMENT_SUFFIX="upb_est_ablv1"
 PYTHON_BIN="${PYTHON_BIN:-python}"
 
 N1_VALUES=(50 100 200 300 400)
 SCORE_REFERENCE_N1=50
 METRIC_DAPRO_N1=50
 METRIC_CRC_CONTROL_SIZE=25
+UPB_ESTIMATOR_BUDGET=20
+UPB_ESTIMATOR_N1=200
+UPB_ESTIMATOR_TARGET_COVERAGE=0.80
+UPB_TAU_PRIOR=0.98
 ATTACKER_SHIFT_BUDGET=10
 SCORE_NOISE_LAMBDAS=(0 0.1 0.25 0.5 0.75 1)
 BUDGET_VALUES=(5 10 20 30 40 50)
@@ -62,7 +68,8 @@ usage() {
   echo "Usage: $0 [--local|--slurm] [--cpu|--device DEVICE]"
   echo "          [--parallel-jobs N] [--seed-start N] [--seed-end N]"
   echo "          [--experiment-suffix NAME] [--metric-experiment-suffix NAME]"
-  echo "          [--available-only] [--dry-run]"
+  echo "          [--upb-estimator-experiment-suffix NAME]"
+  echo "          [--only-upb-estimator] [--available-only] [--dry-run]"
 }
 
 while (( $# > 0 )); do
@@ -76,6 +83,9 @@ while (( $# > 0 )); do
     --seed-end) SEED_END="$2"; shift ;;
     --experiment-suffix) BASE_EXPERIMENT_SUFFIX="$2"; shift ;;
     --metric-experiment-suffix) METRIC_EXPERIMENT_SUFFIX="$2"; shift ;;
+    --upb-estimator-experiment-suffix)
+      UPB_ESTIMATOR_EXPERIMENT_SUFFIX="$2"; shift ;;
+    --only-upb-estimator) ONLY_UPB_ESTIMATOR=1 ;;
     --available-only) AVAILABLE_ONLY=1 ;;
     --dry-run) DRY_RUN=1 ;;
     --help|-h) usage; exit 0 ;;
@@ -105,9 +115,10 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../../../../.." && pwd)"
 cd "$REPO_ROOT"
 
 CACHE_FILE="alg_playground_model/is_real_True_dataset_${DATASET_NAME}_dataset_${DATASET_SETUP}/probability_est_cal_test.pt"
+TOXICITY_CACHE_AVAILABLE=1
 if (( AVAILABLE_ONLY == 1 )) && [[ ! -f "$CACHE_FILE" ]]; then
-  echo "Missing cached predictions: $CACHE_FILE" >&2
-  exit 0
+  echo "Skipping Toxicity LPB/metric ablations; missing cache: $CACHE_FILE" >&2
+  TOXICITY_CACHE_AVAILABLE=0
 fi
 
 print_command() { printf '  '; printf '%q ' "$@"; printf '\n'; }
@@ -219,6 +230,38 @@ run_shift_configuration() {
   fi
 }
 
+run_upb_estimator_configuration() {
+  local dataset_key="$1" dataset="$2" setup="$3"
+  local cache="alg_playground_model/is_real_True_dataset_${dataset}_dataset_${setup}/probability_est_cal_test.pt"
+  if (( AVAILABLE_ONLY == 1 )) && [[ ! -f "$cache" ]]; then
+    echo "[UPB estimator / $dataset_key] skipped: prediction cache unavailable"
+    return 0
+  fi
+  local -a common
+  common=(
+    --bound-type upb --data-type real
+    --dataset-name "$dataset" --dataset-setup "$setup"
+    --budget-per-sample "$UPB_ESTIMATOR_BUDGET" --cal-size "$CAL_SIZE"
+    --tau-prior "$UPB_TAU_PRIOR" --m-upper-bound "$M_UPPER_BOUND"
+    --device "$DEVICE" --allocations none
+    --experiment-suffix "$UPB_ESTIMATOR_EXPERIMENT_SUFFIX"
+    --method-suite upb_estimator_ablation
+    --dapro-n1-values "$UPB_ESTIMATOR_N1"
+    --target-coverages "$UPB_ESTIMATOR_TARGET_COVERAGE"
+    --definitive-dapro-margins 0.0
+    --seed-start "$SEED_START" --seed-end "$SEED_END"
+  )
+  echo "[UPB estimator / $dataset_key | B=$UPB_ESTIMATOR_BUDGET | target=$UPB_ESTIMATOR_TARGET_COVERAGE | Phase I=$UPB_ESTIMATOR_N1] constructing paired estimator ablation"
+  if ! run_module "upb_est_${dataset_key}_construct" src.predictive_bounds.construct_calibrated_bound "${common[@]}"; then
+    echo "ERROR: UPB estimator construction failed for $dataset_key; merge skipped." >&2
+    return 1
+  fi
+  if ! run_module "upb_est_${dataset_key}_merge" src.predictive_bounds.merge_bounds_results "${common[@]}"; then
+    echo "ERROR: UPB estimator merge failed for $dataset_key." >&2
+    return 1
+  fi
+}
+
 FAILED=()
 PIDS=()
 LABELS=()
@@ -241,7 +284,14 @@ submit_metric() {
   PIDS+=("$!"); LABELS+=("$label")
   if (( ${#PIDS[@]} >= PARALLEL_JOBS )); then wait_batch; fi
 }
+submit_upb_estimator() {
+  local label="$1"; shift
+  run_upb_estimator_configuration "$@" &
+  PIDS+=("$!"); LABELS+=("$label")
+  if (( ${#PIDS[@]} >= PARALLEL_JOBS )); then wait_batch; fi
+}
 
+if (( ONLY_UPB_ESTIMATOR == 0 && TOXICITY_CACHE_AVAILABLE == 1 )); then
 N1_CSV="$(IFS=,; echo "${N1_VALUES[*]}")"
 submit "N1" n1 20 "$N1_CSV" "${BASE_EXPERIMENT_SUFFIX}_n1"
 submit "score_noise" score_noise 20 "$SCORE_REFERENCE_N1" "${BASE_EXPERIMENT_SUFFIX}_score_noise"
@@ -294,17 +344,44 @@ run_shift_configuration "toxicity_qwen_to_gemma" "dataset_toxicity" "$TOX_SHIFT_
   "${BASE_EXPERIMENT_SUFFIX}_attacker_shift_toxicity_reverse" &
 PIDS+=("$!"); LABELS+=("attacker_shift_toxicity_qwen_to_gemma")
 if (( ${#PIDS[@]} >= PARALLEL_JOBS )); then wait_batch; fi
+fi
+
+# Allocation-estimator factorial ablation for UPB construction.  Both datasets
+# use the common paper configuration B=20, 80% coverage, and total Phase-I
+# size 200.  Qwen2.5 is both attacker and target; Toxicity uses Detoxify and
+# AutoIF its task-specific judge.
+submit_upb_estimator "upb_estimator_toxicity" \
+  "toxicity" "dataset_toxicity" \
+  "attack_toxic_attack_qwen25_14b_instruct_lm_target_qwen25_14b_instruct_judge_detoxify"
+submit_upb_estimator "upb_estimator_autoif" \
+  "autoif" "dataset_autoif" \
+  "attack_autoif_helper_qwen25_14b_instruct_lm_target_qwen25_14b_instruct_judge_autoif"
 if (( ${#PIDS[@]} > 0 )); then wait_batch; fi
 
 if (( DRY_RUN == 1 )); then echo "Dry run complete."; exit 0; fi
 
-ARCHIVE="results/${BASE_EXPERIMENT_SUFFIX}.tar.gz"
-mapfile -t MERGED < <(
-  find results/merged_calibration_dfs -type f \
-    -path "*_${BASE_EXPERIMENT_SUFFIX}_*/all_df.csv"
-  find results/merged_metric_calibration_dfs -type f \
-    -path "*_${METRIC_EXPERIMENT_SUFFIX}_*/all_df.csv"
-)
+if (( ONLY_UPB_ESTIMATOR == 1 )); then
+  ARCHIVE="results/${UPB_ESTIMATOR_EXPERIMENT_SUFFIX}.tar.gz"
+else
+  ARCHIVE="results/${BASE_EXPERIMENT_SUFFIX}.tar.gz"
+fi
+FIND_BIN="find"
+if [[ -x /usr/bin/find ]]; then FIND_BIN="/usr/bin/find"; fi
+if (( ONLY_UPB_ESTIMATOR == 1 )); then
+  mapfile -t MERGED < <(
+    "$FIND_BIN" results/merged_upb_calibration_dfs -type f \
+      -path "*_${UPB_ESTIMATOR_EXPERIMENT_SUFFIX}/all_df.csv"
+  )
+else
+  mapfile -t MERGED < <(
+    "$FIND_BIN" results/merged_calibration_dfs -type f \
+      -path "*_${BASE_EXPERIMENT_SUFFIX}_*/all_df.csv"
+    "$FIND_BIN" results/merged_metric_calibration_dfs -type f \
+      -path "*_${METRIC_EXPERIMENT_SUFFIX}_*/all_df.csv"
+    "$FIND_BIN" results/merged_upb_calibration_dfs -type f \
+      -path "*_${UPB_ESTIMATOR_EXPERIMENT_SUFFIX}/all_df.csv"
+  )
+fi
 if (( ${#MERGED[@]} > 0 )); then
   tar -czf "$ARCHIVE" "${MERGED[@]}"
   echo "Archived ${#MERGED[@]} merged files at $ARCHIVE"

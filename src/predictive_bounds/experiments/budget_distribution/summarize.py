@@ -109,7 +109,7 @@ def main(argv=None):
         target = float(group["target_budget"].iloc[0])
         axis.axvline(target, color="#b91c1c", linestyle="--", linewidth=1.5)
         axis.set_xlabel("Realized budget per calibration sample")
-        axis.set_ylabel("Density across random splits")
+        axis.set_ylabel("Density")
         figure.tight_layout()
         figure.savefig(
             args.output_dir / f"{configuration}_budget_histogram.pdf",

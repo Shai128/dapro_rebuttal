@@ -203,6 +203,13 @@ def test_server_launcher_exposes_slurm_cpu_and_parallel_controls():
     assert 'submit_metric "metric_budget=' in script
     assert '"${METRIC_EXPERIMENT_SUFFIX}_n1_n${metric_n1}"' in script
     assert "--metric-experiment-suffix" in script
+    assert "--upb-estimator-experiment-suffix" in script
+    assert "--only-upb-estimator" in script
+    assert "--method-suite upb_estimator_ablation" in script
+    assert "UPB_ESTIMATOR_TARGET_COVERAGE=0.80" in script
+    assert "UPB_ESTIMATOR_N1=200" in script
+    assert "upb_estimator_toxicity" in script
+    assert "upb_estimator_autoif" in script
 
 
 def test_metric_n1_shards_are_discovered_without_matching_score_noise(
@@ -829,8 +836,8 @@ def test_attacker_shift_loader_keeps_qwen_to_gemma_for_both_datasets(tmp_path):
         .drop_duplicates().sort_values("factor_value")["factor_label"].tolist()
     )
     assert labels == [
-        "Red team\nQwen $\\to$ Gemma",
-        "Toxicity\nQwen $\\to$ Gemma",
+        "Red-Team",
+        "Toxicity",
     ]
     assert len(inventory) == 2
     output = tmp_path / "attacker_shift_qwen_to_gemma.jpg"

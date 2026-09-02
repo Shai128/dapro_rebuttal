@@ -113,10 +113,10 @@ def test_metric_paper_matrix_contains_rmst_and_filters_diagnostics():
     } == {"estimated_cjr", "estimated_restricted_mean"}
     for metric in (
         "budget_per_sample",
-        "observed_events",
         "mean_metric_a_weight",
     ):
         assert set(specifications[metric]) == {"Uncalibrated", "Oracle"}
+    assert "observed_events" not in specifications
     assert specifications["estimated_cjr"] == ()
     assert specifications["estimated_restricted_mean"] == ()
 

@@ -53,6 +53,7 @@ from src.train_model.models.utils import SurvivalModelPrediction
 from src.predictive_bounds.utils.get_calibration_methods_utils import (
     get_baseline_calibrations as get_registered_baseline_calibrations,
     get_dapro_ablation_calibrations,
+    get_upb_estimator_ablation_calibrations,
     get_upb_calibrations as get_registered_upb_calibrations,
     get_unified_bound_calibrations,
     is_budget_sufficient_for_split,
@@ -820,6 +821,18 @@ def get_calibration_methods(conditional_grid, budget_per_sample, taus_range, tau
             score_noise_lambdas=score_noise_lambdas,
             score_noise_seed=score_noise_seed,
         )
+    if method_suite == "upb_estimator_ablation":
+        if bound_type != "upb":
+            raise ValueError("The UPB estimator ablation suite is UPB-only.")
+        return get_upb_estimator_ablation_calibrations(
+            conditional_grid,
+            budget_per_sample,
+            taus_range,
+            tau_prior,
+            m_upper_bound,
+            dapro_n1_values=dapro_n1_values,
+            target_coverages=target_coverages,
+        )
     if method_suite == "unified_aht":
         return get_unified_bound_calibrations(
             conditional_grid,
@@ -885,7 +898,10 @@ def main():
     )
     parser.add_argument(
         '--method-suite',
-        choices=['legacy', 'unified_aht', 'dapro_ablation'],
+        choices=[
+            'legacy', 'unified_aht', 'dapro_ablation',
+            'upb_estimator_ablation',
+        ],
         default='legacy'
     )
     parser.add_argument(
@@ -1037,6 +1053,21 @@ def main():
         parser.error('--target-coverages values must lie in (0, 1).')
     if args.method_suite == 'dapro_ablation' and bound_type != 'lpb':
         parser.error('--method-suite dapro_ablation is available only for LPB.')
+    if args.method_suite == 'upb_estimator_ablation' and bound_type != 'upb':
+        parser.error(
+            '--method-suite upb_estimator_ablation is available only for UPB.'
+        )
+    if (
+            args.method_suite == 'upb_estimator_ablation'
+            and (
+                len(args.dapro_n1_values) != 1
+                or len(target_coverages) != 1
+            )
+    ):
+        parser.error(
+            'The UPB estimator ablation requires exactly one '
+            '--dapro-n1-values entry and one --target-coverages entry.'
+        )
     if any(not 0.0 <= value <= 1.0 for value in args.score_noise_lambdas):
         parser.error('--score-noise-lambdas values must lie in [0, 1].')
     if (

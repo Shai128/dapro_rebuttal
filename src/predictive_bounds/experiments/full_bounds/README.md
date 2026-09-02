@@ -18,9 +18,9 @@ distinct time-only schedule from the earlier screen.
 
 The configuration matrix follows the manuscript:
 
-- 90% LPBs for toxicity, Qwen- and Llama-Guard-judged red team,
+- 90% LPBs for toxicity, Qwen- and Llama-Guard-judged Red-Team,
   hallucination, and AutoIF;
-- budget 20 except hallucination and Llama-Guard red team, which use 10;
+- budget 20 except hallucination and Llama-Guard Red-Team, which use 10;
 - 70% AutoIF UPBs with budget 30 and `tau_prior=0.97`;
 - calibration size 3,000, horizon 200, and 50 splits by default;
 - Qwen2.5, Llama3.1, Phi-4 Mini, and Gemma3 target models.

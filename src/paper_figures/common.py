@@ -11,6 +11,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
 from matplotlib.patches import Patch
+from matplotlib.ticker import MaxNLocator
 import numpy as np
 import pandas as pd
 from PIL import Image
@@ -20,6 +21,84 @@ from src.paper_figures.config import METHOD_COLORS, METHOD_ORDER
 
 
 LOW_QUALITY_MAX_BYTES = 120 * 1024
+FULL_DATA_REFERENCE_COLOR = "#800020"
+FULL_DATA_REFERENCE_LINESTYLE = "-."
+TARGET_REFERENCE_COLOR = "#D62728"
+TARGET_REFERENCE_LINESTYLE = "--"
+
+
+def reference_line_style(label: str) -> tuple[str, str]:
+    """Return the paper-wide style for a named horizontal reference."""
+    if "full-data" in label.casefold():
+        return FULL_DATA_REFERENCE_COLOR, FULL_DATA_REFERENCE_LINESTYLE
+    return TARGET_REFERENCE_COLOR, TARGET_REFERENCE_LINESTYLE
+
+
+def _validate_figure_text(figure, path: Path) -> None:
+    """Fail fast when visible text is clipped or tick labels overlap."""
+    figure.canvas.draw()
+    renderer = figure.canvas.get_renderer()
+    width, height = figure.canvas.get_width_height()
+    tolerance = 2.0
+    clipped: list[str] = []
+    for artist in figure.findobj(match=matplotlib.text.Text):
+        label = artist.get_text().strip()
+        if not label or not artist.get_visible():
+            continue
+        bounds = artist.get_window_extent(renderer=renderer)
+        coordinates = np.asarray(
+            [bounds.x0, bounds.y0, bounds.x1, bounds.y1], dtype=float
+        )
+        if not bool(np.isfinite(coordinates).all()):
+            continue
+        if (
+            bounds.x0 < -tolerance
+            or bounds.y0 < -tolerance
+            or bounds.x1 > width + tolerance
+            or bounds.y1 > height + tolerance
+        ):
+            clipped.append(
+                label.replace("\n", " / ")
+                + f" @ ({bounds.x0:.1f}, {bounds.y0:.1f}, "
+                + f"{bounds.x1:.1f}, {bounds.y1:.1f}) in {width}x{height}"
+            )
+
+    overlaps: list[str] = []
+    for axis in figure.axes:
+        for labels in (axis.get_xticklabels(), axis.get_yticklabels()):
+            visible = [
+                label for label in labels
+                if label.get_visible() and label.get_text().strip()
+            ]
+            boxes = [
+                label.get_window_extent(renderer=renderer)
+                for label in visible
+            ]
+            for index, left in enumerate(boxes):
+                for other_index in range(index + 1, len(boxes)):
+                    right = boxes[other_index]
+                    intersection_width = min(left.x1, right.x1) - max(
+                        left.x0, right.x0
+                    )
+                    intersection_height = min(left.y1, right.y1) - max(
+                        left.y0, right.y0
+                    )
+                    if intersection_width > 1.0 and intersection_height > 1.0:
+                        overlaps.append(
+                            visible[index].get_text().replace("\n", " / ")
+                            + " <> "
+                            + visible[other_index].get_text().replace("\n", " / ")
+                        )
+    if clipped or overlaps:
+        details = []
+        if clipped:
+            details.append("clipped=" + repr(sorted(set(clipped))))
+        if overlaps:
+            details.append("overlapping_ticks=" + repr(sorted(set(overlaps))))
+        raise ValueError(
+            f"Figure text-layout validation failed for {path}: "
+            + "; ".join(details)
+        )
 
 
 def ordered_present(values: Iterable[str], order: Sequence[str]) -> list[str]:
@@ -34,6 +113,7 @@ def save_jpeg(
     *,
     tight: bool = True,
     panel_count: int = 1,
+    resolution_scale: float = 1.0,
 ) -> None:
     """Save a paper-ready JPEG with an area-aware preview resolution.
 
@@ -45,22 +125,28 @@ def save_jpeg(
     always written at the publication-standard 300 DPI.
     """
     panel_count = max(1, int(panel_count))
+    resolution_scale = max(1.0, float(resolution_scale))
     path.parent.mkdir(parents=True, exist_ok=True)
+    _validate_figure_text(figure, path)
     bbox_inches = "tight" if tight else None
     pad_inches = 0.16 if tight else 0.0
     if quality == "high":
         figure.savefig(
             path,
             format="jpg",
-            dpi=300,
+            dpi=round(300 * resolution_scale),
             bbox_inches=bbox_inches,
             pad_inches=pad_inches,
             pil_kwargs={"quality": 95, "optimize": True},
         )
         return
 
-    preview_dpi = min(240, 120 + 20 * (panel_count - 1))
-    maximum_bytes = LOW_QUALITY_MAX_BYTES * panel_count
+    preview_dpi = round(
+        min(240, 120 + 20 * (panel_count - 1)) * resolution_scale
+    )
+    maximum_bytes = round(
+        LOW_QUALITY_MAX_BYTES * panel_count * resolution_scale**2
+    )
     figure.savefig(
         path,
         format="jpg",
@@ -115,6 +201,8 @@ def _style_axis(
     axis.set_axisbelow(True)
     axis.spines["top"].set_visible(False)
     axis.spines["right"].set_visible(False)
+    if axis.get_yscale() == "linear":
+        axis.yaxis.set_major_locator(MaxNLocator(nbins="auto", prune="upper"))
 
 
 def _legend_outside(
@@ -136,7 +224,10 @@ def _legend_outside(
             # Keep the legend inside a fixed reserved column.  This makes
             # every exported diagnostic exactly the same pixel size instead
             # of allowing a tight bounding box to grow with label length.
-            bbox_to_anchor=(0.785, 0.5),
+            # Reserve enough horizontal room for labels such as
+            # ``Full-data value``; the former 0.785 anchor clipped that
+            # label in the metric-estimation figures.
+            bbox_to_anchor=(0.67, 0.5),
             frameon=False,
             ncol=1,
             fontsize=8.8 * font_scale,
@@ -163,10 +254,13 @@ def plot_shared_legend(
         for method in present
     ]
     if reference_label is not None:
+        reference_color, reference_linestyle = reference_line_style(
+            reference_label
+        )
         handles.append(Line2D(
             [0], [0],
-            color="#D62728",
-            linestyle="--",
+            color=reference_color,
+            linestyle=reference_linestyle,
             linewidth=1.35,
             label=reference_label,
         ))
@@ -209,6 +303,8 @@ def plot_grouped_boxplot(
     figsize: tuple[float, float] = (7.4, 3.5),
     show_legend: bool = True,
     font_scale: float = 1.0,
+    title: str | None = None,
+    resolution_scale: float = 1.0,
 ) -> bool:
     plot_frame = frame.loc[
         ~frame["method"].isin(hide_methods), [x, "method", metric]
@@ -240,14 +336,20 @@ def plot_grouped_boxplot(
     if log_scale and bool((plot_frame[metric] > 0).any()):
         axis.set_yscale("log")
     if reference is not None and np.isfinite(reference):
+        reference_color, reference_linestyle = reference_line_style(
+            reference_label
+        )
         axis.axhline(
             reference,
-            color="#D62728",
-            linestyle="--",
+            color=reference_color,
+            linestyle=reference_linestyle,
             linewidth=1.25,
             label=f"{reference_label} ({reference:g})",
         )
     if reference_by_x:
+        reference_color, reference_linestyle = reference_line_style(
+            reference_label
+        )
         labelled = False
         for position, category in enumerate(categories):
             value = reference_by_x.get(str(category))
@@ -257,8 +359,8 @@ def plot_grouped_boxplot(
                 value,
                 position - 0.46,
                 position + 0.46,
-                color="#D62728",
-                linestyle="--",
+                color=reference_color,
+                linestyle=reference_linestyle,
                 linewidth=1.25,
                 label=reference_label if not labelled else None,
             )
@@ -269,6 +371,8 @@ def plot_grouped_boxplot(
         ylabel=ylabel,
         font_scale=font_scale,
     )
+    if title:
+        axis.set_title(title, fontsize=11.2 * font_scale, pad=7)
     if show_legend:
         _legend_outside(
             axis,
@@ -279,13 +383,25 @@ def plot_grouped_boxplot(
     elif axis.legend_ is not None:
         axis.legend_.remove()
     compact = figsize[0] < 5.0
+    short_wide = figsize[0] >= 5.0 and figsize[1] <= 2.8
     figure.subplots_adjust(
         left=0.255 if compact else 0.19,
-        right=(0.76 if show_legend else 0.97),
-        bottom=0.21 if compact else 0.18,
-        top=0.95,
+        right=(0.65 if show_legend else 0.97),
+        bottom=0.23 if compact else 0.29 if short_wide else 0.18,
+        top=(
+            0.82 if title and short_wide
+            else 0.90 if short_wide
+            else 0.86 if title
+            else 0.95
+        ),
     )
-    save_jpeg(figure, output_path, quality, tight=False)
+    save_jpeg(
+        figure,
+        output_path,
+        quality,
+        tight=False,
+        resolution_scale=resolution_scale,
+    )
     plt.close(figure)
     return True
 
@@ -306,6 +422,8 @@ def plot_grouped_variance(
     figsize: tuple[float, float] = (7.4, 3.5),
     show_legend: bool = True,
     font_scale: float = 1.0,
+    title: str | None = None,
+    resolution_scale: float = 1.0,
 ) -> tuple[bool, pd.DataFrame]:
     plot_frame = frame.loc[
         ~frame["method"].isin(hide_methods), [x, "method", metric]
@@ -354,6 +472,8 @@ def plot_grouped_variance(
         ylabel=ylabel,
         font_scale=font_scale,
     )
+    if title:
+        axis.set_title(title, fontsize=11.2 * font_scale, pad=7)
     if show_legend:
         _legend_outside(
             axis,
@@ -364,13 +484,25 @@ def plot_grouped_variance(
     elif axis.legend_ is not None:
         axis.legend_.remove()
     compact = figsize[0] < 5.0
+    short_wide = figsize[0] >= 5.0 and figsize[1] <= 2.8
     figure.subplots_adjust(
         left=0.255 if compact else 0.19,
-        right=(0.76 if show_legend else 0.97),
-        bottom=0.21 if compact else 0.18,
-        top=0.95,
+        right=(0.65 if show_legend else 0.97),
+        bottom=0.23 if compact else 0.29 if short_wide else 0.18,
+        top=(
+            0.82 if title and short_wide
+            else 0.90 if short_wide
+            else 0.86 if title
+            else 0.95
+        ),
     )
-    save_jpeg(figure, output_path, quality, tight=False)
+    save_jpeg(
+        figure,
+        output_path,
+        quality,
+        tight=False,
+        resolution_scale=resolution_scale,
+    )
     plt.close(figure)
     return True, variance
 

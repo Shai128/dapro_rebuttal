@@ -808,7 +808,7 @@ def coverage_variance_frame(frame: pd.DataFrame) -> pd.DataFrame:
 
 
 def normalized_size_variance_frame(frame: pd.DataFrame) -> pd.DataFrame:
-    """Return across-split bound-size variance normalized to Static=1."""
+    """Return bound-size variance normalized to Static=1."""
     keys = [
         "dataset_key",
         "dataset_display",
@@ -1064,7 +1064,7 @@ def _plot_normalized_size_variance(
         ax=axis,
     )
     axis.axhline(1.0, color="#1f77b4", linestyle="--", linewidth=1.4)
-    _style_axis(axis, "Bound-size variance (Static normalized to 1)")
+    _style_axis(axis, "Bound-size variance")
     dataset_name = str(variance["dataset_display"].iloc[0])
     context = ""
     if "plot_context" in frame:

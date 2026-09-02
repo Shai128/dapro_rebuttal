@@ -174,8 +174,8 @@ def render_latex_tables(frame: pd.DataFrame) -> str:
             f"{dataset_display}, {target_model}, {bound_type}: "
             f"target coverage {target_coverage:.0f}% and budget "
             f"{target_budget:g} per sample. Values are mean $\\pm$ standard "
-            "deviation across splits; coverage variance is across-split "
-            "sample variance."
+            "deviation over repeated data partitions; coverage variance is "
+            "the corresponding sample variance."
         )
         label = "tab:full_bounds_" + configuration.replace("__", "_")
         blocks.extend([

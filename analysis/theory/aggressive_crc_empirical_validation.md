@@ -31,7 +31,7 @@ The runs use 10 matched calibration--test splits per configuration, a target
 budget of 20, K=2, and common acquisition randomness.  LPB and metric runs use
 \(N_1=50\), with 25 policy-fit and 25 CRC rows.  UPB runs use \(N_1=100\), with
 50 policy-fit and 50 CRC rows, and the recommended 80% UPB policy anchor.  The
-datasets are Toxicity and Red Team, with Qwen2.5-14B as attacker and target.
+datasets are Toxicity and Red-Team, with Qwen2.5-14B as attacker and target.
 
 ## Budget and variance results
 
@@ -43,20 +43,20 @@ restricted-mean variances in squared turns.
 
 | Task | Dataset | CRC | Expected | Realized | Primary variance | Restricted-mean variance |
 |---|---|---:|---:|---:|---:|---:|
-| LPB | Red Team | standard | 18.654 | 18.630 | 1.261 | -- |
-| LPB | Red Team | aggressive | 18.697 | 18.670 | 1.296 | -- |
+| LPB | Red-Team | standard | 18.654 | 18.630 | 1.261 | -- |
+| LPB | Red-Team | aggressive | 18.697 | 18.670 | 1.296 | -- |
 | LPB | Toxicity | standard | 19.045 | 19.205 | 0.489 | -- |
 | LPB | Toxicity | aggressive | 19.063 | 19.231 | 0.489 | -- |
-| Metric | Red Team | standard | 17.483 | 17.548 | 5.228 | 19.128 |
-| Metric | Red Team | aggressive | 17.505 | 17.583 | 5.531 | 19.331 |
+| Metric | Red-Team | standard | 17.483 | 17.548 | 5.228 | 19.128 |
+| Metric | Red-Team | aggressive | 17.505 | 17.583 | 5.531 | 19.331 |
 | Metric | Toxicity | standard | 18.374 | 18.437 | 15.433 | 25.522 |
 | Metric | Toxicity | aggressive | 18.392 | 18.456 | 15.755 | 25.948 |
-| UPB, 80% policy anchor | Red Team | standard | 17.484 | 17.700 | 5.410 | -- |
-| UPB, 80% policy anchor | Red Team | aggressive | 17.496 | 17.719 | 5.349 | -- |
+| UPB, 80% policy anchor | Red-Team | standard | 17.484 | 17.700 | 5.410 | -- |
+| UPB, 80% policy anchor | Red-Team | aggressive | 17.496 | 17.719 | 5.349 | -- |
 | UPB, 80% policy anchor | Toxicity | standard | 13.723 | 13.857 | 4.865 | -- |
 | UPB, 80% policy anchor | Toxicity | aggressive | 13.723 | 13.857 | 4.865 | -- |
 
-For UPB, `Primary variance` is coverage variance at 80%.  At Red Team 90%,
+For UPB, `Primary variance` is coverage variance at 80%.  At Red-Team 90%,
 aggressive CRC instead increased coverage variance from 2.982 to 3.093; hence
 the very small improvement at 80% is not consistent across coverage targets.
 
@@ -70,11 +70,11 @@ coverage variance.
 
 | Task/dataset | Selected transformed: splits with a violation | Family transformed | Selected sufficient cap | Family sufficient cap |
 |---|---:|---:|---:|---:|
-| LPB / Red Team | 0/10 | 0/10 | 0/10 | 0/10 |
+| LPB / Red-Team | 0/10 | 0/10 | 0/10 | 0/10 |
 | LPB / Toxicity | 0/10 | 0/10 | 0/10 | 0/10 |
-| Metric / Red Team | 0/10 | 0/10 | 1/10 | 1/10 |
+| Metric / Red-Team | 0/10 | 0/10 | 1/10 | 1/10 |
 | Metric / Toxicity | 1/10 | 1/10 | 3/10 | 7/10 |
-| UPB / Red Team, 80% anchor | 4/10 | 9/10 | 5/10 | 9/10 |
+| UPB / Red-Team, 80% anchor | 4/10 | 9/10 | 5/10 | 9/10 |
 | UPB / Toxicity, 80% anchor | 9/10 | 10/10 | 9/10 | 10/10 |
 
 For Toxicity metric estimation, the selected sufficient cap failed on 11.7%
@@ -107,4 +107,3 @@ by the proposed proof is not universally satisfied, the practical budget gain
 is negligible, and variance is not consistently improved.  The implementation
 therefore remains an explicitly named experimental mode, `crc_aggressive`; the
 production/default DAPRO CRC remains unchanged.
-

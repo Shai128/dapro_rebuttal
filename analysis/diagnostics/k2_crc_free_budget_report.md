@@ -268,7 +268,7 @@ between rows but cannot remove it under a fixed total budget.
 
 The two-setup diagnostic confirmed the pathology.  With budget 20, the row
 accounts used only 2.41 queries per sample for Toxicity metric estimation and
-1.91 for Red Team; median minimum propensities were `1.37e-4` and `1.83e-3`,
+1.91 for Red-Team; median minimum propensities were `1.37e-4` and `1.83e-3`,
 and median maximum weights were 7,303 and 548.  The Toxicity estimate had an
 MSE of 1,144 squared percentage points.  This variant should be rejected.
 
@@ -278,7 +278,7 @@ The isolated diagnostic reused the production soft-prefix target masses,
 hazard score, median K2 table, and exact DAPRO optimizer.  No production
 registry was changed.  We used `N1=50`, four real setups, both metric and LPB
 tasks, and five matched calibration--test splits.  Budgets were 20 for
-Toxicity, Red Team, and AutoIF and 10 for Hallucination.  These are small
+Toxicity, Red-Team, and AutoIF and 10 for Hallucination.  These are small
 diagnostics rather than final paper-scale estimates.
 
 ### Metric estimation: aggregate over four setups
@@ -305,7 +305,7 @@ active conditional probabilities; most changes were numerically very small.
 | Setup | Online variance | No-CRC variance | CRC variance | Online expected cost | Online min propensity (median) |
 |---|---:|---:|---:|---:|---:|
 | Toxicity | 7.24 | **6.70** | 16.31 | 19.90 | 0.056 |
-| Red Team | 8.10 | 7.18 | **5.00** | 19.55 | 0.140 |
+| Red-Team | 8.10 | 7.18 | **5.00** | 19.55 | 0.140 |
 | Hallucination | **2.01** | 13.44 | 3.66 | 9.51 | 0.146 |
 | AutoIF | **10.74** | 14.23 | 15.24 | 19.98 | 0.062 |
 
@@ -321,7 +321,7 @@ per split.  This is necessary for the cross-row adaptive design.
 | Setup | Empirical within-split metric variance (pp^2) | Mean design-unbiased estimate (pp^2) | Within-split LPB coverage variance (pp^2) |
 |---|---:|---:|---:|
 | Toxicity | 6.58 | 6.97 | 0.000 |
-| Red Team | 8.16 | 10.18 | 0.058 |
+| Red-Team | 8.16 | 10.18 | 0.058 |
 | AutoIF | 6.54 | not rerun with the final estimator column | 0.000 |
 
 The observed-only variance estimator tracks the repeated-acquisition variance

@@ -66,6 +66,9 @@ from src.predictive_bounds.calibration.survival_calibration_with_known_weights i
 from src.predictive_bounds.calibration.survival_upb_calibration_with_known_weights import (
     SurvivalUPBCalibrationWithKnownWeights,
 )
+from src.predictive_bounds.calibration.upb_estimator_ablation_calibration import (
+    UPBEstimatorAblationCalibration,
+)
 from src.predictive_bounds.reward_functions.reward_by_probability import RewardByProbability
 from src.predictive_bounds.reward_functions.reward_by_probability_diff import RewardByProbabilityDiff
 from src.predictive_bounds.utils.get_best_params_utils import get_best_rexp3_params, get_best_discounted_ucb_params, \
@@ -106,6 +109,104 @@ CANONICAL_DAPRO_GLOBAL_REGULARIZATION = 0.001
 CANONICAL_DAPRO_PROJECTION_BUDGET_MARGIN = 0.0
 CANONICAL_DAPRO_CRC_ROW_COST_CAP_MULTIPLIER = 2.0
 CANONICAL_DAPRO_SCORE_KIND = "hazard"
+
+
+def get_upb_estimator_ablation_calibrations(
+        conditional_grid,
+        budget_per_sample,
+        taus_range,
+        tau_prior,
+        m_upper_bound,
+        *,
+        dapro_n1_values=(200,),
+        target_coverages=(0.80,),
+) -> List[SurvivalUPBCalibration]:
+    """Return the paired allocation-by-estimator UPB ablation.
+
+    Exactly one Phase-I size and one target coverage are required because the
+    x-axis varies the estimator, not a setup hyperparameter.  Every estimator
+    variant receives an independently instantiated but identically configured
+    allocator.  The construction driver resets the policy RNG and installs
+    common acquisition uniforms before every method, making paths paired.
+
+    Static is compared under ordinary HT and terminal AHT.  Its one block-level
+    reach indicator makes sequential AHT identical to terminal AHT, so that
+    duplicate is intentionally omitted.  Raw and CRC DAPRO are each compared
+    under ordinary, terminal, and sequential AHT.
+    """
+    n1_values = tuple(dict.fromkeys(int(value) for value in dapro_n1_values))
+    coverages = tuple(dict.fromkeys(float(value) for value in target_coverages))
+    if len(n1_values) != 1 or n1_values[0] < 2:
+        raise ValueError(
+            "The UPB estimator ablation requires exactly one DAPRO N1 >= 2."
+        )
+    if len(coverages) != 1 or not 0.0 < coverages[0] < 1.0:
+        raise ValueError(
+            "The UPB estimator ablation requires exactly one target coverage."
+        )
+    n1 = n1_values[0]
+    target_coverage = coverages[0]
+
+    def static_allocator() -> OptimizedBudgetAllocator:
+        return OptimizedBudgetAllocator(
+            budget_per_sample, taus_range, tau_prior, m_upper_bound
+        )
+
+    common = dict(
+        conditional_grid=conditional_grid,
+        budget_per_sample=budget_per_sample,
+        taus_range=taus_range,
+        tau_prior=tau_prior,
+        m_upper_bound=m_upper_bound,
+        target_coverage=target_coverage,
+        n1=n1,
+        score_bin_count=CANONICAL_DAPRO_SCORE_BIN_COUNT,
+        global_regularization=CANONICAL_DAPRO_GLOBAL_REGULARIZATION,
+    )
+
+    def raw_dapro() -> SoftPrefixEndpointUPBDAPRO:
+        return SoftPrefixEndpointUPBDAPRO(
+            **common,
+            projection_budget_margin=(
+                CANONICAL_DAPRO_PROJECTION_BUDGET_MARGIN
+            ),
+        )
+
+    def crc_dapro() -> SoftPrefixEndpointCRCUPBDAPRO:
+        return SoftPrefixEndpointCRCUPBDAPRO(
+            **common,
+            budget_control_size=n1 // 2,
+            row_cost_cap_multiplier=(
+                CANONICAL_DAPRO_CRC_ROW_COST_CAP_MULTIPLIER
+            ),
+        )
+
+    calibrations: list[SurvivalUPBCalibration] = []
+    for estimator_kind in ("ordinary_ht", "terminal_residual"):
+        calibrations.append(UPBEstimatorAblationCalibration(
+            static_allocator(), taus_range, tau_prior,
+            estimator_kind=estimator_kind,
+            allocation_method="static",
+            uses_crc=False,
+        ))
+    for estimator_kind in (
+            "ordinary_ht", "terminal_residual", "sequential"
+    ):
+        calibrations.extend([
+            UPBEstimatorAblationCalibration(
+                crc_dapro(), taus_range, tau_prior,
+                estimator_kind=estimator_kind,
+                allocation_method="dapro",
+                uses_crc=True,
+            ),
+            UPBEstimatorAblationCalibration(
+                raw_dapro(), taus_range, tau_prior,
+                estimator_kind=estimator_kind,
+                allocation_method="dapro",
+                uses_crc=False,
+            ),
+        ])
+    return calibrations
 
 
 def get_dapro_ablation_calibrations(

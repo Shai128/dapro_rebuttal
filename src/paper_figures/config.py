@@ -35,8 +35,8 @@ DATASET_FILE_STEMS = {
 
 DATASET_DISPLAY = {
     "toxicity": "Toxicity",
-    "red_team_qwen_judge": "Red Team (Qwen judge)",
-    "red_team_llama_guard": "Red Team (Llama-Guard)",
+    "red_team_qwen_judge": "Red-Team (Qwen judge)",
+    "red_team_llama_guard": "Red-Team (Llama-Guard)",
     "autoif": "AutoIF",
     "hallucination3": "Hallucination",
 }
@@ -127,7 +127,7 @@ def _configuration_line(
     return (
         f"- {task.upper()} / {DATASET_DISPLAY[dataset_key]}: "
         f"budget/sample={recommendation.budget_per_sample:g}, "
-        f"total adaptive-calibration size="
+        f"Phase I calibration set size="
         f"|I_cal1|+|I_crc|={recommendation.n1} "
         f"({recommendation.n1 - recommendation.crc_control_size}+"
         f"{recommendation.crc_control_size} with CRC){coverage}"
@@ -188,9 +188,14 @@ def write_paper_configuration_summary(path: Path) -> None:
         "- CRC row-cost-cap multipliers: 0.1, 0.5, 1, 2, 5, and 10 "
         "times the target budget (the final value equals t_max=200).",
         "- Attacker shift (LPB only): budget/sample=10, total size=50; "
-        "Qwen2.5 -> Gemma3 for both Red Team and Toxicity.",
-        "- Uniform+CRC optimization control: all 50 adaptive-calibration "
+        "Qwen2.5 -> Gemma3 for both Red-Team and Toxicity.",
+        "- Uniform+CRC optimization control: all 50 Phase I calibration "
         "rows are CRC rows; no policy-fitting fold is used.",
+        "- UPB allocation-estimator ablation (AutoIF and Toxicity, Qwen2.5 "
+        "attacker/target): budget/sample=20, target coverage=80%, total "
+        "Phase I calibration size=200 (100+100 with CRC). Static uses "
+        "ordinary or terminal AHT; DAPRO with/without CRC uses ordinary, "
+        "terminal, or sequential AHT.",
         "",
     ])
     path.parent.mkdir(parents=True, exist_ok=True)

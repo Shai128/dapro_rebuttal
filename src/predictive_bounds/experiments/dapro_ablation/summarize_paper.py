@@ -10,6 +10,7 @@ import matplotlib
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+from matplotlib.ticker import MaxNLocator
 import numpy as np
 import pandas as pd
 import seaborn as sns
@@ -18,7 +19,13 @@ _ROOT = Path(__file__).resolve().parents[4]
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
-from src.paper_figures.common import save_jpeg  # noqa: E402
+from src.paper_figures.common import (  # noqa: E402
+    FULL_DATA_REFERENCE_COLOR,
+    FULL_DATA_REFERENCE_LINESTYLE,
+    TARGET_REFERENCE_COLOR,
+    TARGET_REFERENCE_LINESTYLE,
+    save_jpeg,
+)
 from src.paper_figures.config import (  # noqa: E402
     METHOD_COLORS,
     write_paper_configuration_summary,
@@ -38,18 +45,18 @@ ABLATION_METHOD_COLORS = {
 }
 ATTACKER_SHIFT_BUDGET = 10.0
 SCORE_DISPLAY_LABELS = {
-    "Current hazard": "Est. current event\nprobability",
-    "Remaining-time quantile": "Est. remaining-time\nquantile",
+    "Current hazard": "Est. current\nevent\nprobability",
+    "Remaining-time quantile": "Est.\nremaining-time\nquantile",
     "Random": "Random",
-    "Oracle remaining time": "Oracle remaining\ntime",
+    "Oracle remaining time": "Oracle\nremaining\ntime",
 }
 FACTOR_SPECS = {
     "n1": {
         "xlabel": (
-            "Total adaptive-calibration size\n"
+            "Phase I calibration set size\n"
             r"$|\mathcal{I}_{\rm cal1}|+|\mathcal{I}_{\rm crc}|$"
         ),
-        "title": r"Adaptive-calibration sample-size ablation",
+        "title": r"Phase I calibration-set-size ablation",
     },
     "score_noise": {
         "xlabel": r"Score-noise strength $\lambda$",
@@ -84,7 +91,7 @@ FACTOR_SPECS = {
         "title": "Optimization-process ablation",
     },
     "attacker_shift": {
-        "xlabel": r"Calibration attacker $\rightarrow$ test attacker",
+        "xlabel": "Dataset",
         "title": "Attacker-shift ablation",
     },
 }
@@ -94,6 +101,8 @@ SOURCE_COLUMNS = {
     "calibration_name",
     "target_coverage",
     "coverage",
+    "size",
+    "absolute_coverage_difference",
     "configured_budget_per_sample",
     "reported_assigned_budget_per_sample",
     "actual_event_stopped_budget_per_sample",
@@ -136,6 +145,15 @@ SOURCE_COLUMNS = {
     "mean_metric_target_a_weighted_inverse_probability",
     "conditional_variance_unsafe_event_rate_estimator",
     "estimated_conditional_variance_unsafe_event_rate_estimator",
+    "estimated_conditional_variance_upb_coverage_estimator",
+    "upb_estimator_ablation",
+    "upb_estimator_ablation_method",
+    "upb_estimator_ablation_estimator",
+    "upb_estimator_ablation_estimator_kind",
+    "upb_estimator_ablation_uses_crc",
+    "upb_estimator_ablation_allocator_name",
+    "upb_estimator_ablation_paired_reference",
+    "upb_estimator_ablation_acquisition_sha256",
 }
 
 
@@ -156,7 +174,8 @@ def _discover(input_dir: Path, suffix: str) -> list[Path]:
     # removed below.
     candidates = list(input_dir.rglob("all_df.csv"))
     if input_dir.name in {
-            "merged_calibration_dfs", "merged_metric_calibration_dfs"}:
+            "merged_calibration_dfs", "merged_metric_calibration_dfs",
+            "merged_upb_calibration_dfs"}:
         candidates.extend(input_dir.parent.glob("*/all_df.csv"))
     # Metric N1 jobs use one directory per N1 to avoid concurrent writers
     # racing on the same merged CSV. Attacker shifts similarly use one suffix
@@ -261,7 +280,7 @@ def _attacker_shift_plot_identity(row: pd.Series) -> tuple[int, int, str]:
     """Return stable task/direction order and the displayed shift label."""
     dataset = str(row["attacker_shift_source_dataset_name"])
     if "red_team" in dataset:
-        task_order, task_label = 0, "Red team"
+        task_order, task_label = 0, "Red-Team"
     elif "toxicity" in dataset:
         task_order, task_label = 1, "Toxicity"
     else:
@@ -274,9 +293,7 @@ def _attacker_shift_plot_identity(row: pd.Series) -> tuple[int, int, str]:
             f"both are {source}."
         )
     direction_order = 0 if (source, target) == ("Gemma", "Qwen") else 1
-    return task_order, direction_order, (
-        task_label + f"\n{source} $\\to$ {target}"
-    )
+    return task_order, direction_order, task_label
 
 
 def load_ablation_data(
@@ -489,7 +506,11 @@ def load_ablation_data(
             .set_index("factor_value")["ablation_label"].to_dict()
         )
         data["factor_label"] = data["factor_value"].map(labels)
-        if kind == "score":
+        if kind == "representation":
+            data["factor_label"] = data["factor_label"].replace(
+                {"Continuous": "Cont.\nmap"}
+            )
+        elif kind == "score":
             data["factor_label"] = data["factor_label"].replace(
                 SCORE_DISPLAY_LABELS
             )
@@ -697,7 +718,11 @@ def load_metric_ablation_data(
             .set_index("factor_value")["ablation_label"].to_dict()
         )
         data["factor_label"] = data["factor_value"].map(labels)
-        if kind == "score":
+        if kind == "representation":
+            data["factor_label"] = data["factor_label"].replace(
+                {"Continuous": "Cont.\nmap"}
+            )
+        elif kind == "score":
             data["factor_label"] = data["factor_label"].replace(
                 SCORE_DISPLAY_LABELS
             )
@@ -723,13 +748,260 @@ def load_metric_ablation_data(
     return data, pd.DataFrame(inventory)
 
 
+UPB_ESTIMATOR_ORDER = ("Ordinary HT", "Terminal AHT", "Sequential AHT")
+
+
+def _variance_contributions(
+        frame: pd.DataFrame,
+        *,
+        value_column: str,
+        grouping: list[str],
+) -> pd.Series:
+    """Return splitwise terms whose cell mean equals sample variance."""
+    group = frame.groupby(grouping, observed=True)[value_column]
+    centered_square = (frame[value_column] - group.transform("mean")) ** 2
+    count = group.transform("count")
+    correction = count / (count - 1).where(count > 1, np.nan)
+    return centered_square * correction
+
+
+def load_upb_estimator_ablation_data(
+        input_dir: Path,
+        *,
+        experiment_suffix: str,
+        target_coverage: float = 0.80,
+) -> pd.DataFrame:
+    """Load the paired UPB allocation-by-estimator ablation."""
+    frames: list[pd.DataFrame] = []
+    for path in _discover(input_dir, experiment_suffix):
+        frame = _read_available(path)
+        marker = pd.to_numeric(
+            frame["upb_estimator_ablation"], errors="coerce"
+        )
+        frame = frame[marker.eq(1)].copy()
+        frame = frame[np.isclose(
+            pd.to_numeric(frame["target_coverage"], errors="coerce"),
+            target_coverage,
+            atol=5e-7,
+        )].copy()
+        parent_name = path.parent.name.casefold()
+        if "dataset_autoif_" in parent_name:
+            frame["dataset_key"] = "autoif"
+            frame["dataset_label"] = "AutoIF"
+        elif "dataset_toxicity_" in parent_name:
+            frame["dataset_key"] = "toxicity"
+            frame["dataset_label"] = "Toxicity"
+        else:
+            continue
+        frame["source_file"] = str(path)
+        frames.append(frame)
+    if not frames:
+        raise ValueError(
+            "No usable AutoIF or Toxicity UPB estimator-ablation rows were "
+            f"found for suffix {experiment_suffix!r}."
+        )
+
+    data = pd.concat(frames, ignore_index=True, sort=False)
+    data["method"] = data["upb_estimator_ablation_method"].astype(str)
+    data["estimator"] = data[
+        "upb_estimator_ablation_estimator"
+    ].astype(str)
+    data = data[
+        data["method"].isin(METHOD_ORDER)
+        & data["estimator"].isin(UPB_ESTIMATOR_ORDER)
+    ].copy()
+    data["coverage_pct"] = 100.0 * pd.to_numeric(
+        data["coverage"], errors="coerce"
+    )
+    data["coverage_deviation_pp"] = (
+        data["coverage_pct"] - 100.0 * target_coverage
+    ).abs()
+    data["upb_size"] = pd.to_numeric(data["size"], errors="coerce")
+    data["miscoverage_estimator_variance_pp2"] = pd.to_numeric(
+        data["estimated_conditional_variance_upb_coverage_estimator"],
+        errors="coerce",
+    )
+
+    cell = ["dataset_key", "method", "estimator"]
+    data["coverage_variance_contribution_pp2"] = _variance_contributions(
+        data, value_column="coverage_pct", grouping=cell
+    )
+    data["upb_size_variance_contribution"] = _variance_contributions(
+        data, value_column="upb_size", grouping=cell
+    )
+
+    reference = data[
+        data["method"].eq("Static")
+        & data["estimator"].eq("Terminal AHT")
+    ][
+        ["dataset_key", "seed", "miscoverage_estimator_variance_pp2"]
+    ].rename(columns={
+        "miscoverage_estimator_variance_pp2": "paired_reference_variance_pp2"
+    })
+    if reference.duplicated(["dataset_key", "seed"]).any():
+        raise ValueError(
+            "Static + Terminal AHT has duplicate rows for a dataset/seed."
+        )
+    data = data.merge(
+        reference, on=["dataset_key", "seed"], how="left", validate="many_to_one"
+    )
+    if data["paired_reference_variance_pp2"].isna().any():
+        missing = data.loc[
+            data["paired_reference_variance_pp2"].isna(),
+            ["dataset_key", "seed"],
+        ].drop_duplicates()
+        raise ValueError(
+            "Missing paired Static + Terminal AHT reference rows:\n"
+            + missing.to_string(index=False)
+        )
+    if (data["paired_reference_variance_pp2"] < 0).any():
+        raise ValueError(
+            "Paired Static + Terminal AHT variances must be nonnegative."
+        )
+    numerator = data["miscoverage_estimator_variance_pp2"]
+    denominator = data["paired_reference_variance_pp2"]
+    ratio = pd.Series(np.nan, index=data.index, dtype=float)
+    positive_reference = denominator > 0
+    ratio.loc[positive_reference] = (
+        numerator.loc[positive_reference]
+        / denominator.loc[positive_reference]
+    )
+    both_zero = (~positive_reference) & np.isclose(
+        numerator, 0.0, atol=1e-15
+    )
+    ratio.loc[both_zero] = 1.0
+    data["paired_estimator_variance_ratio"] = ratio
+
+    duplicate_key = ["dataset_key", "seed", "method", "estimator"]
+    duplicates = data.duplicated(duplicate_key, keep=False)
+    if bool(duplicates.any()):
+        raise ValueError(
+            "Duplicate UPB estimator-ablation rows detected:\n"
+            + data.loc[duplicates, duplicate_key + ["calibration_name"]]
+            .to_string(index=False)
+        )
+    pairing = data.groupby(
+        ["dataset_key", "seed", "method"], observed=True
+    )["upb_estimator_ablation_acquisition_sha256"].nunique(dropna=False)
+    if not bool(pairing.eq(1).all()):
+        raise ValueError(
+            "Estimator variants changed the paired acquisition path:\n"
+            + pairing[pairing.ne(1)].to_string()
+        )
+    return data
+
+
 def _style(axis, *, xlabel: str, ylabel: str) -> None:
-    axis.set_xlabel(xlabel)
-    axis.set_ylabel(ylabel, labelpad=8, fontsize=9 if len(ylabel) > 42 else 10)
+    axis.set_xlabel(xlabel, fontsize=14.4, labelpad=7)
+    axis.set_ylabel(
+        ylabel,
+        labelpad=9,
+        fontsize=13.2 if len(ylabel) > 42 else 14.0,
+    )
+    axis.tick_params(axis="both", labelsize=12.6)
     axis.grid(axis="y", linestyle=":", linewidth=0.7, alpha=0.48)
     axis.set_axisbelow(True)
     axis.spines["top"].set_visible(False)
     axis.spines["right"].set_visible(False)
+    if axis.get_yscale() == "linear":
+        axis.yaxis.set_major_locator(MaxNLocator(nbins="auto", prune="upper"))
+
+
+def generate_upb_estimator_ablation_figure(
+        data: pd.DataFrame,
+        *,
+        dataset_key: str,
+        output_path: Path,
+        quality: str,
+        target_coverage: float = 0.80,
+) -> None:
+    """Create the 3-by-2 allocation-by-estimator UPB comparison."""
+    plot_data = data[data["dataset_key"].eq(dataset_key)].copy()
+    if plot_data.empty:
+        raise ValueError(f"No UPB estimator-ablation rows for {dataset_key!r}.")
+    panels = (
+        ("coverage_pct", "Coverage Rate", "Coverage rate (%)"),
+        (
+            "coverage_variance_contribution_pp2",
+            "Coverage Variance",
+            "Squared-deviation contribution\n" + r"(pp$^2$)",
+        ),
+        ("upb_size", "UPB Size", "UPB size"),
+        (
+            "upb_size_variance_contribution",
+            "UPB-Size Variance",
+            "Squared-deviation contribution",
+        ),
+        (
+            "miscoverage_estimator_variance_pp2",
+            "Miscoverage-Estimator Variance",
+            r"Conditional variance (pp$^2$)",
+        ),
+        (
+            "paired_estimator_variance_ratio",
+            "Paired Estimator-Variance Ratio",
+            "Ratio to Static + Terminal AHT",
+        ),
+    )
+    figure, axes = plt.subplots(3, 2, figsize=(12.4, 11.2))
+    for axis, (metric, panel_title, ylabel) in zip(axes.flat, panels):
+        panel = plot_data.dropna(subset=["estimator", "method", metric])
+        sns.boxplot(
+            data=panel,
+            x="estimator",
+            y=metric,
+            hue="method",
+            order=list(UPB_ESTIMATOR_ORDER),
+            hue_order=list(METHOD_ORDER),
+            palette={method: METHOD_COLORS[method] for method in METHOD_ORDER},
+            linewidth=0.95,
+            fliersize=2.3,
+            ax=axis,
+        )
+        _style(axis, xlabel="Estimator", ylabel=ylabel)
+        axis.set_title(panel_title, fontsize=15.0, pad=7)
+        axis.tick_params(axis="x", labelrotation=0)
+        if metric == "coverage_pct":
+            axis.axhline(
+                100.0 * target_coverage,
+                color=TARGET_REFERENCE_COLOR,
+                linestyle=TARGET_REFERENCE_LINESTYLE,
+                linewidth=1.25,
+                zorder=2,
+            )
+        elif metric == "paired_estimator_variance_ratio":
+            axis.axhline(
+                1.0,
+                color=TARGET_REFERENCE_COLOR,
+                linestyle=TARGET_REFERENCE_LINESTYLE,
+                linewidth=1.25,
+                zorder=2,
+            )
+
+    legend_axis = axes.flat[0]
+    handles, labels = legend_axis.get_legend_handles_labels()
+    if handles:
+        legend_axis.legend(
+            handles,
+            labels,
+            title="Allocation method",
+            loc="best",
+            frameon=True,
+            framealpha=0.90,
+            fontsize=11.8,
+            title_fontsize=12.2,
+        )
+    for axis in axes.flat[1:]:
+        legend = axis.get_legend()
+        if legend is not None:
+            legend.remove()
+    figure.tight_layout(
+        rect=(0.0, 0.015, 1.0, 0.995), h_pad=2.9, w_pad=2.5
+    )
+    save_jpeg(
+        figure, output_path, quality, tight=False, panel_count=len(panels)
+    )
+    plt.close(figure)
 
 
 def summarize_line_statistics(
@@ -809,15 +1081,20 @@ def _draw_line(
     axis.set_xticks(tick_positions)
     tick_labels = [labels.get(value, f"{value:g}") for value in values]
     rotate_labels = (
-        (len(values) >= 5 and not xlabel.startswith("Target budget"))
-        or xlabel == "Score function"
+        len(values) >= 5
+        and not xlabel.startswith("Target budget")
+        and xlabel != "Score function"
     )
     axis.set_xticklabels(
         tick_labels,
-        rotation=18 if rotate_labels else 0,
-        ha="right" if rotate_labels else "center",
+        rotation=(45 if xlabel == "Score-map representation" else 18)
+        if rotate_labels else 0,
+        ha=("center" if xlabel == "Score-map representation" else "right")
+        if rotate_labels else "center",
     )
     _style(axis, xlabel=xlabel, ylabel=ylabel)
+    if xlabel == "Score function":
+        axis.tick_params(axis="x", labelsize=11.8)
     return statistics
 
 
@@ -851,9 +1128,8 @@ def generate_ablation_figure(
         ),
         (
             "mean_target_a_weight",
-            "Mean Weighted Error",
-            "Mean weighted error\n"
-            r"$A_i(q_{\hat\tau})/\pi_i$",
+            r"Mean Weighted Error $A_i(q_{\hat\tau})/\pi_i$",
+            "Mean weighted error",
         ),
     )
     extended = kind in {"n1", "score_noise", "budget", "representation"}
@@ -863,7 +1139,7 @@ def generate_ablation_figure(
             (
                 "coverage_across_split_variance_pp2",
                 "Coverage Variance",
-                r"Across-split coverage variance (pp$^2$)",
+                r"Coverage variance (pp$^2$)",
             ),
             (
                 "budget_used_per_sample", "Budget Used per Sample",
@@ -871,7 +1147,7 @@ def generate_ablation_figure(
             ),
             (
                 "observed_events", "Observed Events",
-                "Number of observed events",
+                "Observed events",
             ),
             base_panels[2],
             base_panels[3],
@@ -881,7 +1157,7 @@ def generate_ablation_figure(
     figure, axes = plt.subplots(
         3 if extended else 2,
         2,
-        figsize=(11.4, 10.2 if extended else 7.1),
+        figsize=(12.2, 11.0 if extended else 7.7),
     )
     all_statistics = []
     for axis, (metric, panel_title, ylabel) in zip(axes.flat, panels):
@@ -896,29 +1172,35 @@ def generate_ablation_figure(
         )
         statistics["metric"] = metric
         all_statistics.append(statistics)
-        axis.set_title(panel_title, fontsize=11)
+        axis.set_title(panel_title, fontsize=15.0, pad=7)
         if metric == "coverage_pct":
-            axis.axhline(90.0, color="#D62728", linestyle="--", linewidth=1.2)
+            axis.axhline(
+                90.0, color=TARGET_REFERENCE_COLOR,
+                linestyle=TARGET_REFERENCE_LINESTYLE, linewidth=1.2,
+            )
         elif metric == "budget_used_per_sample":
             if kind == "budget":
                 axis.plot(
                     values,
                     values,
-                    color="#D62728",
-                    linestyle="--",
+                    color=TARGET_REFERENCE_COLOR,
+                    linestyle=TARGET_REFERENCE_LINESTYLE,
                     linewidth=1.2,
                     zorder=2,
                 )
             else:
-                axis.axhline(20.0, color="#D62728", linestyle="--", linewidth=1.2)
+                axis.axhline(
+                    20.0, color=TARGET_REFERENCE_COLOR,
+                    linestyle=TARGET_REFERENCE_LINESTYLE, linewidth=1.2,
+                )
     # Keep the shared legend inside one panel to save horizontal space.
     axes.flat[1].legend(
         title="Method",
         loc="best",
         frameon=True,
         framealpha=0.88,
-        fontsize=9,
-        title_fontsize=9,
+        fontsize=11.8,
+        title_fontsize=12.2,
     )
     for axis in axes.flat:
         if axis is axes.flat[1]:
@@ -926,12 +1208,9 @@ def generate_ablation_figure(
         legend = axis.get_legend()
         if legend is not None:
             legend.remove()
-    figure.suptitle(
-        f"{spec['title']} (mean $\\pm$ 1 SD across splits)",
-        y=0.995,
-        fontsize=13,
+    figure.tight_layout(
+        rect=(0.0, 0.04, 1.0, 0.995), h_pad=2.7, w_pad=2.2
     )
-    figure.tight_layout(rect=(0.0, 0.02, 1.0, 0.97), h_pad=2.0, w_pad=1.7)
     save_jpeg(
         figure, output_path, quality, tight=False, panel_count=len(panels)
     )
@@ -978,7 +1257,7 @@ def generate_categorical_box_figure(
     figure, axes = plt.subplots(
         3 if extended else 2,
         2,
-        figsize=(11.4, 10.2 if extended else 7.1),
+        figsize=(12.2, 11.0 if extended else 7.7),
     )
     base_panels = [
         ("coverage_pct", "Coverage Rate", "Coverage rate (%)"),
@@ -991,9 +1270,9 @@ def generate_categorical_box_figure(
             "|Coverage - target| (pp)",
         ),
         (
-            "mean_target_a_weight", "Mean Weighted Error",
-            "Mean weighted error\n"
-            r"$A_i(q_{\hat\tau})/\pi_i$",
+            "mean_target_a_weight",
+            r"Mean Weighted Error $A_i(q_{\hat\tau})/\pi_i$",
+            "Mean weighted error",
         ),
     ]
     panels = (
@@ -1002,12 +1281,12 @@ def generate_categorical_box_figure(
             (
                 "coverage_across_split_variance_pp2",
                 "Coverage Variance",
-                r"Across-split coverage variance (pp$^2$)",
+                r"Coverage variance (pp$^2$)",
             ),
             base_panels[1],
             (
                 "observed_events", "Observed Events",
-                "Number of observed events",
+                "Observed events",
             ),
             base_panels[2],
             base_panels[3],
@@ -1058,7 +1337,7 @@ def generate_categorical_box_figure(
                 ax=axis,
             )
         _style(axis, xlabel=str(spec["xlabel"]), ylabel=ylabel)
-        axis.set_title(panel_title, fontsize=11)
+        axis.set_title(panel_title, fontsize=15.0, pad=7)
         axis.tick_params(axis="x", labelrotation=0)
         if optimization:
             axis.set_xticks([])
@@ -1066,7 +1345,10 @@ def generate_categorical_box_figure(
         statistics["metric"] = metric
         all_statistics.append(statistics)
         if metric == "coverage_pct":
-            axis.axhline(90.0, color="#D62728", linestyle="--", linewidth=1.2)
+            axis.axhline(
+                90.0, color=TARGET_REFERENCE_COLOR,
+                linestyle=TARGET_REFERENCE_LINESTYLE, linewidth=1.2,
+            )
         elif metric == "budget_used_per_sample":
             configured_budgets = pd.to_numeric(
                 plot_data.get(
@@ -1089,8 +1371,8 @@ def generate_categorical_box_figure(
             )
             axis.axhline(
                 reference_budget,
-                color="#D62728",
-                linestyle="--",
+                color=TARGET_REFERENCE_COLOR,
+                linestyle=TARGET_REFERENCE_LINESTYLE,
                 linewidth=1.2,
             )
     for axis in axes.flat[len(panels):]:
@@ -1101,7 +1383,7 @@ def generate_categorical_box_figure(
         legend_axis.legend(
             handles, legend_labels,
             title="Method", loc="best", frameon=True, framealpha=0.88,
-            fontsize=9, title_fontsize=9,
+            fontsize=11.8, title_fontsize=12.2,
         )
     for axis in axes.flat:
         if axis is legend_axis:
@@ -1109,8 +1391,9 @@ def generate_categorical_box_figure(
         legend = axis.get_legend()
         if legend is not None:
             legend.remove()
-    figure.suptitle(str(spec["title"]), y=0.995, fontsize=13)
-    figure.tight_layout(rect=(0.0, 0.02, 1.0, 0.97), h_pad=2.0, w_pad=1.7)
+    figure.tight_layout(
+        rect=(0.0, 0.04, 1.0, 0.995), h_pad=2.7, w_pad=2.2
+    )
     save_jpeg(
         figure, output_path, quality, tight=False, panel_count=len(panels)
     )
@@ -1135,27 +1418,27 @@ def generate_metric_ablation_figure(
         )
     spec = FACTOR_SPECS[kind]
     values = sorted(data["factor_value"].dropna().unique())
-    figure, axes = plt.subplots(3, 2, figsize=(11.4, 10.2))
+    figure, axes = plt.subplots(3, 2, figsize=(12.2, 11.0))
     panels = (
         ("event_rate_pct", "Estimated Event Rate", "Event rate (%)"),
         (
             "event_rate_abs_error_pp", "Event-Rate Error",
-            "Absolute event-rate error (pp)",
+            "Absolute error\n(pp)",
         ),
         (
             "event_rate_across_split_variance_pp2",
             "Variance of Estimated Event Rate",
-            r"Across-split variance (pp$^2$)",
+            r"Variance (pp$^2$)",
         ),
         (
             "budget_used_per_sample", "Budget Used per Sample",
             "Budget Used per Sample",
         ),
-        ("observed_events", "Observed Events", "Number of observed events"),
+        ("observed_events", "Observed Events", "Observed events"),
         (
-            "mean_target_a_weight", "Mean Weighted Error",
-            "Mean weighted error\n"
-            r"$A_i/\pi_i$",
+            "mean_target_a_weight",
+            r"Mean Weighted Error $A_i/\pi_i$",
+            "Mean weighted error",
         ),
     )
     all_statistics = []
@@ -1171,20 +1454,21 @@ def generate_metric_ablation_figure(
         )
         statistics["metric"] = metric
         all_statistics.append(statistics)
-        axis.set_title(panel_title, fontsize=11)
+        axis.set_title(panel_title, fontsize=15.0, pad=7)
         if metric == "event_rate_pct":
             truth = pd.to_numeric(
                 data["event_rate_truth_pct"], errors="coerce"
             ).dropna()
             if not truth.empty:
                 axis.axhline(
-                    float(truth.iloc[0]), color="#D62728",
-                    linestyle="--", linewidth=1.2,
+                    float(truth.iloc[0]), color=FULL_DATA_REFERENCE_COLOR,
+                    linestyle=FULL_DATA_REFERENCE_LINESTYLE, linewidth=1.2,
                 )
         elif metric == "budget_used_per_sample":
             if kind == "budget":
                 axis.plot(
-                    values, values, color="#D62728", linestyle="--",
+                    values, values, color=TARGET_REFERENCE_COLOR,
+                    linestyle=TARGET_REFERENCE_LINESTYLE,
                     linewidth=1.2, zorder=2,
                 )
             else:
@@ -1197,23 +1481,21 @@ def generate_metric_ablation_figure(
                     )
                 axis.axhline(
                     float(configured[0]) if len(configured) else 20.0,
-                    color="#D62728", linestyle="--",
+                    color=TARGET_REFERENCE_COLOR,
+                    linestyle=TARGET_REFERENCE_LINESTYLE,
                     linewidth=1.2,
                 )
     axes.flat[0].legend(
         title="Method", loc="best", frameon=True, framealpha=0.88,
-        fontsize=8.5, title_fontsize=9,
+        fontsize=11.8, title_fontsize=12.2,
     )
     for axis in axes.flat[1:]:
         legend = axis.get_legend()
         if legend is not None:
             legend.remove()
-    figure.suptitle(
-        str(spec["title"]) + " (mean $\\pm$ 1 SD across splits)",
-        y=0.995,
-        fontsize=13,
+    figure.tight_layout(
+        rect=(0.0, 0.04, 1.0, 0.995), h_pad=2.9, w_pad=2.3
     )
-    figure.tight_layout(rect=(0.0, 0.015, 1.0, 0.975), h_pad=2.0, w_pad=1.8)
     save_jpeg(
         figure, output_path, quality, tight=False, panel_count=len(panels)
     )
@@ -1251,27 +1533,27 @@ def generate_metric_categorical_box_figure(
         ).copy()
         plot_data["factor_label"] = " "
         order = [" "]
-    figure, axes = plt.subplots(3, 2, figsize=(11.4, 10.2))
+    figure, axes = plt.subplots(3, 2, figsize=(12.2, 11.0))
     panels = (
         ("event_rate_pct", "Estimated Event Rate", "Event rate (%)"),
         (
             "event_rate_abs_error_pp", "Event-Rate Error",
-            "Absolute event-rate error (pp)",
+            "Absolute error\n(pp)",
         ),
         (
             "event_rate_across_split_variance_pp2",
             "Variance of Estimated Event Rate",
-            r"Across-split variance (pp$^2$)",
+            r"Variance (pp$^2$)",
         ),
         (
             "budget_used_per_sample", "Budget Used per Sample",
             "Budget Used per Sample",
         ),
-        ("observed_events", "Observed Events", "Number of observed events"),
+        ("observed_events", "Observed Events", "Observed events"),
         (
-            "mean_target_a_weight", "Mean Weighted Error",
-            "Mean weighted error\n"
-            r"$A_i/\pi_i$",
+            "mean_target_a_weight",
+            r"Mean Weighted Error $A_i/\pi_i$",
+            "Mean weighted error",
         ),
     )
     all_statistics = []
@@ -1280,7 +1562,7 @@ def generate_metric_categorical_box_figure(
             subset=["factor_label", "method", metric]
         )
         if metric == "event_rate_across_split_variance_pp2":
-            # There is exactly one across-split variance per
+            # There is exactly one variance estimate per
             # factor-by-method cell. Repeating that scalar on every seed row
             # is convenient for the shared data pipeline, but a boxplot of a
             # constant has zero height and appears empty. Plot the cell
@@ -1326,8 +1608,8 @@ def generate_metric_categorical_box_figure(
                 ax=axis,
             )
         _style(axis, xlabel=str(spec["xlabel"]), ylabel=ylabel)
-        axis.set_title(panel_title, fontsize=11)
-        axis.tick_params(axis="x", labelrotation=12)
+        axis.set_title(panel_title, fontsize=15.0, pad=7)
+        axis.tick_params(axis="x", labelrotation=0)
         if optimization:
             axis.set_xticks([])
         statistics = summarize_line_statistics(data, metric=metric)
@@ -1339,8 +1621,8 @@ def generate_metric_categorical_box_figure(
             ).dropna()
             if not truth.empty:
                 axis.axhline(
-                    float(truth.iloc[0]), color="#D62728",
-                    linestyle="--", linewidth=1.2,
+                    float(truth.iloc[0]), color=FULL_DATA_REFERENCE_COLOR,
+                    linestyle=FULL_DATA_REFERENCE_LINESTYLE, linewidth=1.2,
                 )
         elif metric == "budget_used_per_sample":
             configured = pd.to_numeric(
@@ -1348,26 +1630,22 @@ def generate_metric_categorical_box_figure(
             ).dropna().unique()
             if len(configured) == 1:
                 axis.axhline(
-                    float(configured[0]), color="#D62728",
-                    linestyle="--", linewidth=1.2,
+                    float(configured[0]), color=TARGET_REFERENCE_COLOR,
+                    linestyle=TARGET_REFERENCE_LINESTYLE, linewidth=1.2,
                 )
     handles, legend_labels = axes.flat[0].get_legend_handles_labels()
     if handles:
         axes.flat[0].legend(
             handles, legend_labels, title="Method", loc="best",
-            frameon=True, framealpha=0.88, fontsize=8.5, title_fontsize=9,
+            frameon=True, framealpha=0.88,
+            fontsize=11.8, title_fontsize=12.2,
         )
     for axis in axes.flat[1:]:
         legend = axis.get_legend()
         if legend is not None:
             legend.remove()
-    figure.suptitle(
-        str(spec["title"]),
-        y=0.995,
-        fontsize=13,
-    )
     figure.tight_layout(
-        rect=(0.0, 0.015, 1.0, 0.975), h_pad=2.0, w_pad=1.8
+        rect=(0.0, 0.015, 1.0, 0.995), h_pad=2.9, w_pad=2.3
     )
     save_jpeg(
         figure, output_path, quality, tight=False, panel_count=len(panels)
@@ -1385,7 +1663,7 @@ def generate_representation_diagnostics(
     """Plot the extra diagnostics requested for representation capacity."""
     dynamic = data[~data["method"].eq("Static")].copy()
     values = sorted(dynamic["factor_value"].dropna().unique())
-    figure, axes = plt.subplots(1, 3, figsize=(13.0, 3.7))
+    figure, axes = plt.subplots(1, 3, figsize=(13.0, 4.25))
     output = []
     for axis, metric, title, ylabel in (
         (
@@ -1394,18 +1672,19 @@ def generate_representation_diagnostics(
         ),
         (
             axes[1], "phase2_target_weight_objective",
-            "Phase-II Weighted-Error Objective",
-            "Mean weighted-error proxy\n"
+            "Phase-II Weighted-Error Objective\n"
             r"$A_i(1/\pi_i-1)$",
+            "Mean weighted-error proxy",
         ),
     ):
         statistics = _draw_line(
             axis, dynamic, metric=metric, ylabel=ylabel,
             xlabel="Score-map representation", values=values,
+            categorical_spacing=True,
         )
         statistics["metric"] = metric
         output.append(statistics)
-        axis.set_title(title)
+        axis.set_title(title, fontsize=15.0, pad=7)
 
     variance = (
         dynamic.groupby(["factor_value", "method"], observed=True)["coverage_pct"]
@@ -1418,6 +1697,7 @@ def generate_representation_diagnostics(
         dynamic[["factor_value", "factor_label"]].drop_duplicates("factor_value")
         .set_index("factor_value")["factor_label"].to_dict()
     )
+    x_positions = np.arange(len(values), dtype=float)
     for method, style, marker in (
         ("DAPRO", "-", "o"), ("DAPRO w/o CRC", "-.", "s")
     ):
@@ -1425,20 +1705,23 @@ def generate_representation_diagnostics(
             "factor_value"
         ).reindex(values)
         axes[2].plot(
-            values, rows["variance"], label=method,
+            x_positions, rows["variance"], label=method,
             color=METHOD_COLORS[method], linestyle=style, marker=marker,
         )
-    axes[2].set_xticks(values)
+    axes[2].set_xticks(x_positions)
     axes[2].set_xticklabels(
         [labels.get(value, f"{value:g}") for value in values],
-        rotation=18, ha="right",
+        rotation=45, ha="center",
     )
     _style(
         axes[2], xlabel="Score-map representation",
         ylabel=r"Variance of coverage (pp$^2$)",
     )
-    axes[2].set_title("Coverage Variance")
-    axes[1].legend(title="Method", loc="best", fontsize=8, framealpha=.9)
+    axes[2].set_title("Coverage Variance", fontsize=15.0, pad=7)
+    axes[1].legend(
+        title="Method", loc="best", fontsize=11.8,
+        title_fontsize=12.2, framealpha=.9,
+    )
     figure.tight_layout(w_pad=1.5)
     save_jpeg(
         figure, output_path, quality, tight=False, panel_count=3
@@ -1457,7 +1740,7 @@ def generate_metric_representation_diagnostics(
     """Representation diagnostics using the metric target and estimator."""
     dynamic = data[~data["method"].eq("Static")].copy()
     values = sorted(dynamic["factor_value"].dropna().unique())
-    figure, axes = plt.subplots(1, 3, figsize=(13.0, 3.7))
+    figure, axes = plt.subplots(1, 3, figsize=(13.0, 4.25))
     output = []
     for axis, metric, title, ylabel in (
         (
@@ -1466,18 +1749,19 @@ def generate_metric_representation_diagnostics(
         ),
         (
             axes[1], "phase2_target_weight_objective",
-            "Phase-II Weighted-Error Objective",
-            "Mean weighted-error proxy\n"
+            "Phase-II Weighted-Error Objective\n"
             r"$A_i(1/\pi_i-1)$",
+            "Mean weighted-error proxy",
         ),
     ):
         statistics = _draw_line(
             axis, dynamic, metric=metric, ylabel=ylabel,
             xlabel="Score-map representation", values=values,
+            categorical_spacing=True,
         )
         statistics["metric"] = metric
         output.append(statistics)
-        axis.set_title(title)
+        axis.set_title(title, fontsize=15.0, pad=7)
 
     variance = (
         dynamic.groupby(["factor_value", "method"], observed=True)[
@@ -1492,6 +1776,7 @@ def generate_metric_representation_diagnostics(
         .drop_duplicates("factor_value")
         .set_index("factor_value")["factor_label"].to_dict()
     )
+    x_positions = np.arange(len(values), dtype=float)
     for method, style, marker in (
         ("DAPRO", "-", "o"), ("DAPRO w/o CRC", "-.", "s")
     ):
@@ -1499,20 +1784,23 @@ def generate_metric_representation_diagnostics(
             "factor_value"
         ).reindex(values)
         axes[2].plot(
-            values, rows["variance"], label=method,
+            x_positions, rows["variance"], label=method,
             color=METHOD_COLORS[method], linestyle=style, marker=marker,
         )
-    axes[2].set_xticks(values)
+    axes[2].set_xticks(x_positions)
     axes[2].set_xticklabels(
         [labels.get(value, f"{value:g}") for value in values],
-        rotation=18, ha="right",
+        rotation=45, ha="center",
     )
     _style(
         axes[2], xlabel="Score-map representation",
         ylabel=r"Variance of event-rate estimate (pp$^2$)",
     )
-    axes[2].set_title("Event-Rate Variance")
-    axes[1].legend(title="Method", loc="best", fontsize=8, framealpha=.9)
+    axes[2].set_title("Event-Rate Variance", fontsize=15.0, pad=7)
+    axes[1].legend(
+        title="Method", loc="best", fontsize=11.8,
+        title_fontsize=12.2, framealpha=.9,
+    )
     figure.tight_layout(w_pad=1.5)
     save_jpeg(
         figure, output_path, quality, tight=False, panel_count=3
@@ -1535,6 +1823,11 @@ def _parse_args() -> argparse.Namespace:
         default=_ROOT / "results" / "merged_metric_calibration_dfs",
     )
     parser.add_argument(
+        "--upb-input-dir",
+        type=Path,
+        default=_ROOT / "results" / "merged_upb_calibration_dfs",
+    )
+    parser.add_argument(
         "--output-dir",
         type=Path,
         default=_ROOT / "figures" / "paper" / "ablations",
@@ -1546,11 +1839,14 @@ def _parse_args() -> argparse.Namespace:
         "--metric-experiment-prefix", default="m_ablv1"
     )
     parser.add_argument(
+        "--upb-estimator-experiment-suffix", default="upb_est_ablv1"
+    )
+    parser.add_argument(
         "--tasks",
         nargs="+",
-        choices=("lpb", "metric"),
-        default=["lpb", "metric"],
-        help="Generate LPB figures, metric figures, or both (default).",
+        choices=("lpb", "metric", "upb"),
+        default=["lpb", "metric", "upb"],
+        help="Generate LPB, metric, and/or UPB-estimator figures (default: all).",
     )
     parser.add_argument(
         "--kinds",
@@ -1642,6 +1938,60 @@ def main() -> None:
                 )
                 generated_count += int(diagnostic_path.exists())
                 print(f"Generated {diagnostic_path}")
+    if "upb" in args.tasks:
+        data = load_upb_estimator_ablation_data(
+            args.upb_input_dir,
+            experiment_suffix=args.upb_estimator_experiment_suffix,
+            target_coverage=0.80,
+        )
+        expected_cells = {
+            ("Static", "Ordinary HT"),
+            ("Static", "Terminal AHT"),
+            ("DAPRO", "Ordinary HT"),
+            ("DAPRO", "Terminal AHT"),
+            ("DAPRO", "Sequential AHT"),
+            ("DAPRO w/o CRC", "Ordinary HT"),
+            ("DAPRO w/o CRC", "Terminal AHT"),
+            ("DAPRO w/o CRC", "Sequential AHT"),
+        }
+        for dataset_key in ("toxicity", "autoif"):
+            subset = data[data["dataset_key"].eq(dataset_key)]
+            present_cells = set(zip(subset["method"], subset["estimator"]))
+            if present_cells != expected_cells:
+                missing = sorted(expected_cells - present_cells)
+                extra = sorted(present_cells - expected_cells)
+                raise ValueError(
+                    f"{dataset_key} UPB estimator cells mismatch; "
+                    f"missing={missing}, extra={extra}."
+                )
+            counts = subset.groupby(
+                ["method", "estimator"], observed=True
+            )["seed"].nunique()
+            if args.strict_seeds and not bool(counts.eq(50).all()):
+                raise ValueError(
+                    f"{dataset_key} UPB estimator ablation does not contain "
+                    f"50 splits in every cell:\n{counts}"
+                )
+            path = (
+                args.output_dir
+                / f"dapro_upb_estimator_ablation_{dataset_key}.jpg"
+            )
+            generate_upb_estimator_ablation_figure(
+                data,
+                dataset_key=dataset_key,
+                output_path=path,
+                quality=args.quality,
+                target_coverage=0.80,
+            )
+            generated_count += int(path.exists())
+            deviation = subset.groupby(
+                ["estimator", "method"], observed=True
+            )["coverage_deviation_pp"].mean()
+            print(f"Generated {path}")
+            print(
+                f"{dataset_key} mean absolute coverage deviations (pp):\n"
+                f"{deviation.to_string()}"
+            )
     if generated_count == 0:
         raise ValueError("No requested ablation figures were generated.")
     print(f"Generated {generated_count} ablation figures; no CSV artifacts written.")

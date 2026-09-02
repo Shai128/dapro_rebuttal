@@ -90,7 +90,7 @@ DATASET_SPECS = (
         "tau_prior": 0.56,
         "target_coverage": 0.90,
         "figure_name": "red_team_qwen",
-        "display_name": "Red Team (Qwen judge)",
+        "display_name": "Red-Team (Qwen judge)",
     },
     {
         "key": "red_team_qwen_upb",
@@ -104,7 +104,7 @@ DATASET_SPECS = (
         "tau_prior": 0.97,
         "target_coverage": 0.70,
         "figure_name": "red_team_qwen_upb",
-        "display_name": "Red Team (Qwen judge, UPB)",
+        "display_name": "Red-Team (Qwen judge, UPB)",
     },
     {
         "key": "red_team_llama_guard",
@@ -118,7 +118,7 @@ DATASET_SPECS = (
         "tau_prior": 0.56,
         "target_coverage": 0.90,
         "figure_name": "red_team_llama_guard",
-        "display_name": "Red Team (Llama-Guard)",
+        "display_name": "Red-Team (Llama-Guard)",
     },
     {
         "key": "red_team_llama_guard_upb",
@@ -132,7 +132,7 @@ DATASET_SPECS = (
         "tau_prior": 0.97,
         "target_coverage": 0.70,
         "figure_name": "red_team_llama_guard_upb",
-        "display_name": "Red Team (Llama-Guard, UPB)",
+        "display_name": "Red-Team (Llama-Guard, UPB)",
     },
     {
         "key": "hallucination3",

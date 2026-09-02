@@ -28,7 +28,7 @@ length is $\maxl=200$.  Numerical summaries in the text average over the four
 target LLMs: Llama 3.1 8B Instruct, Phi-4 Mini Instruct, Qwen 2.5 14B
 Instruct, and Gemma 3 4B Instruct.  We use $N_1:=|\calIone|$ throughout the paper.  The
 configuration field called \texttt{n1} in the implementation instead records
-the total adaptive-calibration size $|\calIone|+|\calIcrc|$.  Thus, for example,
+the Phase I calibration set size $|\calIone|+|\calIcrc|$. Thus, for example,
 the standard total size of 50 corresponds to $N_1=25$ and
 $|\calIcrc|=25$ for \ttmethod, whereas \ttmethod without CRC uses all 50
 samples in $\calIone$.  Static, Uncalibrated, and Oracle do not use this split.
@@ -63,10 +63,10 @@ less variable, but does not carry the CRC budget guarantee.
 
 \begin{figure}[ht]
     \centering
-    \includegraphics[width=0.9\linewidth]{figures/paper/full/lpb/toxicity_coverage_boxplot.jpg}\\
-    \includegraphics[width=0.9\linewidth]{figures/paper/full/lpb/toxicity_size_boxplot.jpg}\\
-    \includegraphics[width=0.9\linewidth]{figures/paper/full/lpb/toxicity_coverage_diff_boxplot.jpg}\\
-    \includegraphics[width=0.9\linewidth]{figures/paper/full/lpb/toxicity_budget_used_boxplot.jpg}
+    \includegraphics[width=0.9\linewidth]{figures/full/lpb/toxicity_coverage_boxplot.jpg}\\
+    \includegraphics[width=0.9\linewidth]{figures/full/lpb/toxicity_size_boxplot.jpg}\\
+    \includegraphics[width=0.9\linewidth]{figures/full/lpb/toxicity_coverage_diff_boxplot.jpg}\\
+    \includegraphics[width=0.9\linewidth]{figures/full/lpb/toxicity_budget_used_boxplot.jpg}
     \caption{\textbf{Toxicity LPBs}: coverage, LPB value, coverage deviation,
     and budget across four target LLMs.  The target coverage is $90\%$,
     $\bar B=20$, and \ttmethod uses $N_1=25$ and
@@ -76,20 +76,21 @@ less variable, but does not carry the CRC budget guarantee.
 
 \begin{figure}[ht]
     \centering
-    \includegraphics[width=0.9\linewidth]{figures/paper/full/lpb/toxicity_n_observed_events_boxplot.jpg}\\
-    \includegraphics[width=0.9\linewidth]{figures/paper/full/lpb/toxicity_mean_weight_boxplot.jpg}\\
-    \includegraphics[width=0.9\linewidth]{figures/paper/full/lpb/toxicity_coverage_variance_barplot.jpg}\\
-    \includegraphics[width=0.9\linewidth]{figures/paper/full/lpb/toxicity_size_variance_barplot.jpg}
-    \caption{\textbf{Toxicity LPBs}: observed unsafe events, mean
-    inverse-probability weight, coverage variance, and normalized LPB-value
-    variance.  Results are computed over 50 random splits.}
+    \includegraphics[width=0.9\linewidth]{figures/full/lpb/toxicity_n_observed_events_boxplot.jpg}\\
+    \includegraphics[width=0.9\linewidth]{figures/full/lpb/toxicity_mean_calibrated_a_weight_boxplot.jpg}\\
+    \includegraphics[width=0.9\linewidth]{figures/full/lpb/toxicity_coverage_variance_barplot.jpg}\\
+    \includegraphics[width=0.9\linewidth]{figures/full/lpb/toxicity_size_variance_barplot.jpg}
+    \caption{\textbf{Toxicity LPBs}: observed unsafe events, mean weighted
+    error $A_i(q_{\hat\tau})/\pi_i$, coverage variance, and LPB-value variance
+    normalized so that Static equals one.  Results are computed over 50
+    random splits.}
     \label{fig:toxicity_full2}
 \end{figure}
 
-\subsubsection{Red Team with a Qwen judge}
+\subsubsection{Red-Team with a Qwen judge}
 
 Figures~\ref{fig:red_team_qwen_full1}--\ref{fig:red_team_qwen_full2} report the
-Anthropic Red Team experiment evaluated by Qwen 2.5 14B Instruct.  At
+Anthropic Red-Team experiment evaluated by Qwen 2.5 14B Instruct.  At
 $\bar B=10$, \ttmethod approximately doubles the observed unsafe events
 (267 versus 137) and reduces coverage variance from $5.15$ to
 $1.12\,\mathrm{pp}^2$.  Its mean coverage deviation is $0.83$ percentage
@@ -99,11 +100,11 @@ sparse-event regime.
 
 \begin{figure}[ht]
     \centering
-    \includegraphics[width=0.9\linewidth]{figures/paper/full/lpb/red_team_qwen_coverage_boxplot.jpg}\\
-    \includegraphics[width=0.9\linewidth]{figures/paper/full/lpb/red_team_qwen_size_boxplot.jpg}\\
-    \includegraphics[width=0.9\linewidth]{figures/paper/full/lpb/red_team_qwen_coverage_diff_boxplot.jpg}\\
-    \includegraphics[width=0.9\linewidth]{figures/paper/full/lpb/red_team_qwen_budget_used_boxplot.jpg}
-    \caption{\textbf{Red Team LPBs with a Qwen judge}: coverage, LPB value,
+    \includegraphics[width=0.9\linewidth]{figures/full/lpb/red_team_qwen_coverage_boxplot.jpg}\\
+    \includegraphics[width=0.9\linewidth]{figures/full/lpb/red_team_qwen_size_boxplot.jpg}\\
+    \includegraphics[width=0.9\linewidth]{figures/full/lpb/red_team_qwen_coverage_diff_boxplot.jpg}\\
+    \includegraphics[width=0.9\linewidth]{figures/full/lpb/red_team_qwen_budget_used_boxplot.jpg}
+    \caption{\textbf{Red-Team LPBs with a Qwen judge}: coverage, LPB value,
     coverage deviation, and budget.  The target coverage is $90\%$,
     $\bar B=10$, and \ttmethod uses $N_1=25$ and
     $|\calIcrc|=25$.}
@@ -112,17 +113,17 @@ sparse-event regime.
 
 \begin{figure}[ht]
     \centering
-    \includegraphics[width=0.9\linewidth]{figures/paper/full/lpb/red_team_qwen_n_observed_events_boxplot.jpg}\\
-    \includegraphics[width=0.9\linewidth]{figures/paper/full/lpb/red_team_qwen_mean_weight_boxplot.jpg}\\
-    \includegraphics[width=0.9\linewidth]{figures/paper/full/lpb/red_team_qwen_coverage_variance_barplot.jpg}\\
-    \includegraphics[width=0.9\linewidth]{figures/paper/full/lpb/red_team_qwen_size_variance_barplot.jpg}
-    \caption{\textbf{Red Team LPBs with a Qwen judge}: observed unsafe events,
-    mean inverse-probability weight, coverage variance, and normalized LPB-value
-    variance over 50 random splits.}
+    \includegraphics[width=0.9\linewidth]{figures/full/lpb/red_team_qwen_n_observed_events_boxplot.jpg}\\
+    \includegraphics[width=0.9\linewidth]{figures/full/lpb/red_team_qwen_mean_calibrated_a_weight_boxplot.jpg}\\
+    \includegraphics[width=0.9\linewidth]{figures/full/lpb/red_team_qwen_coverage_variance_barplot.jpg}\\
+    \includegraphics[width=0.9\linewidth]{figures/full/lpb/red_team_qwen_size_variance_barplot.jpg}
+    \caption{\textbf{Red-Team LPBs with a Qwen judge}: observed unsafe events,
+    mean weighted error $A_i(q_{\hat\tau})/\pi_i$, coverage variance, and LPB-value variance
+    normalized so that Static equals one, over 50 random splits.}
     \label{fig:red_team_qwen_full2}
 \end{figure}
 
-\subsubsection{Red Team with Llama-Guard}
+\subsubsection{Red-Team with Llama-Guard}
 \label{sec:red_team_with_llamaguard}
 
 Figures~\ref{fig:red_team_llama_guard_full1}--
@@ -135,11 +136,11 @@ LPB-value variance is $0.35$, and its realized budget remains below the target.
 
 \begin{figure}[ht]
     \centering
-    \includegraphics[width=0.9\linewidth]{figures/paper/full/lpb/red_team_llama_guard_coverage_boxplot.jpg}\\
-    \includegraphics[width=0.9\linewidth]{figures/paper/full/lpb/red_team_llama_guard_size_boxplot.jpg}\\
-    \includegraphics[width=0.9\linewidth]{figures/paper/full/lpb/red_team_llama_guard_coverage_diff_boxplot.jpg}\\
-    \includegraphics[width=0.9\linewidth]{figures/paper/full/lpb/red_team_llama_guard_budget_used_boxplot.jpg}
-    \caption{\textbf{Red Team LPBs with Llama-Guard}: coverage, LPB value,
+    \includegraphics[width=0.9\linewidth]{figures/full/lpb/red_team_llama_guard_coverage_boxplot.jpg}\\
+    \includegraphics[width=0.9\linewidth]{figures/full/lpb/red_team_llama_guard_size_boxplot.jpg}\\
+    \includegraphics[width=0.9\linewidth]{figures/full/lpb/red_team_llama_guard_coverage_diff_boxplot.jpg}\\
+    \includegraphics[width=0.9\linewidth]{figures/full/lpb/red_team_llama_guard_budget_used_boxplot.jpg}
+    \caption{\textbf{Red-Team LPBs with Llama-Guard}: coverage, LPB value,
     coverage deviation, and budget.  The target coverage is $90\%$,
     $\bar B=10$, and \ttmethod uses $N_1=25$ and
     $|\calIcrc|=25$.}
@@ -148,13 +149,13 @@ LPB-value variance is $0.35$, and its realized budget remains below the target.
 
 \begin{figure}[ht]
     \centering
-    \includegraphics[width=0.9\linewidth]{figures/paper/full/lpb/red_team_llama_guard_n_observed_events_boxplot.jpg}\\
-    \includegraphics[width=0.9\linewidth]{figures/paper/full/lpb/red_team_llama_guard_mean_weight_boxplot.jpg}\\
-    \includegraphics[width=0.9\linewidth]{figures/paper/full/lpb/red_team_llama_guard_coverage_variance_barplot.jpg}\\
-    \includegraphics[width=0.9\linewidth]{figures/paper/full/lpb/red_team_llama_guard_size_variance_barplot.jpg}
-    \caption{\textbf{Red Team LPBs with Llama-Guard}: observed unsafe events,
-    mean inverse-probability weight, coverage variance, and normalized LPB-value
-    variance over 50 random splits.}
+    \includegraphics[width=0.9\linewidth]{figures/full/lpb/red_team_llama_guard_n_observed_events_boxplot.jpg}\\
+    \includegraphics[width=0.9\linewidth]{figures/full/lpb/red_team_llama_guard_mean_calibrated_a_weight_boxplot.jpg}\\
+    \includegraphics[width=0.9\linewidth]{figures/full/lpb/red_team_llama_guard_coverage_variance_barplot.jpg}\\
+    \includegraphics[width=0.9\linewidth]{figures/full/lpb/red_team_llama_guard_size_variance_barplot.jpg}
+    \caption{\textbf{Red-Team LPBs with Llama-Guard}: observed unsafe events,
+    mean weighted error $A_i(q_{\hat\tau})/\pi_i$, coverage variance, and LPB-value variance
+    normalized so that Static equals one, over 50 random splits.}
     \label{fig:red_team_llama_guard_full2}
 \end{figure}
 
@@ -174,10 +175,10 @@ more events.
 
 \begin{figure}[ht]
     \centering
-    \includegraphics[width=0.9\linewidth]{figures/paper/full/lpb/hallucination_coverage_boxplot.jpg}\\
-    \includegraphics[width=0.9\linewidth]{figures/paper/full/lpb/hallucination_size_boxplot.jpg}\\
-    \includegraphics[width=0.9\linewidth]{figures/paper/full/lpb/hallucination_coverage_diff_boxplot.jpg}\\
-    \includegraphics[width=0.9\linewidth]{figures/paper/full/lpb/hallucination_budget_used_boxplot.jpg}
+    \includegraphics[width=0.9\linewidth]{figures/full/lpb/hallucination_coverage_boxplot.jpg}\\
+    \includegraphics[width=0.9\linewidth]{figures/full/lpb/hallucination_size_boxplot.jpg}\\
+    \includegraphics[width=0.9\linewidth]{figures/full/lpb/hallucination_coverage_diff_boxplot.jpg}\\
+    \includegraphics[width=0.9\linewidth]{figures/full/lpb/hallucination_budget_used_boxplot.jpg}
     \caption{\textbf{Hallucination LPBs}: coverage, LPB value, coverage
     deviation, and budget.  The target coverage is $90\%$, $\bar B=10$, and
     \ttmethod uses $N_1=25$ and $|\calIcrc|=25$.}
@@ -186,13 +187,13 @@ more events.
 
 \begin{figure}[ht]
     \centering
-    \includegraphics[width=0.9\linewidth]{figures/paper/full/lpb/hallucination_n_observed_events_boxplot.jpg}\\
-    \includegraphics[width=0.9\linewidth]{figures/paper/full/lpb/hallucination_mean_weight_boxplot.jpg}\\
-    \includegraphics[width=0.9\linewidth]{figures/paper/full/lpb/hallucination_coverage_variance_barplot.jpg}\\
-    \includegraphics[width=0.9\linewidth]{figures/paper/full/lpb/hallucination_size_variance_barplot.jpg}
+    \includegraphics[width=0.9\linewidth]{figures/full/lpb/hallucination_n_observed_events_boxplot.jpg}\\
+    \includegraphics[width=0.9\linewidth]{figures/full/lpb/hallucination_mean_calibrated_a_weight_boxplot.jpg}\\
+    \includegraphics[width=0.9\linewidth]{figures/full/lpb/hallucination_coverage_variance_barplot.jpg}\\
+    \includegraphics[width=0.9\linewidth]{figures/full/lpb/hallucination_size_variance_barplot.jpg}
     \caption{\textbf{Hallucination LPBs}: observed hallucination events, mean
-    inverse-probability weight, coverage variance, and normalized LPB-value
-    variance over 50 random splits.}
+    weighted error $A_i(q_{\hat\tau})/\pi_i$, coverage variance, and LPB-value variance
+    normalized so that Static equals one, over 50 random splits.}
     \label{fig:hallucination_full2}
 \end{figure}
 
@@ -211,10 +212,10 @@ trajectory horizon.
 
 \begin{figure}[ht]
     \centering
-    \includegraphics[width=0.9\linewidth]{figures/paper/full/lpb/autoif_coverage_boxplot.jpg}\\
-    \includegraphics[width=0.9\linewidth]{figures/paper/full/lpb/autoif_size_boxplot.jpg}\\
-    \includegraphics[width=0.9\linewidth]{figures/paper/full/lpb/autoif_coverage_diff_boxplot.jpg}\\
-    \includegraphics[width=0.9\linewidth]{figures/paper/full/lpb/autoif_budget_used_boxplot.jpg}
+    \includegraphics[width=0.9\linewidth]{figures/full/lpb/autoif_coverage_boxplot.jpg}\\
+    \includegraphics[width=0.9\linewidth]{figures/full/lpb/autoif_size_boxplot.jpg}\\
+    \includegraphics[width=0.9\linewidth]{figures/full/lpb/autoif_coverage_diff_boxplot.jpg}\\
+    \includegraphics[width=0.9\linewidth]{figures/full/lpb/autoif_budget_used_boxplot.jpg}
     \caption{\textbf{AutoIF LPBs}: coverage, LPB value, coverage deviation,
     and budget.  The target coverage is $90\%$, $\bar B=10$, and \ttmethod
     uses $N_1=25$ and $|\calIcrc|=25$.}
@@ -223,38 +224,14 @@ trajectory horizon.
 
 \begin{figure}[ht]
     \centering
-    \includegraphics[width=0.9\linewidth]{figures/paper/full/lpb/autoif_n_observed_events_boxplot.jpg}\\
-    \includegraphics[width=0.9\linewidth]{figures/paper/full/lpb/autoif_mean_weight_boxplot.jpg}\\
-    \includegraphics[width=0.9\linewidth]{figures/paper/full/lpb/autoif_coverage_variance_barplot.jpg}\\
-    \includegraphics[width=0.9\linewidth]{figures/paper/full/lpb/autoif_size_variance_barplot.jpg}
-    \caption{\textbf{AutoIF LPBs}: observed successful events, mean
-    inverse-probability weight, coverage variance, and normalized LPB-value
-    variance over 50 random splits.}
+    \includegraphics[width=0.9\linewidth]{figures/full/lpb/autoif_n_observed_events_boxplot.jpg}\\
+    \includegraphics[width=0.9\linewidth]{figures/full/lpb/autoif_mean_calibrated_a_weight_boxplot.jpg}\\
+    \includegraphics[width=0.9\linewidth]{figures/full/lpb/autoif_coverage_variance_barplot.jpg}\\
+    \includegraphics[width=0.9\linewidth]{figures/full/lpb/autoif_size_variance_barplot.jpg}
+    \caption{\textbf{AutoIF LPBs}: observed successful events, mean weighted
+    error $A_i(q_{\hat\tau})/\pi_i$, coverage variance, and LPB-value variance
+    normalized so that Static equals one, over 50 random splits.}
     \label{fig:autoif_full2}
-\end{figure}
-
-\subsection{Upper predictive bounds on AutoIF}
-\label{sec:autoif_upb_exp}
-
-We also construct AutoIF UPBs at $80\%$ coverage with $\bar B=20$,
-$N_1=100$, and $|\calIcrc|=100$.  Figure~\ref{fig:autoif_lpb_upb_main}
-compares the LPB and UPB settings.  For UPB, \ttmethod reduces average coverage
-deviation from 1.65 to 1.41 percentage points and coverage variance from 4.67
-to $3.27\,\mathrm{pp}^2$, while observing 264 rather than 142 events.  The
-improvement is real but smaller than for LPB: the $80\%$ UPBs lie near the
-terminal horizon, leaving less room for history-adaptive decisions to change
-which outcomes become identifiable.
-
-\begin{figure}[ht]
-    \centering
-    \includegraphics[width=0.39\linewidth]{figures/paper/main/autoif_coverage_diff_boxplot.jpg}
-    \includegraphics[width=0.39\linewidth]{figures/paper/main/autoif_budget_used_boxplot.jpg}
-    \includegraphics[width=0.19\linewidth]{figures/paper/main/autoif_legend.jpg}
-    \caption{\textbf{AutoIF LPB and UPB}: coverage deviation and budget.  The
-    LPB target is $90\%$ with $\bar B=10$, $N_1=25$, and
-    $|\calIcrc|=25$; the UPB target is $80\%$ with $\bar B=20$,
-    $N_1=100$, and $|\calIcrc|=100$.}
-    \label{fig:autoif_lpb_upb_main}
 \end{figure}
 
 \subsection{Population-level metric estimation}
@@ -295,84 +272,68 @@ this correction and can therefore be biased by right censoring.
 
 All metric experiments use $\bar B=20$.  For \ttmethod,
 $N_1=50$ and $|\calIcrc|=50$; the no-CRC variant uses all 100 adaptive-
-calibration samples in $\calIone$.  Each figure reports the two estimators and
-their empirical variances across splits, budget, observed events, and the
-metric-target mean weighted error $A_i/\pi_i$.  The budget, event-count, and
-weighted-error plots exclude Uncalibrated and Oracle because those diagnostics
-are not comparable allocation quantities.  The red dashed estimator reference
-is the exact value on the fully observed calibration--test population.
+calibration samples in $\calIone$.  Each $3\times2$ figure reports the two
+estimators and their empirical variances over repeated data partitions,
+realized budget, and
+the metric-target mean weighted error $A_i/\pi_i$.  The budget and
+weighted-error panels exclude Uncalibrated and Oracle because these are not
+comparable allocation quantities.  The red dashed estimator reference is the
+exact value on the fully observed calibration--test population.
 
 \subsubsection{Toxicity metrics}
 
 Figure~\ref{fig:metrics_toxicity} shows that \ttmethod approximately halves
 event-rate variance relative to Static ($7.12$ versus
 $15.02\,\mathrm{pp}^2$) and reduces restricted-mean variance from 39.76 to
-14.72 turns squared.  It also observes 343 events rather than 148 and lowers
-the mean weighted error from 4.94 to 2.89.  The estimates remain centered near
+14.72 turns squared, while lowering the mean weighted error from 4.94 to
+2.89.  The estimates remain centered near
 the full-population references, whereas the naive unweighted event-rate
 estimate is visibly biased downward.
 
 \begin{figure}[ht]
     \centering
-    \includegraphics[width=0.48\linewidth]{figures/paper/full/metric/dataset_toxicity/estimated_cjr_boxplot.jpg}
-    \includegraphics[width=0.48\linewidth]{figures/paper/full/metric/dataset_toxicity/estimated_cjr_variance_barplot.jpg}\\
-    \includegraphics[width=0.48\linewidth]{figures/paper/full/metric/dataset_toxicity/estimated_rmttu_boxplot.jpg}
-    \includegraphics[width=0.48\linewidth]{figures/paper/full/metric/dataset_toxicity/estimated_rmttu_variance_barplot.jpg}\\
-    \includegraphics[width=0.48\linewidth]{figures/paper/full/metric/dataset_toxicity/budget_per_sample_boxplot.jpg}
-    \includegraphics[width=0.48\linewidth]{figures/paper/full/metric/dataset_toxicity/observed_jailbreaks_boxplot.jpg}\\
-    \includegraphics[width=0.48\linewidth]{figures/paper/full/metric/dataset_toxicity/mean_a_weight_boxplot.jpg}
-    \caption{Population-level event-rate and restricted-mean estimation on
-    \textbf{Toxicity}.  Results use $\bar B=20$, $N_1=50$, and
-    $|\calIcrc|=50$ and are aggregated over 50 random splits.}
+    \includegraphics[width=\linewidth]{figures/full/metric/dataset_toxicity/metric_estimation_3x2.jpg}
+    \caption{Population-level event-rate and restricted-mean time-to-event
+    estimation on \textbf{Toxicity}.  The configuration is $\bar B=20$,
+    $N_1=50$, and $|\calIcrc|=50$, evaluated over 50 random splits.}
     \label{fig:metrics_toxicity}
 \end{figure}
 
-\subsubsection{Red Team metrics with a Qwen judge}
+\subsubsection{Red-Team metrics with a Qwen judge}
 
-On Red Team with the Qwen judge (Figure~\ref{fig:metrics_red_team_qwen}),
+On Red-Team with the Qwen judge (Figure~\ref{fig:metrics_red_team_qwen}),
 \ttmethod reduces event-rate variance from $17.38$ to
 $10.75\,\mathrm{pp}^2$ and restricted-mean variance from 37.17 to 20.51 turns
-squared.  It observes almost twice as many unsafe events as Static and lowers
-the mean weighted error from 6.62 to 4.11.  The no-CRC policy is slightly less
+squared, while lowering the mean weighted error from 6.62 to 4.11.  The
+no-CRC policy is slightly less
 variable in this setting and uses essentially the full target budget.
 
 \begin{figure}[ht]
     \centering
-    \includegraphics[width=0.48\linewidth]{figures/paper/full/metric/dataset_red_team_qwen/estimated_cjr_boxplot.jpg}
-    \includegraphics[width=0.48\linewidth]{figures/paper/full/metric/dataset_red_team_qwen/estimated_cjr_variance_barplot.jpg}\\
-    \includegraphics[width=0.48\linewidth]{figures/paper/full/metric/dataset_red_team_qwen/estimated_rmttu_boxplot.jpg}
-    \includegraphics[width=0.48\linewidth]{figures/paper/full/metric/dataset_red_team_qwen/estimated_rmttu_variance_barplot.jpg}\\
-    \includegraphics[width=0.48\linewidth]{figures/paper/full/metric/dataset_red_team_qwen/budget_per_sample_boxplot.jpg}
-    \includegraphics[width=0.48\linewidth]{figures/paper/full/metric/dataset_red_team_qwen/observed_jailbreaks_boxplot.jpg}\\
-    \includegraphics[width=0.48\linewidth]{figures/paper/full/metric/dataset_red_team_qwen/mean_a_weight_boxplot.jpg}
-    \caption{Population-level metric estimation on \textbf{Red Team with a
-    Qwen judge}.  The configuration is $\bar B=20$, $N_1=50$, and
-    $|\calIcrc|=50$.}
+    \includegraphics[width=\linewidth]{figures/full/metric/dataset_red_team_qwen/metric_estimation_3x2.jpg}
+    \caption{Population-level event-rate and restricted-mean time-to-event
+    estimation on \textbf{Red-Team with a Qwen judge}.  The configuration is
+    $\bar B=20$, $N_1=50$, and $|\calIcrc|=50$, evaluated over 50 random
+    splits.}
     \label{fig:metrics_red_team_qwen}
 \end{figure}
 
-\subsubsection{Red Team metrics with Llama-Guard}
+\subsubsection{Red-Team metrics with Llama-Guard}
 
 Figure~\ref{fig:metrics_red_team_llama_guard} exhibits the largest metric-
 estimation gain.  \ttmethod lowers event-rate variance from $25.07$ to
 $6.85\,\mathrm{pp}^2$ and restricted-mean variance from 73.79 to 13.17 turns
-squared.  It observes approximately 1216 events, compared with 252 for Static,
-and lowers the mean weighted error from 8.49 to 2.73.  CRC is conservative in
+squared and lowers the mean weighted error from 8.49 to 2.73.  CRC is conservative in
 realized budget (15.59 turns per sample), while the no-CRC policy remains near
 20 and is correspondingly somewhat less variable.
 
 \begin{figure}[ht]
     \centering
-    \includegraphics[width=0.48\linewidth]{figures/paper/full/metric/dataset_red_team_llama_guard/estimated_cjr_boxplot.jpg}
-    \includegraphics[width=0.48\linewidth]{figures/paper/full/metric/dataset_red_team_llama_guard/estimated_cjr_variance_barplot.jpg}\\
-    \includegraphics[width=0.48\linewidth]{figures/paper/full/metric/dataset_red_team_llama_guard/estimated_rmttu_boxplot.jpg}
-    \includegraphics[width=0.48\linewidth]{figures/paper/full/metric/dataset_red_team_llama_guard/estimated_rmttu_variance_barplot.jpg}\\
-    \includegraphics[width=0.48\linewidth]{figures/paper/full/metric/dataset_red_team_llama_guard/budget_per_sample_boxplot.jpg}
-    \includegraphics[width=0.48\linewidth]{figures/paper/full/metric/dataset_red_team_llama_guard/observed_jailbreaks_boxplot.jpg}\\
-    \includegraphics[width=0.48\linewidth]{figures/paper/full/metric/dataset_red_team_llama_guard/mean_a_weight_boxplot.jpg}
-    \caption{Population-level metric estimation on \textbf{Red Team with
-    Llama-Guard}.  The configuration is $\bar B=20$, $N_1=50$, and
-    $|\calIcrc|=50$.}
+    \includegraphics[width=\linewidth]{figures/full/metric/dataset_red_team_llama_guard/metric_estimation_3x2.jpg}
+    \caption{Population-level event-rate and restricted-mean time-to-event
+    estimation on \textbf{Red-Team with Llama-Guard}.  The configuration is
+    $\bar B=20$, $N_1=50$, and $|\calIcrc|=50$, evaluated over 50 random
+    splits.}
     \label{fig:metrics_red_team_llama_guard}
 \end{figure}
 
@@ -388,16 +349,11 @@ of the rigorous budget correction in this high-event-rate regime.
 
 \begin{figure}[ht]
     \centering
-    \includegraphics[width=0.48\linewidth]{figures/paper/full/metric/dataset_hallucination/estimated_cjr_boxplot.jpg}
-    \includegraphics[width=0.48\linewidth]{figures/paper/full/metric/dataset_hallucination/estimated_cjr_variance_barplot.jpg}\\
-    \includegraphics[width=0.48\linewidth]{figures/paper/full/metric/dataset_hallucination/estimated_rmttu_boxplot.jpg}
-    \includegraphics[width=0.48\linewidth]{figures/paper/full/metric/dataset_hallucination/estimated_rmttu_variance_barplot.jpg}\\
-    \includegraphics[width=0.48\linewidth]{figures/paper/full/metric/dataset_hallucination/budget_per_sample_boxplot.jpg}
-    \includegraphics[width=0.48\linewidth]{figures/paper/full/metric/dataset_hallucination/observed_jailbreaks_boxplot.jpg}\\
-    \includegraphics[width=0.48\linewidth]{figures/paper/full/metric/dataset_hallucination/mean_a_weight_boxplot.jpg}
-    \caption{Population-level metric estimation on the
-    \textbf{Hallucination} benchmark.  The configuration is $\bar B=20$,
-    $N_1=50$, and $|\calIcrc|=50$.}
+    \includegraphics[width=\linewidth]{figures/full/metric/dataset_hallucination/metric_estimation_3x2.jpg}
+    \caption{Population-level event-rate and restricted-mean time-to-event
+    estimation on the \textbf{Hallucination} benchmark.  The configuration is
+    $\bar B=20$, $N_1=50$, and $|\calIcrc|=50$, evaluated over 50 random
+    splits.}
     \label{fig:metrics_hallucination}
 \end{figure}
 
@@ -406,22 +362,16 @@ of the rigorous budget correction in this high-event-rate regime.
 Figure~\ref{fig:metrics_autoif} shows that the improvement extends to a utility
 rather than safety event.  \ttmethod reduces event-rate variance from $16.05$
 to $8.18\,\mathrm{pp}^2$ and restricted-mean variance from 45.70 to 17.69 turns
-squared.  It more than doubles the observed successful events and lowers the
-mean weighted error from 4.73 to 2.71.  Thus, the allocation principle is not
+squared and lowers the mean weighted error from 4.73 to 2.71.  Thus, the
+allocation principle is not
 specific to unsafe-event detection.
 
 \begin{figure}[ht]
     \centering
-    \includegraphics[width=0.48\linewidth]{figures/paper/full/metric/dataset_autoif/estimated_cjr_boxplot.jpg}
-    \includegraphics[width=0.48\linewidth]{figures/paper/full/metric/dataset_autoif/estimated_cjr_variance_barplot.jpg}\\
-    \includegraphics[width=0.48\linewidth]{figures/paper/full/metric/dataset_autoif/estimated_rmttu_boxplot.jpg}
-    \includegraphics[width=0.48\linewidth]{figures/paper/full/metric/dataset_autoif/estimated_rmttu_variance_barplot.jpg}\\
-    \includegraphics[width=0.48\linewidth]{figures/paper/full/metric/dataset_autoif/budget_per_sample_boxplot.jpg}
-    \includegraphics[width=0.48\linewidth]{figures/paper/full/metric/dataset_autoif/observed_jailbreaks_boxplot.jpg}\\
-    \includegraphics[width=0.48\linewidth]{figures/paper/full/metric/dataset_autoif/mean_a_weight_boxplot.jpg}
-    \caption{Population-level event-rate and restricted-mean estimation on
-    \textbf{AutoIF}.  The configuration is $\bar B=20$, $N_1=50$, and
-    $|\calIcrc|=50$.}
+    \includegraphics[width=\linewidth]{figures/full/metric/dataset_autoif/metric_estimation_3x2.jpg}
+    \caption{Population-level event-rate and restricted-mean time-to-event
+    estimation on \textbf{AutoIF}.  The configuration is $\bar B=20$,
+    $N_1=50$, and $|\calIcrc|=50$, evaluated over 50 random splits.}
     \label{fig:metrics_autoif}
 \end{figure}
 
@@ -439,7 +389,7 @@ with $\bar B\ll\maxl$ must retain some inverse-probability variability.
 
 All ablations use the Toxicity dataset with Qwen 2.5 14B Instruct as both
 attacker and target and Detoxify as the judge, except for the attacker-shift
-study.  The default cell has $\bar B=20$ and total adaptive-calibration size
+study. The default cell has $\bar B=20$ and Phase I calibration set size
 $|\calIone|+|\calIcrc|=50$; hence \ttmethod uses $N_1=25$ and
 $|\calIcrc|=25$.  Every plot includes Static, \ttmethod, and \ttmethod without
 CRC.  For LPB ablations, the weighted-error diagnostic is always the selected-
@@ -451,9 +401,9 @@ results for the optimization-process, score-noise, score-function, and
 representation-capacity ablations.  The calibration-size, budget, optimization-
 objective, CRC-cap, and attacker-shift ablations use the LPB task.
 
-\subsubsection{Adaptive-calibration sample size (LPB)}
+\subsubsection{Phase I calibration set size (LPB)}
 
-Figure~\ref{fig:ablation_n1} varies the total adaptive-calibration size over
+Figure~\ref{fig:ablation_n1} varies the Phase I calibration set size over
 $50,100,200,300,$ and $400$.  For \ttmethod with CRC these correspond to
 $(N_1,|\calIcrc|)=(25,25),(50,50),(100,100),(150,150),$ and $(200,200)$;
 without CRC, the entire displayed total is $N_1$.  Performance is stable from
@@ -465,17 +415,17 @@ exploration--deployment tradeoff in this experiment.
 
 \begin{figure}[ht]
     \centering
-    \includegraphics[width=0.98\linewidth]{figures/paper/ablations/dapro_n1_ablation.jpg}
-    \caption{LPB adaptive-calibration-size ablation.  The x-axis is
+    \includegraphics[width=0.98\linewidth]{figures/ablations/dapro_n1_ablation.jpg}
+    \caption{LPB Phase I calibration-set-size ablation. The x-axis is
     $|\calIone|+|\calIcrc|$, not $N_1$ alone.  Lines show means and shaded
-    regions show one standard deviation across 50 random splits.}
+    regions show one standard deviation over 50 random partitions.}
     \label{fig:ablation_n1}
 \end{figure}
 
 \subsubsection{Available budget (LPB)}
 
 Figure~\ref{fig:ablation_budget} varies $\bar B$ from 5 to 50 and pairs each
-budget with the total adaptive-calibration sizes
+budget with the Phase I calibration set sizes
 $25,50,50,100,150,$ and $200$, respectively.  For CRC runs, the total is split
 as evenly as possible between $\calIone$ and $\calIcrc$; for example, the
 $\bar B=5$ cell uses $(N_1,|\calIcrc|)=(13,12)$.  \ttmethod has markedly lower
@@ -487,9 +437,9 @@ conservative, especially in the smallest-budget cell.
 
 \begin{figure}[ht]
     \centering
-    \includegraphics[width=0.98\linewidth]{figures/paper/ablations/dapro_budget_ablation.jpg}
+    \includegraphics[width=0.98\linewidth]{figures/ablations/dapro_budget_ablation.jpg}
     \caption{LPB budget ablation.  Parenthesized x-axis values give the total
-    adaptive-calibration size $|\calIone|+|\calIcrc|$.}
+    Phase I calibration set size $|\calIone|+|\calIcrc|$.}
     \label{fig:ablation_budget}
 \end{figure}
 
@@ -508,7 +458,7 @@ terminal.
 
 \begin{figure}[ht]
     \centering
-    \includegraphics[width=0.98\linewidth]{figures/paper/ablations/dapro_hard_soft_ablation.jpg}
+    \includegraphics[width=0.98\linewidth]{figures/ablations/dapro_hard_soft_ablation.jpg}
     \caption{LPB optimization-objective ablation at $\bar B=20$,
     $N_1=25$, and $|\calIcrc|=25$.}
     \label{fig:ablation_objective}
@@ -519,7 +469,7 @@ terminal.
 To isolate the effect of Phase-I optimization, Figure~
 \ref{fig:ablation_optimization} compares \ttmethod with a Uniform+CRC policy
 whose continuation probabilities are not optimized.  Uniform+CRC devotes all
-50 adaptive-calibration samples to CRC and uses no policy-fitting fold.  It
+50 Phase I calibration samples to CRC and uses no policy-fitting fold. It
 meets the budget and observes many events, but its event-rate variance is
 $47.76\,\mathrm{pp}^2$ and its mean weighted error is 15.94.  In comparison,
 \ttmethod with CRC attains $10.49\,\mathrm{pp}^2$ and weighted error 2.81;
@@ -530,7 +480,7 @@ number of observed events is not, by itself, a variance objective.
 
 \begin{figure}[ht]
     \centering
-    \includegraphics[width=0.98\linewidth]{figures/paper/ablations/dapro_metric_optimization_ablation.jpg}
+    \includegraphics[width=0.98\linewidth]{figures/ablations/dapro_metric_optimization_ablation.jpg}
     \caption{Metric-estimation optimization-process ablation at
     $\bar B=20$.  Standard \ttmethod uses $N_1=25$ and
     $|\calIcrc|=25$; Uniform+CRC uses all 50 rows for CRC.}
@@ -549,7 +499,7 @@ Thus, larger $\lambda$ means more noise and $\lambda=1$ is fully random.
 Figure~\ref{fig:ablation_score_noise} shows that the CRC policy is stable for
 $\lambda\leq0.75$, but at $\lambda=1$ its event-rate variance increases to
 $15.23\,\mathrm{pp}^2$, the event count decreases, and the weighted error
-increases.  The no-CRC curve is nonmonotone across finite splits, although its
+increases.  The no-CRC curve is nonmonotone over finite partitions, although its
 event count declines and weighted error rises at high noise.  The main
 conclusion is therefore not that the score is irrelevant: moderate corruption
 is absorbed by the coarse $K=2$ projection and CRC rescaling, whereas removing
@@ -557,7 +507,7 @@ all signal measurably harms the guaranteed policy.
 
 \begin{figure}[ht]
     \centering
-    \includegraphics[width=0.98\linewidth]{figures/paper/ablations/dapro_metric_score_noise_ablation.jpg}
+    \includegraphics[width=0.98\linewidth]{figures/ablations/dapro_metric_score_noise_ablation.jpg}
     \caption{Metric-estimation score-noise ablation at $\bar B=20$,
     $N_1=25$, and $|\calIcrc|=25$.}
     \label{fig:ablation_score_noise}
@@ -579,7 +529,7 @@ current-event probability is the most robust default across diagnostics.
 
 \begin{figure}[ht]
     \centering
-    \includegraphics[width=0.98\linewidth]{figures/paper/ablations/dapro_metric_score_ablation.jpg}
+    \includegraphics[width=0.98\linewidth]{figures/ablations/dapro_metric_score_ablation.jpg}
     \caption{Metric-estimation score-function ablation at $\bar B=20$,
     $N_1=25$, $|\calIcrc|=25$, and $K=2$.}
     \label{fig:ablation_score}
@@ -600,7 +550,7 @@ low-overfitting default shared by the main experiments.
 
 \begin{figure}[ht]
     \centering
-    \includegraphics[width=0.98\linewidth]{figures/paper/ablations/dapro_metric_representation_ablation.jpg}
+    \includegraphics[width=0.98\linewidth]{figures/ablations/dapro_metric_representation_ablation.jpg}
     \caption{Metric-estimation representation-capacity ablation at
     $\bar B=20$, $N_1=25$, and $|\calIcrc|=25$.}
     \label{fig:ablation_representation}
@@ -608,7 +558,7 @@ low-overfitting default shared by the main experiments.
 
 \begin{figure}[ht]
     \centering
-    \includegraphics[width=0.98\linewidth]{figures/paper/ablations/dapro_metric_representation_diagnostics.jpg}
+    \includegraphics[width=0.98\linewidth]{figures/ablations/dapro_metric_representation_diagnostics.jpg}
     \caption{Phase-I objective, held-out Phase-II weighted-error proxy, and
     event-rate variance for the representation-capacity ablation.}
     \label{fig:ablation_representation_diagnostics}
@@ -627,7 +577,7 @@ individual trajectory to receive more than the average budget.
 
 \begin{figure}[ht]
     \centering
-    \includegraphics[width=0.98\linewidth]{figures/paper/ablations/dapro_cmax_ablation.jpg}
+    \includegraphics[width=0.98\linewidth]{figures/ablations/dapro_cmax_ablation.jpg}
     \caption{LPB CRC row-cost-cap ablation at $\bar B=20$,
     $N_1=25$, and $|\calIcrc|=25$.}
     \label{fig:ablation_cmax}
@@ -638,8 +588,8 @@ individual trajectory to receive more than the average budget.
 
 Finally, we learn and calibrate the policy on Qwen-attacker trajectories and
 evaluate it on Gemma-attacker trajectories, using the Llama 3.1 target model.
-We test both Red Team and Toxicity at $\bar B=10$, $N_1=25$, and
-$|\calIcrc|=25$.  Toxicity keeps Detoxify fixed; in the available Red Team
+We test both Red-Team and Toxicity at $\bar B=10$, $N_1=25$, and
+$|\calIcrc|=25$.  Toxicity keeps Detoxify fixed; in the available Red-Team
 collections, the LLM judge follows the attacker family, so that experiment
 changes both attacker and judge.  This is a genuine distribution shift, and
 exchangeability between calibration and test no longer holds; accordingly, we
@@ -648,7 +598,7 @@ do not claim the nominal-coverage theorem for this experiment.
 Figure~\ref{fig:attacker_shift} shows conservative coverage under shift
 ($94$--$97\%$ rather than $90\%$).  Although this makes absolute coverage
 deviation an unsuitable measure of adaptation quality here, \ttmethod sharply
-reduces coverage variance: from $2.17$ to $0.42\,\mathrm{pp}^2$ on Red Team and
+reduces coverage variance: from $2.17$ to $0.42\,\mathrm{pp}^2$ on Red-Team and
 from $2.96$ to $0.13\,\mathrm{pp}^2$ on Toxicity.  It also observes substantially
 more events and lowers the selected-target weighted error while remaining at
 or below the target budget.  Thus, the learned allocation remains statistically
@@ -657,9 +607,11 @@ conservative.
 
 \begin{figure}[ht]
     \centering
-    \includegraphics[width=0.98\linewidth]{figures/paper/ablations/dapro_attacker_shift_ablation.jpg}
-    \caption{LPB attacker-shift ablation.  The policy is calibrated on Qwen
-    attacker data and evaluated on Gemma attacker data for Red Team and
-    Toxicity.  The target coverage is $90\%$ and $\bar B=10$.}
+    \includegraphics[width=0.98\linewidth]{figures/ablations/dapro_attacker_shift_ablation.jpg}
+    \caption{LPB attacker-shift ablation across the Red-Team and Toxicity
+    datasets.  The x-axis identifies the dataset.  In both cases, the policy
+    is calibrated on Qwen-attacker data and evaluated on Gemma-attacker data
+    (Qwen $\rightarrow$ Gemma).  The target coverage is $90\%$ and
+    $\bar B=10$.}
     \label{fig:attacker_shift}
 \end{figure}

@@ -24,54 +24,62 @@ from src.paper_figures.config import (
 
 BOUND_BOX_SPECS = (
     ("coverage_pct", "coverage_boxplot.jpg", "Coverage rate (%)", False),
-    ("size", "size_boxplot.jpg", "Predictive-bound value", False),
+    ("size", "size_boxplot.jpg", "Bound value", False),
     (
         "coverage_diff_pct",
         "coverage_diff_boxplot.jpg",
-        "|Coverage - target| (pp)",
+        "Coverage difference\n(pp)",
         False,
     ),
     (
         "budget_used_per_sample",
         "budget_used_boxplot.jpg",
-        "Budget Used per Sample",
+        "Budget used",
         True,
     ),
     (
         "n_observed_events",
         "n_observed_events_boxplot.jpg",
-        "Number of observed events",
+        "Observed events",
         True,
     ),
     (
         "mean_weight",
         "mean_weight_boxplot.jpg",
-        "Mean inverse-probability weight\n"
-        r"$n^{-1}\sum_i 1/\pi_i$",
+        "Mean weight",
         True,
     ),
     (
         "mean_selected_a_weight",
         "mean_calibrated_a_weight_boxplot.jpg",
-        "Mean weighted error\n"
-        r"$A_i(q_{\hat\tau})/\pi_i$",
+        "Weighted error",
         True,
     ),
     (
         "mean_prior_a_weight",
         "mean_prior_a_weight_boxplot.jpg",
-        "Mean weighted error\n"
-        r"$A_i(q_{\tau_{\rm prior}})/\pi_i$",
+        "Weighted error",
         True,
     ),
     (
         "mean_tau_0p10_a_weight",
         "mean_tau_0p10_a_weight_boxplot.jpg",
-        "Mean weighted error\n"
-        r"$A_i(q_{0.1})/\pi_i$",
+        "Weighted error",
         True,
     ),
 )
+
+BOUND_TITLES = {
+    "mean_selected_a_weight": (
+        r"Mean weighted error $A_i(q_{\hat\tau})/\pi_i$"
+    ),
+    "mean_prior_a_weight": (
+        r"Mean weighted error $A_i(q_{\tau_{\rm prior}})/\pi_i$"
+    ),
+    "mean_tau_0p10_a_weight": (
+        r"Mean weighted error $A_i(q_{0.1})/\pi_i$"
+    ),
+}
 
 
 def _record(
@@ -133,6 +141,10 @@ def generate_bound_appendix_figures(
                 hide_methods=(
                     ("Uncalibrated", "Oracle") if allocation_only else ()
                 ),
+                figsize=(8.4, 2.65),
+                font_scale=1.45,
+                title=BOUND_TITLES.get(metric),
+                resolution_scale=1.15 if task == "lpb" else 1.0,
             )
             _record(
                 manifest,
@@ -148,10 +160,13 @@ def generate_bound_appendix_figures(
             dataset,
             metric="coverage_pct",
             output_path=variance_path,
-            ylabel=r"Coverage variance across splits (pp$^2$)",
+            ylabel="Coverage variance\n" + r"(pp$^2$)",
             quality=quality,
             x_order=TARGET_MODEL_ORDER,
             method_order=METHOD_ORDER,
+            figsize=(8.4, 2.65),
+            font_scale=1.45,
+            resolution_scale=1.15 if task == "lpb" else 1.0,
         )
         _record(
             manifest,
@@ -166,11 +181,14 @@ def generate_bound_appendix_figures(
             dataset,
             metric="size",
             output_path=size_path,
-            ylabel="Bound-size variance (Static normalized to 1)",
+            ylabel="Bound-size variance",
             quality=quality,
             x_order=TARGET_MODEL_ORDER,
             method_order=METHOD_ORDER,
             normalize_to_static=True,
+            figsize=(8.4, 2.65),
+            font_scale=1.45,
+            resolution_scale=1.15 if task == "lpb" else 1.0,
         )
         _record(
             manifest,
@@ -196,14 +214,14 @@ def generate_lpb_main_figures(
         (
             "coverage_diff_pct",
             "toxicity_coverage_diff_boxplot.jpg",
-            "|Coverage - target| (pp)",
+            "Coverage difference\n(pp)",
             (),
             None,
         ),
         (
             "budget_used_per_sample",
             "toxicity_budget_used_boxplot.jpg",
-            "Budget Used per Sample",
+            "Budget used\nper sample",
             ("Uncalibrated",),
             float(toxicity["target_budget"].iloc[0]) if not toxicity.empty else None,
         ),
@@ -227,7 +245,7 @@ def generate_lpb_main_figures(
             hide_methods=hidden,
             figsize=(3.45, 2.55),
             show_legend=False,
-            font_scale=1.12,
+            font_scale=1.30,
         )
         _record(
             rows,
@@ -243,8 +261,8 @@ def generate_lpb_main_figures(
         quality=quality,
         methods=MAIN_METHOD_ORDER,
         reference_label="Target budget",
-        figsize=(1.25, 2.55),
-        font_scale=1.12,
+        figsize=(1.50, 2.55),
+        font_scale=1.28,
     )
     _record(
         rows,
@@ -291,14 +309,14 @@ def generate_autoif_main_figures(
         (
             "coverage_diff_pct",
             "autoif_coverage_diff_boxplot.jpg",
-            "|Coverage - target| (pp)",
+            "Coverage difference\n(pp)",
             (),
             None,
         ),
         (
             "budget_used_per_sample",
             "autoif_budget_used_boxplot.jpg",
-            "Budget Used per Sample",
+            "Budget used\nper sample",
             ("Uncalibrated",),
             None,
         ),
@@ -329,7 +347,7 @@ def generate_autoif_main_figures(
             hide_methods=hidden,
             figsize=(3.45, 2.55),
             show_legend=False,
-            font_scale=1.12,
+            font_scale=1.30,
         )
         _record(
             rows,
@@ -345,8 +363,8 @@ def generate_autoif_main_figures(
         quality=quality,
         methods=MAIN_METHOD_ORDER,
         reference_label="Target budget",
-        figsize=(1.25, 2.55),
-        font_scale=1.12,
+        figsize=(1.50, 2.55),
+        font_scale=1.28,
     )
     _record(
         rows,
