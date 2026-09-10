@@ -70,12 +70,14 @@ MAIN_METHOD_ORDER = (
     "Uncalibrated",
     "Static",
     "DAPRO",
+    "DAPRO w/o CRC",
 )
 
 METRIC_MAIN_METHOD_ORDER = (
     "Uncalibrated",
     "Static",
     "DAPRO",
+    "DAPRO w/o CRC",
 )
 
 # The red/blue/green family follows the manuscript references supplied by the
@@ -83,8 +85,8 @@ METRIC_MAIN_METHOD_ORDER = (
 METHOD_COLORS = {
     "Uncalibrated": "#B64A46",
     "Static": "#4C78A8",
-    "DAPRO": "#3A923A",
-    "DAPRO w/o CRC": "#8BC77B",
+    "DAPRO": "#176B3A",
+    "DAPRO w/o CRC": "#A6D854",
     "Oracle": "#555555",
 }
 

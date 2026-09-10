@@ -1,0 +1,335 @@
+% Code-aligned UPB extension. The LPB method and its shared implementation
+% details are not repeated here.
+
+\section{Extension to LLM utility evaluation and upper predictive bounds}
+\label{sec:utility_upb}
+
+Our framework also constructs upper predictive bounds (UPBs) on an event
+time. One important application is LLM utility evaluation: an adversarial
+attacker can be replaced by a helper agent that guides the target model toward
+successful task completion. For example, in AutoIF~\citep{dong2025selfplay},
+the helper iteratively assists the target model in satisfying complex
+instructions. In this application, $Y_i(t)=1$ denotes successful task
+completion, $T_i$ is the corresponding time-to-success, and a smaller UPB
+certifies that success should occur within fewer interactions. The UPB
+construction itself is generic and can be applied to any event represented by
+$T_i$.
+
+The observable interaction horizon is capped at $\maxl$. We encode ``no event
+by turn $\maxl$'' by the additional value $\maxl+1$, which is treated as
+infinity, and define
+\[
+    T_i^{(\maxl)}:=\min\{T_i,\maxl+1\}.
+\]
+The target guarantee is
+\begin{equation}
+    \mathbb P\!\left\{
+        T_{\mathrm{test}}^{(\maxl)}
+        \leq \widehat U(X_{\mathrm{test}})
+        \ \middle|\ \Dall
+    \right\}
+    \geq 1-\alpha.
+    \label{eq:upb_target}
+\end{equation}
+Thus, $\maxl$ remains a finite bound that can fail to cover a trajectory with
+no event through turn $\maxl$, whereas $\maxl+1$ is always valid. Acquisition
+is nevertheless truncated at $\maxl$; no interaction is acquired at time
+$\maxl+1$.
+
+\paragraph{Candidate-specific UPB errors.}
+For a candidate $f_i(\tau):=\fhat_\tau(X_i)$, define
+\begin{equation}
+    A_i(\tau)
+    :=\mathbb I\{f_i(\tau)<\maxl+1\}
+      \mathbb I\{T_i>f_i(\tau)\}.
+    \label{eq:upb_target_indicator}
+\end{equation}
+Unlike LPB miscoverage, this error is resolved when either the event is
+observed or the acquisition reaches the candidate bound. For a finite
+candidate, define its resolution time and resolution propensity by
+\begin{equation}
+    r_i(\tau):=\min\{T_i,f_i(\tau)\},
+    \qquad
+    \rho_i(t):=\prod_{s=1}^{t}P_i(s),
+    \qquad
+    \pi_i(\tau):=\rho_i(r_i(\tau)),
+    \label{eq:upb_candidate_weight}
+\end{equation}
+with $\rho_i(0):=1$. Here $P_i(t)$ is the conditional probability of
+acquiring turn $t$ given that the preceding prefix has been reached. If
+$Z_i(t)$ is the corresponding Bernoulli continuation decision, the nested
+reach indicator is
+\begin{equation}
+    R_i(0):=1,
+    \qquad
+    R_i(t):=\prod_{s=1}^{t}Z_i(s)
+           =\mathbb I\{\min(C_i,T_i)\geq t\}.
+    \label{eq:upb_reach_indicator}
+\end{equation}
+Consequently,
+$\mathbb E_{\rm acq}[R_i(t)\mid X_i,H_i,T_i]=\rho_i(t)$ once the policy is
+frozen. On the fully observed Phase-I rows, $P_i(t)=R_i(t)=1$ for every
+relevant turn. The ordinary-HT contribution for a finite candidate is
+$R_i(r_i(\tau))A_i(\tau)/\pi_i(\tau)$; the $\maxl+1$ candidate has
+deterministic contribution zero.
+
+\paragraph{Sequential augmented miscoverage estimator.}
+Our implemented UPB calibrator uses the survival-model output at every reached
+prefix. For a finite candidate $f=f_i(\tau)$, let
+\begin{equation}
+    m_{i,0}(f):=\widehat{\mathbb P}(T_i>f\mid H_i(0)),
+    \qquad
+    m_{i,t}(f):=\widehat{\mathbb P}(T_i>f\mid H_i(t))
+    \quad (t<r_i(\tau)),
+\end{equation}
+and set $m_{i,r_i(\tau)}(f):=A_i(\tau)$. The prediction path is a frozen,
+predictable function of the observed histories; it need not be correctly
+specified. The row-wise sequential augmented Horvitz--Thompson (AHT)
+contribution is
+\begin{equation}
+    \widetilde A_i(\tau)
+    :=m_{i,0}(f_i(\tau))
+      +\sum_{t=1}^{r_i(\tau)}
+       \frac{R_i(t)}{\rho_i(t)}
+       \left[m_{i,t}(f_i(\tau))-m_{i,t-1}(f_i(\tau))\right].
+    \label{eq:upb_sequential_aht}
+\end{equation}
+For $f_i(\tau)=\maxl+1$, we instead set
+$\widetilde A_i(\tau):=0$.
+
+Equation~\eqref{eq:upb_sequential_aht} starts from the model's initial
+prediction and adds an inverse-probability correction for every prediction
+update revealed by acquisition. The corrections telescope in expectation to
+the resolved error $A_i(\tau)$, so misspecification affects efficiency but not
+design validity. This construction is related to prediction-powered
+inference~\citep{angelopoulos2023prediction} and augmented
+Horvitz--Thompson estimation~\citep{Horvitz01121952,robins1994estimation,wang2001augmented}.
+If
+\begin{equation}
+    m_{i,t}(f)=m_{i,0}(f)
+    \quad\text{for all }t<r_i(\tau),
+    \label{eq:upb_no_intermediate_updates}
+\end{equation}
+then only the terminal update is nonzero and
+\begin{equation}
+    \widetilde A_i(\tau)
+    =m_{i,0}(f)
+     +\frac{R_i(r_i(\tau))}{\pi_i(\tau)}
+       \{A_i(\tau)-m_{i,0}(f)\},
+    \label{eq:upb_terminal_residual_aht}
+\end{equation}
+which is the terminal residual-AHT estimator.
+
+\begin{proposition}[Validity of the UPB acquisition estimator]
+\label{prop:valid_upb_weights}
+Fix a candidate $\tau$ and condition on the data used to freeze the
+acquisition policy and on the complete trajectory $(X_i,H_i,T_i)$. If the
+relevant reach probabilities are positive, then
+\begin{equation}
+    \mathbb E_{\rm acq}\!\left[\widetilde A_i(\tau)\right]
+    =A_i(\tau).
+    \label{eq:valid_upb_weight_identity}
+\end{equation}
+This identity holds for any predictable sequence $m_{i,t}$. Moreover, for a
+finite candidate,
+\begin{equation}
+    \operatorname{Var}_{\rm acq}\!\left(\widetilde A_i(\tau)\right)
+    =\sum_{t=1}^{r_i(\tau)}
+      \left(\frac{1}{\rho_i(t)}-\frac{1}{\rho_i(t-1)}\right)
+      \left(A_i(\tau)-m_{i,t-1}(f_i(\tau))\right)^2.
+    \label{eq:upb_sequential_aht_variance}
+\end{equation}
+\end{proposition}
+
+\begin{proof}
+Suppress $i$ and $\tau$, write $r=r_i(\tau)$, $A=A_i(\tau)$,
+$m_t=m_{i,t}(f_i(\tau))$, $Q_t=R_i(t)/\rho_i(t)$, and $Q_0=1$.
+For the acquisition filtration $\{\mathcal G_t\}$,
+\[
+    \mathbb E_{\rm acq}[Q_t\mid\mathcal G_{t-1}]=Q_{t-1},
+    \qquad
+    \mathbb E_{\rm acq}[Q_t]=1.
+\]
+Using $m_r=A$ in~\eqref{eq:upb_sequential_aht} therefore gives
+\[
+    \mathbb E_{\rm acq}[\widetilde A_i(\tau)]
+    =m_0+\sum_{t=1}^{r}(m_t-m_{t-1})=A.
+\]
+For the variance, define $D_t:=Q_t-Q_{t-1}$. Summation by parts gives
+\[
+    \widetilde A_i(\tau)-A
+    =\sum_{t=1}^{r}D_t(A-m_{t-1}).
+\]
+The $D_t$ are orthogonal martingale differences and, using
+$R_i(t)R_i(t-1)=R_i(t)$,
+\[
+    \mathbb E_{\rm acq}[D_t^2]
+    =\frac{1}{\rho_i(t)}-\frac{1}{\rho_i(t-1)}.
+\]
+Substitution proves~\eqref{eq:upb_sequential_aht_variance}. The
+$\maxl+1$ case is immediate because both $A_i(\tau)$ and
+$\widetilde A_i(\tau)$ are zero.
+\end{proof}
+
+We estimate the candidate miscoverage rate by
+\begin{equation}
+    \widehat\alpha_{\rm UPB}(\tau)
+    :=\frac{1}{|\calI|}\sum_{i\in\calI}\widetilde A_i(\tau),
+    \qquad
+    \widehat c_{\rm UPB}(\tau):=1-\widehat\alpha_{\rm UPB}(\tau).
+    \label{eq:upb_miscoverage_estimator}
+\end{equation}
+Let $\mathcal T_{\rm prior}=\{\tau_1<\cdots<\tau_J\}$ denote the finite
+candidate grid no larger than $\tauprior$. Since empirical AHT estimates need
+not be monotone, the implementation forms the suffix lower envelope of
+coverage and selects
+\begin{equation}
+    \widehat\tau
+    :=\min\left\{
+        \tau_j\in\mathcal T_{\rm prior}:
+        \min_{k\geq j}\widehat c_{\rm UPB}(\tau_k)\geq1-\alpha
+    \right\}.
+    \label{eq:upb_calibrated_tau}
+\end{equation}
+Equivalently, it requires
+$\max_{k\geq j}\widehat\alpha_{\rm UPB}(\tau_k)\leq\alpha$.
+The calibrated bound is $\widehat U(x):=\fhat_{\widehat\tau}(x)$. If no
+finite candidate through $\tauprior$ satisfies the rule, the implementation
+returns the deterministic fallback $\widehat U(x)=\maxl+1$.
+
+\begin{theorem}[UPB coverage validity]
+\label{thm:upb_coverage}
+Suppose the sampling and independence conditions of
+Theorem~\ref{thm:general_validity} hold for the UPB contributions above.
+Assume $m_{i,t}(f)\in[0,1]$, $\rho_i(t)\geq\varepsilon>0$ at every relevant
+prefix, and, uniformly over $\tau\in\mathcal T_{\rm prior}$,
+\begin{equation}
+    \mathbb E\!\left[\pi_i(\tau)^{-1}\right]\leq\bar w.
+\end{equation}
+Let $n:=|\calI|$ and define
+\begin{equation}
+    \Delta_{\rm UPB}
+    :=\frac{\log(1/\delta)}{3n\varepsilon}
+      +\sqrt{
+        \frac{\log^2(1/\delta)}{9n^2\varepsilon^2}
+        +\frac{2(\bar w-\alpha^2)\log(1/\delta)}{n}}
+    .
+    \label{eq:upb_coverage_slack}
+\end{equation}
+Then, with probability at least $1-\delta$ over the calibration sample and
+acquisition randomization,
+\begin{equation}
+    \mathbb P\!\left\{
+      T_{\rm test}^{(\maxl)}\leq\widehat U(X_{\rm test})
+      \ \middle|\ \Dall
+    \right\}
+    \geq1-\alpha-\Delta_{\rm UPB}.
+    \label{eq:upb_coverage_result}
+\end{equation}
+\end{theorem}
+
+\begin{proof}
+For any finite candidate, Proposition~\ref{prop:valid_upb_weights} gives
+design unbiasedness. If $k$ is the last reached prefix, summation by parts
+gives
+\[
+    \widetilde A_i
+    =\frac{m_{i,k}}{\rho_i(k)}
+      +\sum_{t=0}^{k-1}m_{i,t}
+        \left(\frac{1}{\rho_i(t)}-\frac{1}{\rho_i(t+1)}\right),
+\]
+and hence $1-\varepsilon^{-1}\leq\widetilde A_i\leq\varepsilon^{-1}$.
+Equation~\eqref{eq:upb_sequential_aht_variance} and
+$|A_i-m_{i,t-1}|\leq1$ imply
+\[
+    \mathbb E[\widetilde A_i^2]
+    =\mathbb E[\operatorname{Var}_{\rm acq}(\widetilde A_i)+A_i^2]
+    \leq\mathbb E[\pi_i^{-1}]
+    \leq\bar w.
+\]
+Applying the one-sided Bernstein argument from
+Theorem~\ref{thm:general_validity}, with upper centered range
+$\varepsilon^{-1}$, yields~\eqref{eq:upb_coverage_slack}. The suffix-envelope
+selector in~\eqref{eq:upb_calibrated_tau} supplies the UPB analogue of the
+monotone candidate restriction used in that theorem. The $\maxl+1$ fallback
+has zero miscoverage by construction.
+\end{proof}
+
+\paragraph{UPB specialization of \ttmethod.}
+For LPBs, Phase I uses the fixed reference level $\alpha$ because the final
+calibrated level is unknown during acquisition. For UPBs, the implementation
+instead selects a reference level from the initial, label-free survival-model
+predictions. Define
+\begin{equation}
+    \widehat a_0(\tau)
+    :=\frac{1}{|\calI|}\sum_{i\in\calI}
+      \mathbb I\{f_i(\tau)\leq\maxl\}
+      \widehat{\mathbb P}(T_i>f_i(\tau)\mid H_i(0)).
+\end{equation}
+The implementation chooses
+\begin{equation}
+    \tau_{\rm ref}
+    :=\min\left\{
+      \tau_j\in\mathcal T_{\rm prior}:
+      \min_{k\geq j}\{1-\widehat a_0(\tau_k)\}\geq1-\alpha
+    \right\},
+    \label{eq:upb_reference_level}
+\end{equation}
+using $\max\mathcal T_{\rm prior}$ if the set is empty, and then freezes
+\begin{equation}
+    f_i^\star:=\fhat_{\tau_{\rm ref}}(X_i).
+\end{equation}
+This selection uses the initial model outputs for all calibration trajectories
+but no trajectory labels or acquired interactions. It respects the reversed
+direction of UPB calibration and adapts to the requested target coverage.
+
+The deployed score remains the causal current-event probability
+$S_i(t)=\widehat h_i(t)$ from~\eqref{eq:lpb_impl_hazard_score}; only the
+task-specific objective coefficients change. With the same global
+regularization $\delta$ as in the LPB implementation, the UPB coefficients are
+\begin{equation}
+\begin{split}
+    a_i^{\rm UPB}(t)
+    :=\frac{1}{1+\delta}\biggl[&
+      \mathbb I\{t=f_i^\star,\ f_i^\star\leq b_i,\ f_i^\star\leq\maxl\}
+      \bigl(1-\widehat h_i(t)\bigr)\\
+      &+\delta\,\mathbb I\{t\leq b_i\}\widehat h_i(t)
+    \biggr].
+    \label{eq:upb_dapro_soft_coefficients}
+\end{split}
+\end{equation}
+At a finite reference bound $f_i^\star$, the factor
+$1-\widehat h_i(f_i^\star)$ is the estimated conditional probability of
+surviving beyond that bound given that its pre-decision prefix has been
+reached. The value $\maxl+1$ has deterministic zero miscoverage and therefore
+contributes no target-specific mass.
+
+The implemented UPB DAPRO policy substitutes
+$a_i^{\rm UPB}(t)$ for the LPB coefficients in the same inverse-reach
+optimization:
+\begin{equation}
+\begin{aligned}
+    \min_M\quad &
+    \frac{1}{N_1}\sum_{i\in\calIone}\sum_{t=1}^{b_i}
+    \frac{a_i^{\rm UPB}(t)}{\prod_{s=1}^{t}M_s(S_i(s))}\\
+    \text{s.t.}\quad &
+    \frac{1}{N_1}\sum_{i\in\calIone}\bfunc(M(S_i))\leq\Bbar,\\
+    &S_i(t)\leq S_j(t)
+      \Longrightarrow M_t(S_i(t))\leq M_t(S_j(t))
+      \quad\text{for every active }i,j,t.
+    \label{eq:upb_dapro_objective}
+\end{aligned}
+\end{equation}
+This is the endpoint soft-mass allocation proxy used by the current code. It
+is an ordinary-HT-style inverse-reach proxy; it is \emph{not} the exact
+sequential-AHT variance in~\eqref{eq:upb_sequential_aht_variance}. Sequential
+AHT is used downstream to exploit every reached prediction update while the
+allocation objective remains fixed. Thus, the estimator comparison can change
+the estimator without silently changing the acquired trajectories.
+
+All remaining components---the two-bin score-to-probability map, numerical
+optimization, cumulative-reach budget correction, positivity floor, and the
+optional independent CRC budget controller---are shared with the LPB
+implementation in Section~\ref{sec:proposed_alg}. The reported UPB DAPRO
+policy is history-adaptive: it recomputes $S_i(t)$ and makes a new continuation
+decision after each observed interaction.

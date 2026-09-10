@@ -243,7 +243,7 @@ def generate_lpb_main_figures(
                 else "Reference"
             ),
             hide_methods=hidden,
-            figsize=(3.45, 2.55),
+            figsize=(3.80, 2.55),
             show_legend=False,
             font_scale=1.30,
         )
@@ -261,7 +261,7 @@ def generate_lpb_main_figures(
         quality=quality,
         methods=MAIN_METHOD_ORDER,
         reference_label="Target budget",
-        figsize=(1.50, 2.55),
+        figsize=(1.70, 2.55),
         font_scale=1.28,
     )
     _record(
@@ -345,7 +345,7 @@ def generate_autoif_main_figures(
                 else "Reference"
             ),
             hide_methods=hidden,
-            figsize=(3.45, 2.55),
+            figsize=(3.80, 2.55),
             show_legend=False,
             font_scale=1.30,
         )
@@ -363,7 +363,7 @@ def generate_autoif_main_figures(
         quality=quality,
         methods=MAIN_METHOD_ORDER,
         reference_label="Target budget",
-        figsize=(1.50, 2.55),
+        figsize=(1.70, 2.55),
         font_scale=1.28,
     )
     _record(

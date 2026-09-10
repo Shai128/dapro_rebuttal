@@ -53,7 +53,7 @@ SCORE_DISPLAY_LABELS = {
 FACTOR_SPECS = {
     "n1": {
         "xlabel": (
-            "Phase I calibration set size\n"
+            "Phase I data size\n"
             r"$|\mathcal{I}_{\rm cal1}|+|\mathcal{I}_{\rm crc}|$"
         ),
         "title": r"Phase I calibration-set-size ablation",
@@ -87,7 +87,7 @@ FACTOR_SPECS = {
         "title": r"CRC row-cost-cap ablation",
     },
     "optimization": {
-        "xlabel": "",
+        "xlabel": "Method",
         "title": "Optimization-process ablation",
     },
     "attacker_shift": {
@@ -924,13 +924,13 @@ def generate_upb_estimator_ablation_figure(
         (
             "coverage_variance_contribution_pp2",
             "Coverage Variance",
-            "Squared-deviation contribution\n" + r"(pp$^2$)",
+            r"Variance (pp$^2$)",
         ),
         ("upb_size", "UPB Size", "UPB size"),
         (
             "upb_size_variance_contribution",
             "UPB-Size Variance",
-            "Squared-deviation contribution",
+            "Variance",
         ),
         (
             "miscoverage_estimator_variance_pp2",
@@ -1244,15 +1244,14 @@ def generate_categorical_box_figure(
     order = [labels.get(value, f"{value:g}") for value in values]
     optimization = kind == "optimization"
     if optimization:
-        # All four policies belong to one comparison cell.  The x-axis does
-        # not encode a factor here; policy identity is represented only by
-        # hue.  Static was paired to both dynamic factor values by the loader,
-        # so retain one copy per split before collapsing the category.
+        # Static was paired to both dynamic factor values by the loader, so
+        # retain one copy per split. Method identity is encoded identically
+        # on the x-axis and by hue.
         plot_data = plot_data.drop_duplicates(
             ["source_file", "seed", "method"], keep="first"
         ).copy()
-        plot_data["factor_label"] = " "
-        order = [" "]
+        plot_data["factor_label"] = plot_data["method"]
+        order = list(method_order)
     extended = kind in {"hard_soft", "optimization"}
     figure, axes = plt.subplots(
         3 if extended else 2,
@@ -1297,50 +1296,81 @@ def generate_categorical_box_figure(
     for axis, (metric, panel_title, ylabel) in zip(axes.flat, panels):
         panel = plot_data.dropna(subset=["factor_label", "method", metric])
         if metric == "coverage_across_split_variance_pp2":
-            cell_values = (
-                panel.groupby(
-                    ["factor_label", "method"], observed=True
-                )[metric]
-                .first()
-                .unstack("method")
-                .reindex(index=order, columns=list(method_order))
-            )
-            x_positions = np.arange(len(order), dtype=float)
-            bar_width = 0.8 / len(method_order)
-            for method_index, method in enumerate(method_order):
+            if optimization:
+                cell_values = (
+                    panel.groupby("method", observed=True)[metric]
+                    .first()
+                    .reindex(method_order)
+                )
+                x_positions = np.arange(len(method_order), dtype=float)
                 axis.bar(
-                    x_positions
-                    + (method_index - (len(method_order) - 1) / 2)
-                    * bar_width,
-                    cell_values[method].to_numpy(dtype=float),
-                    width=bar_width,
-                    color=ABLATION_METHOD_COLORS[method],
-                    label=method,
+                    x_positions,
+                    cell_values.to_numpy(dtype=float),
+                    width=0.72,
+                    color=[
+                        ABLATION_METHOD_COLORS[method]
+                        for method in method_order
+                    ],
                     zorder=3,
                 )
+            else:
+                cell_values = (
+                    panel.groupby(
+                        ["factor_label", "method"], observed=True
+                    )[metric]
+                    .first()
+                    .unstack("method")
+                    .reindex(index=order, columns=list(method_order))
+                )
+                x_positions = np.arange(len(order), dtype=float)
+                bar_width = 0.8 / len(method_order)
+                for method_index, method in enumerate(method_order):
+                    axis.bar(
+                        x_positions
+                        + (method_index - (len(method_order) - 1) / 2)
+                        * bar_width,
+                        cell_values[method].to_numpy(dtype=float),
+                        width=bar_width,
+                        color=ABLATION_METHOD_COLORS[method],
+                        label=method,
+                        zorder=3,
+                    )
             axis.set_xticks(x_positions)
             axis.set_xticklabels(order)
         else:
-            sns.boxplot(
-                data=panel,
-                x="factor_label",
-                y=metric,
-                hue="method",
-                order=order,
-                hue_order=list(method_order),
-                palette={
-                    method: ABLATION_METHOD_COLORS[method]
-                    for method in method_order
-                },
-                linewidth=0.9,
-                fliersize=2.2,
-                ax=axis,
-            )
+            boxplot_kwargs = {
+                "data": panel,
+                "x": "factor_label",
+                "y": metric,
+                "order": order,
+                "linewidth": 0.9,
+                "fliersize": 2.2,
+                "ax": axis,
+            }
+            if optimization:
+                boxplot_kwargs.update(
+                    hue="method",
+                    hue_order=list(method_order),
+                    palette={
+                        method: ABLATION_METHOD_COLORS[method]
+                        for method in method_order
+                    },
+                    dodge=False,
+                    legend=False,
+                )
+            else:
+                boxplot_kwargs.update(
+                    hue="method",
+                    hue_order=list(method_order),
+                    palette={
+                        method: ABLATION_METHOD_COLORS[method]
+                        for method in method_order
+                    },
+                )
+            sns.boxplot(**boxplot_kwargs)
         _style(axis, xlabel=str(spec["xlabel"]), ylabel=ylabel)
         axis.set_title(panel_title, fontsize=15.0, pad=7)
         axis.tick_params(axis="x", labelrotation=0)
-        if optimization:
-            axis.set_xticks([])
         statistics = summarize_line_statistics(data, metric=metric)
         statistics["metric"] = metric
         all_statistics.append(statistics)
@@ -1378,13 +1408,14 @@ def generate_categorical_box_figure(
     for axis in axes.flat[len(panels):]:
         axis.set_visible(False)
     legend_axis = axes.flat[1]
-    handles, legend_labels = legend_axis.get_legend_handles_labels()
-    if handles:
-        legend_axis.legend(
-            handles, legend_labels,
-            title="Method", loc="best", frameon=True, framealpha=0.88,
-            fontsize=11.8, title_fontsize=12.2,
-        )
+    if not optimization:
+        handles, legend_labels = legend_axis.get_legend_handles_labels()
+        if handles:
+            legend_axis.legend(
+                handles, legend_labels,
+                title="Method", loc="best", frameon=True, framealpha=0.88,
+                fontsize=11.8, title_fontsize=12.2,
+            )
     for axis in axes.flat:
         if axis is legend_axis:
             continue
@@ -1531,8 +1562,8 @@ def generate_metric_categorical_box_figure(
         plot_data = plot_data.drop_duplicates(
             ["source_file", "seed", "method"], keep="first"
         ).copy()
-        plot_data["factor_label"] = " "
-        order = [" "]
+        plot_data["factor_label"] = plot_data["method"]
+        order = list(method_order)
     figure, axes = plt.subplots(3, 2, figsize=(12.2, 11.0))
     panels = (
         ("event_rate_pct", "Estimated Event Rate", "Event rate (%)"),
@@ -1567,51 +1598,82 @@ def generate_metric_categorical_box_figure(
             # is convenient for the shared data pipeline, but a boxplot of a
             # constant has zero height and appears empty. Plot the cell
             # estimates directly as grouped bars instead.
-            cell_values = (
-                panel.groupby(
-                    ["factor_label", "method"], observed=True
-                )[metric]
-                .first()
-                .unstack("method")
-                .reindex(index=order, columns=list(method_order))
-            )
-            x_positions = np.arange(len(order), dtype=float)
-            bar_width = 0.8 / len(method_order)
-            for method_index, method in enumerate(method_order):
-                heights = cell_values[method].to_numpy(dtype=float)
+            if optimization:
+                cell_values = (
+                    panel.groupby("method", observed=True)[metric]
+                    .first()
+                    .reindex(method_order)
+                )
+                x_positions = np.arange(len(method_order), dtype=float)
                 axis.bar(
-                    x_positions
-                    + (method_index - (len(method_order) - 1) / 2)
-                    * bar_width,
-                    heights,
-                    width=bar_width,
-                    color=ABLATION_METHOD_COLORS[method],
-                    label=method,
+                    x_positions,
+                    cell_values.to_numpy(dtype=float),
+                    width=0.72,
+                    color=[
+                        ABLATION_METHOD_COLORS[method]
+                        for method in method_order
+                    ],
                     zorder=3,
                 )
+            else:
+                cell_values = (
+                    panel.groupby(
+                        ["factor_label", "method"], observed=True
+                    )[metric]
+                    .first()
+                    .unstack("method")
+                    .reindex(index=order, columns=list(method_order))
+                )
+                x_positions = np.arange(len(order), dtype=float)
+                bar_width = 0.8 / len(method_order)
+                for method_index, method in enumerate(method_order):
+                    heights = cell_values[method].to_numpy(dtype=float)
+                    axis.bar(
+                        x_positions
+                        + (method_index - (len(method_order) - 1) / 2)
+                        * bar_width,
+                        heights,
+                        width=bar_width,
+                        color=ABLATION_METHOD_COLORS[method],
+                        label=method,
+                        zorder=3,
+                    )
             axis.set_xticks(x_positions)
             axis.set_xticklabels(order)
         else:
-            sns.boxplot(
-                data=panel,
-                x="factor_label",
-                y=metric,
-                hue="method",
-                order=order,
-                hue_order=list(method_order),
-                palette={
-                    method: ABLATION_METHOD_COLORS[method]
-                    for method in method_order
-                },
-                linewidth=0.9,
-                fliersize=2.2,
-                ax=axis,
-            )
+            boxplot_kwargs = {
+                "data": panel,
+                "x": "factor_label",
+                "y": metric,
+                "order": order,
+                "linewidth": 0.9,
+                "fliersize": 2.2,
+                "ax": axis,
+            }
+            if optimization:
+                boxplot_kwargs.update(
+                    hue="method",
+                    hue_order=list(method_order),
+                    palette={
+                        method: ABLATION_METHOD_COLORS[method]
+                        for method in method_order
+                    },
+                    dodge=False,
+                    legend=False,
+                )
+            else:
+                boxplot_kwargs.update(
+                    hue="method",
+                    hue_order=list(method_order),
+                    palette={
+                        method: ABLATION_METHOD_COLORS[method]
+                        for method in method_order
+                    },
+                )
+            sns.boxplot(**boxplot_kwargs)
         _style(axis, xlabel=str(spec["xlabel"]), ylabel=ylabel)
         axis.set_title(panel_title, fontsize=15.0, pad=7)
         axis.tick_params(axis="x", labelrotation=0)
-        if optimization:
-            axis.set_xticks([])
         statistics = summarize_line_statistics(data, metric=metric)
         statistics["metric"] = metric
         all_statistics.append(statistics)
@@ -1633,19 +1695,20 @@ def generate_metric_categorical_box_figure(
                     float(configured[0]), color=TARGET_REFERENCE_COLOR,
                     linestyle=TARGET_REFERENCE_LINESTYLE, linewidth=1.2,
                 )
-    handles, legend_labels = axes.flat[0].get_legend_handles_labels()
-    if handles:
-        axes.flat[0].legend(
-            handles, legend_labels, title="Method", loc="best",
-            frameon=True, framealpha=0.88,
-            fontsize=11.8, title_fontsize=12.2,
-        )
+    if not optimization:
+        handles, legend_labels = axes.flat[0].get_legend_handles_labels()
+        if handles:
+            axes.flat[0].legend(
+                handles, legend_labels, title="Method", loc="best",
+                frameon=True, framealpha=0.88,
+                fontsize=11.8, title_fontsize=12.2,
+            )
     for axis in axes.flat[1:]:
         legend = axis.get_legend()
         if legend is not None:
             legend.remove()
     figure.tight_layout(
-        rect=(0.0, 0.015, 1.0, 0.995), h_pad=2.9, w_pad=2.3
+        rect=(0.0, 0.04, 1.0, 0.995), h_pad=2.9, w_pad=2.3
     )
     save_jpeg(
         figure, output_path, quality, tight=False, panel_count=len(panels)

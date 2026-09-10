@@ -176,7 +176,25 @@ def get_autoif_candidate_classes(
     labels correspond exactly to the calibration+test tensors and cached model
     predictions produced by setup_experiment_data.
     """
-    original_indices = np.arange(len(classes_in_dataset_order))
+    candidate_original_indices = get_autoif_candidate_original_indices(
+        len(classes_in_dataset_order), loader_seed=loader_seed
+    )
+    return np.asarray(classes_in_dataset_order)[candidate_original_indices]
+
+
+def get_autoif_candidate_original_indices(
+        sample_count: int,
+        loader_seed: int = 0,
+) -> np.ndarray:
+    """Map each calibration+test row back to its original AutoIF CSV row.
+
+    This is the index-valued counterpart of :func:`get_autoif_candidate_classes`.
+    Keeping the original row identity makes downstream class attachments
+    independently auditable against ``autoif_helper_dataset.csv``.
+    """
+    if sample_count <= 0:
+        raise ValueError("AutoIF sample count must be positive.")
+    original_indices = np.arange(sample_count)
     train_cal_indices, initial_test_indices = train_test_split(
         original_indices,
         test_size=0.2,
@@ -193,8 +211,7 @@ def get_autoif_candidate_classes(
     rng = np.random.RandomState(loader_seed)
     rng.shuffle(loaded_order)
     n_train = len(initial_train_indices)
-    candidate_original_indices = loaded_order[n_train:]
-    return np.asarray(classes_in_dataset_order)[candidate_original_indices]
+    return loaded_order[n_train:].copy()
 
 
 def select_autoif_cross_class_indices(
